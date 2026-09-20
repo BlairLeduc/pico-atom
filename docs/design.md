@@ -291,12 +291,36 @@ Following hardware notes §9.5 — core 1 owns the slow peripherals:
 | Per field | run ~16,667 guest cycles, emit PCM, snapshot VRAM | expand snapshot → RGB565 bands → DMA; poll keyboard |
 | Blocks on | audio ring fill level (§12.2) | DMA completion (polled), I²C |
 
-Handoff is an **immutable snapshot with explicit ownership**: core 0 fills
-snapshot buffer A or B and publishes its index; core 1 owns that buffer until it
-publishes completion. No locks, no shared mutable pixel state, and core 1 never
-reads guest RAM while the 6502 is running. Between service iterations core 1
-waits on a 20 µs hardware timer rather than spinning on shared state (hardware
-notes §9.5).
+Handoff is an **immutable snapshot with explicit ownership**, over a pool of
+**three** buffers, each in one of four states:
+
+| State | Meaning |
+|---|---|
+| `free` | owned by nobody; core 0 may claim it |
+| `filling` | core 0 is writing it; core 1 must not look |
+| `ready` | complete, awaiting collection |
+| `rendering` | core 1 owns it |
+
+Per field, core 0 marks its `filling` buffer `ready` and takes any `free` one;
+core 1, when idle, takes the newest `ready` buffer, marks it `rendering`, and
+frees it on completion. Any older `ready` buffer is dropped unrendered — that is
+§12.2's superseded-snapshot rule, made explicit.
+
+**Three buffers, not two, and the third one is the whole point.** Core 1's worst
+case is ~17–18 ms (§8.4) against core 0's 16.7 ms field, so the consumer can be
+a full field behind. With two buffers, core 0 would at that moment have to
+either block — which corrupts the simulation schedule that audio is paced
+against — or rewrite a `ready` buffer core 1 may be claiming in the same
+instant, which is a race no amount of care in the renderer can see. The third
+buffer costs 6 KiB out of ~370 KiB spare and deletes the entire class of
+problem; do not economise here.
+
+State transitions are published under a single SIO spinlock. RP2350 has no
+compare-and-swap, and "explicit ownership" is not a synchronisation primitive —
+local interrupt masking is not a multicore lock (hardware notes §9.5). No locks
+are held across a blit, and core 1 never reads guest RAM while the 6502 runs.
+Between service iterations core 1 waits on a 20 µs hardware timer rather than
+spinning on shared state.
 
 Two invariants, both taken straight from the hardware notes' scar tissue:
 
@@ -338,25 +362,25 @@ DMA storage and peak heap together (hardware notes §2.3).
 |---|---:|---|
 | Guest address space, flat 64 KiB | 65,536 | direct index; simplest and fastest (§7.1) |
 | Page descriptor table, 256 × 2 × 4 B | 2,048 | read and write pointers |
-| VDG snapshots A/B, 6 KiB each | 12,288 | core 0 → core 1 handoff |
+| VDG snapshots ×3, 6 KiB each | 18,432 | core 0 → core 1 handoff (§4.2) |
 | Presented shadow | 6,144 | dirty-band diffing |
 | Mode expansion LUT | 8,192 | rebuilt on mode/`CSS` change (§8.3) |
 | RGB565 line buffers, 2 × 320 × 2 B | 1,280 | DMA ping-pong (§4.6) |
 | MC6847 character ROM | 768 | 64 glyphs × 12 rows |
-| Audio DMA ring, 2 × 128 frames × 4 B | 1,024 | power-of-two, aligned, hardware wrap |
+| Audio DMA ring, 2 halves × 128 frames × **2 slots** × 4 B | 2,048 | power-of-two, aligned, hardware wrap |
 | PCM software queue, 1024 × 4 B | 4,096 | ~28 ms (§5.8) |
 | 6502 + bus hot code in SRAM | ~16,000 | `__not_in_flash_func` (§9.2) |
 | Display + audio hot code in SRAM | ~6,000 | |
 | FatFs + SD buffers | ~2,500 | |
 | Stacks, both cores | 8,192 | |
 | Heap, UI, perf counters, misc | ~16,000 | |
-| **Total** | **~147 KiB** | **28 % of 520 KiB** |
+| **Total** | **~154 KiB** | **30 % of 520 KiB** |
 
 Two observations worth acting on:
 
 - There is enough slack to hold a **second 64 KiB guest image** for instant
   snapshot restore, and still be under 45 %.
-- The budget also fits an RP2040's 264 KiB at ~56 %, which is what keeps §3.1's
+- The budget also fits an RP2040's 264 KiB at ~58 %, which is what keeps §3.1's
   stretch goal honest.
 
 Fixed capacities live in one header, `src/core/config.h`, because they will be
@@ -471,6 +495,22 @@ under-marking.
 Reads take the same shape, with a fast path for everything outside
 `#A000`–`#BFFF`.
 
+**A page-granular fast path cannot express a sub-page device, and the Atom has
+one.** With AtomDOS enabled the 8271 sits at `#0A00`–`#0A03` (§7.3), inside a
+page that is otherwise RAM. If page `#0A` keeps a non-NULL `write`, those four
+addresses take the fast RAM store and the FDC is never reached — silently, with
+the disc system simply not responding. So when AtomDOS is enabled, page `#0A` is
+marked `PAGE_IO` with `write = NULL`, and `bus_write_slow` splits it:
+
+```c
+/* page #0A, AtomDOS enabled: 4 bytes of FDC, 252 bytes of ordinary RAM */
+if ((a & 0xFFFC) == 0x0A00) fdc_write(m, a & 3, v);
+else                        m->ram[a] = v;
+```
+
+One page losing its fast path costs nothing measurable, and it is the only place
+in the map where a device hides inside RAM. The same split applies to reads.
+
 ### 7.2 RAM population
 
 Which blocks are populated is configuration. Default is a fully expanded
@@ -517,7 +557,7 @@ into RGB565 line buffers and DMAs them.
 |---|---:|---|
 | 8 bpp indexed 256×192 framebuffer + palette | 49 KiB | buys nothing — VRAM is already the source of truth |
 | 16 bpp 256×192 framebuffer | 98 KiB | worse, for the same reason |
-| **Snapshot + band generator** | **~28 KiB** | chosen |
+| **Snapshot + band generator** | **~34 KiB** | chosen |
 
 The saving is real but the decisive argument is correctness: with no decoded
 framebuffer there is no second copy of the screen to keep in sync, and a mode
@@ -581,10 +621,21 @@ per row, 12 rows per cell, 16 cell rows.
 Bands of **8 display rows** — 24 bands covering 256×192 — each with an inclusive
 `[min..max]` byte-column span. Per field, core 1:
 
-1. Diffs `snapshot[n]` against `shadow`, band by band, deriving the span.
-2. For each dirty band: `lcd_blit_begin(32, 64 + band*8, span_w, 8)`, generate
+1. **Compares the snapshot's mode byte against the presented mode. If it
+   differs, every band is marked fully dirty and the LUT is rebuilt.**
+2. Otherwise diffs `snapshot[n]` against `shadow`, band by band, deriving the
+   span.
+3. For each dirty band: `lcd_blit_begin(32, 64 + band*8, span_w, 8)`, generate
    and DMA its rows, `lcd_blit_end()`.
-3. Copies `snapshot[n]` into `shadow`.
+4. Copies `snapshot[n]` into `shadow` **and the mode byte into the presented
+   mode**.
+
+Step 1 is not an optimisation, it is a correctness requirement: **a mode or
+`CSS` change repaints all 49,152 pixels while leaving all 6 KiB of VRAM
+byte-identical.** A VRAM-only diff finds nothing to do and leaves the previous
+mode on screen indefinitely — `CLEAR` to a new mode without rewriting VRAM, or
+flipping the colour set, would simply not appear. The mode byte is therefore
+part of the shadow, not merely part of the snapshot.
 
 Over-mark rather than under-mark; extra bands cost microseconds and a missed
 band leaves a stale sprite on screen forever (hardware notes §4.10).
@@ -689,7 +740,9 @@ Straight from hardware notes §5.3–5.4, with no deviation:
 
 - Two DMA channels **chained to each other**, ping-ponging a two-half ring,
   paced by `pwm_get_dreq(slice)`, writing the 32-bit `left | (right << 16)`
-  compare word. 128 frames per half → refill every ~3.5 ms.
+  compare word. 128 frames per half → refill every ~3.5 ms. **At oversample 2
+  each frame occupies two slots**, so a half is 256 slots and the ring is
+  2,048 bytes, not 1,024 — the arithmetic the hardware notes spell out in §5.3.
 - The ring is **power-of-two sized and aligned**, with
   `channel_config_set_ring()` on the read address. This is the safety net for
   the interrupt hole that flash program/erase opens (§7.2), which no IRQ design
@@ -895,7 +948,19 @@ The emulator runs faster than real time (§6.3), so it must be paced. **Pace on
 the audio ring**: core 0 blocks until the PCM queue has room for another field's
 worth of samples. The PWM slice's wrap is a hardware 36.62 kHz clock derived
 from `clk_sys`, it is the most stable timebase on the machine, and pacing on it
-makes underrun structurally impossible rather than merely unlikely.
+holds the queue at its target depth without a wall-clock timer.
+
+**It does not make underrun impossible, and the design must not claim that.**
+Pacing removes one failure mode — the producer racing ahead and overrunning a
+full queue — and it keeps the queue full in steady state. It cannot help when
+the producer is *prevented* from running: a flash erase takes the interrupt hole
+offline for tens of milliseconds and is the one accepted violator of the refill
+deadline (hardware notes §5.4, §7.2), and a guest running below real time
+starves the queue by construction. So underrun stays a live failure mode with a
+defined behaviour: emit the silence value, **count it** (§12.3), and resync
+without attempting to replay the missing samples. A counter that could never
+fire would be dead code, and §9.4's requirement to count producer starvation
+separately from late DMA refills only means something if both can happen.
 
 When audio is muted, samples are still produced and consumed (hardware notes
 §5.8) so that muting does not change timing. The fallback path, for a build with
@@ -950,8 +1015,14 @@ clamped to 16–240, so a fade is 15 steps and not 256 (hardware notes §4.11).
 Dimming on pause costs one I²C transaction and is worth it.
 
 The overlay draws into the top and status bands plus, when it needs the space, a
-saved-and-restored region of the Atom rectangle — restored from the shadow
-buffer, which already holds exactly what is on the panel.
+region of the Atom rectangle. **Dismissing it does not "restore" pixels.**
+`shadow` holds 6 KiB of guest VRAM bytes, not a decoded 256×192 panel image — in
+graphics modes one byte expands to 8 or 16 pixels, and alpha mode additionally
+needs the character ROM and the presented mode — so there is nothing there to
+copy back. Instead the overlay's bands are marked fully dirty and the normal band
+generator repaints them from `shadow` plus the presented mode on the next
+present. That is zero new code, and it is why the mode byte belongs in the shadow
+state (§8.4).
 
 ---
 
