@@ -15,6 +15,7 @@
  * the test reports as skipped rather than as passing.
  */
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,10 +27,24 @@
 
 static atom_t g_machine;
 
-static unsigned env_addr(const char *name, unsigned dflt) {
+/* Addresses come from the environment, so they are validated before
+ * being narrowed to uint16_t or used to index ram[]. An out-of-range
+ * value would otherwise wrap silently and the suite could report a
+ * misleading *pass* — the one outcome this test exists to rule out.
+ * Returns false and explains itself on a bad value. */
+static bool env_addr(const char *name, unsigned dflt, unsigned *out) {
     const char *s = getenv(name);
-    if (!s || !*s) return dflt;
-    return (unsigned)strtoul(s, NULL, 0);
+    if (!s || !*s) { *out = dflt; return true; }
+
+    char *end = NULL;
+    unsigned long v = strtoul(s, &end, 0);
+    if (end == s || (end && *end != '\0') || v >= ATOM_ADDR_SPACE) {
+        fprintf(stderr, "%s=\"%s\" is not an address inside the 64 KiB map\n",
+                name, s);
+        return false;
+    }
+    *out = (unsigned)v;
+    return true;
 }
 
 static long load_file(const char *path, uint8_t *dst, size_t cap) {
@@ -85,8 +100,11 @@ int main(void) {
             printf("%s not found; skipping the functional test\n", path);
         } else {
             ran_any = 1;
-            unsigned start   = env_addr("PICO_ATOM_FUNCTIONAL_START", 0x0400);
-            unsigned success = env_addr("PICO_ATOM_FUNCTIONAL_SUCCESS", 0x3469);
+            unsigned start, success;
+            if (!env_addr("PICO_ATOM_FUNCTIONAL_START", 0x0400, &start) ||
+                !env_addr("PICO_ATOM_FUNCTIONAL_SUCCESS", 0x3469, &success)) {
+                return 1;
+            }
             g_machine.cpu.pc = (uint16_t)start;
 
             unsigned long trap = run_to_trap(&g_machine, 500000000ul);
@@ -107,10 +125,15 @@ int main(void) {
     snprintf(path, sizeof(path), "%s/6502_decimal_test.bin", dir);
     {
         prepare(&g_machine);
-        unsigned load  = env_addr("PICO_ATOM_DECIMAL_LOAD",  0x0200);
-        unsigned start = env_addr("PICO_ATOM_DECIMAL_START", 0x0200);
-        unsigned errloc = env_addr("PICO_ATOM_DECIMAL_ERROR", 0x000B);
+        unsigned load, start, errloc;
+        if (!env_addr("PICO_ATOM_DECIMAL_LOAD",  0x0200, &load) ||
+            !env_addr("PICO_ATOM_DECIMAL_START", 0x0200, &start) ||
+            !env_addr("PICO_ATOM_DECIMAL_ERROR", 0x000B, &errloc)) {
+            return 1;
+        }
 
+        /* load is now known to be inside the map, so neither the pointer
+         * nor the remaining-capacity subtraction can go out of range. */
         long n = load_file(path, &g_machine.ram[load], sizeof(g_machine.ram) - load);
         if (n < 0) {
             printf("%s not found; skipping the decimal test\n", path);

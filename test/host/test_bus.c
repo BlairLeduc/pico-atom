@@ -117,6 +117,29 @@ int main(void) {
         CHECK(bus_read(m, 0x0A01) == 0x9E, "#0A01 is RAM on a machine with no disc system");
     }
 
+    /* ---- atom_map_ram rejects a zero length -------------------------- */
+    {
+        atom_t *m = machine(&cfg);
+        /* #4000 is unpopulated by default; a zero-length map at #0000
+         * must not quietly populate it (or anything else). */
+        atom_map_ram(m, 0x0000, 0);
+        CHECK(m->page[0x40].write == NULL,
+              "atom_map_ram(m, 0, 0) must map nothing, not the whole address space");
+        CHECK((m->page_flags[0x40] & PAGE_OPEN) != 0, "#4000 should still be unpopulated");
+
+        /* A length running off the top of the map is clamped, not wrapped. */
+        m = machine(&cfg);
+        atom_map_ram(m, 0xFF00, 0x1000);
+        CHECK(m->page[0xFF].write != NULL, "#FF00 should be mapped");
+        CHECK(m->page[0x00].write != NULL, "#0000 is RAM on the default machine");
+
+        /* One page is one page. */
+        m = machine(&cfg);
+        atom_map_ram(m, 0x4000, 1);
+        CHECK(m->page[0x40].write != NULL, "a one-byte map should cover its page");
+        CHECK(m->page[0x41].write == NULL, "a one-byte map must not spill into #4100");
+    }
+
     /* ---- the field rate is configuration, not a constant (§18) ------- */
     {
         atom_config_t fifty = cfg;
@@ -125,6 +148,21 @@ int main(void) {
         CHECK(atom_cycles_per_field(m) == 20000, "50 Hz should give 20000 cycles per field");
         m = machine(&cfg);
         CHECK(atom_cycles_per_field(m) == 16666, "60 Hz should give 16666 cycles per field");
+
+        /* field_hz is public configuration, so it can arrive as zero.
+         * That must not divide by zero — atom_init sanitises it, and the
+         * accessor guards the divide for anything that reaches into cfg
+         * afterwards. */
+        atom_config_t zero = cfg;
+        zero.field_hz = 0;
+        m = machine(&zero);
+        CHECK(m->cfg.field_hz == ATOM_FIELD_HZ_DEFAULT,
+              "atom_init should sanitise a zero field rate, got %u", m->cfg.field_hz);
+        CHECK(atom_cycles_per_field(m) == 16666, "a sanitised field rate should still divide");
+
+        m->cfg.field_hz = 0;   /* reached in behind atom_init's back */
+        CHECK(atom_cycles_per_field(m) == 16666,
+              "atom_cycles_per_field must not divide by zero");
     }
 
     TEST_DONE();

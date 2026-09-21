@@ -74,9 +74,13 @@ bool atom_load_rom(atom_t *m, uint16_t addr, const uint8_t *data, size_t len);
  * bare 64 KiB machine for the Dormann and Clark suites. */
 void atom_map_ram(atom_t *m, uint16_t addr, uint32_t len);
 
-/* Cycles in one field, from the configured field rate (§12.1). */
+/* Cycles in one field, from the configured field rate (§12.1).
+ * atom_init sanitises field_hz, but cfg is public and callers can reach
+ * in afterwards, so the divide is guarded here too — it costs one
+ * compare per field, not per instruction. */
 static inline uint32_t atom_cycles_per_field(const atom_t *m) {
-    return (uint32_t)(ATOM_CPU_HZ / m->cfg.field_hz);
+    unsigned hz = m->cfg.field_hz ? m->cfg.field_hz : ATOM_FIELD_HZ_DEFAULT;
+    return (uint32_t)(ATOM_CPU_HZ / hz);
 }
 
 #endif /* PICO_ATOM_ATOM_H */

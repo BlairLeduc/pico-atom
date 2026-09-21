@@ -44,6 +44,12 @@ static void map_io(atom_t *m, unsigned first_page, unsigned last_page) {
 void atom_init(atom_t *m, const atom_config_t *cfg) {
     memset(m, 0, sizeof(*m));
     m->cfg = *cfg;
+
+    /* The field rate is configuration rather than a constant (§16, §18),
+     * which means it can arrive wrong. Zero would divide by zero in
+     * atom_cycles_per_field, so it is sanitised once, here, rather than
+     * defended against at every use. */
+    if (m->cfg.field_hz == 0) m->cfg.field_hz = ATOM_FIELD_HZ_DEFAULT;
     m->open_bus = 0xFFu;
 
     map_open(m, 0x00u, 0xFFu);
@@ -96,9 +102,15 @@ bool atom_load_rom(atom_t *m, uint16_t addr, const uint8_t *data, size_t len) {
 }
 
 void atom_map_ram(atom_t *m, uint16_t addr, uint32_t len) {
+    /* A zero length maps nothing. Without this, addr + len - 1 underflows
+     * and an atom_map_ram(m, 0, 0) quietly maps the whole address space. */
+    if (len == 0) return;
+
+    uint32_t end = (uint32_t)addr + len;
+    if (end > ATOM_ADDR_SPACE) end = ATOM_ADDR_SPACE;
+
     unsigned first = (unsigned)(addr / ATOM_PAGE_SIZE);
-    unsigned last  = (unsigned)((addr + len - 1u) / ATOM_PAGE_SIZE);
-    if (last >= ATOM_PAGE_COUNT) last = ATOM_PAGE_COUNT - 1u;
+    unsigned last  = (unsigned)((end - 1u) / ATOM_PAGE_SIZE);
     map_rw(m, first, last, 0);
 }
 
