@@ -7,10 +7,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0 and M1 are done** (`docs/design.md` §17). The build,
-`src/core/config.h`, the bus and the 6502 exist; the 8255, MC6847, keyboard,
-tape and the whole of `src/port/` beyond clocks and the banner do not. M2 —
-bus, 8255, VDG row generation, golden images — is next.
+**Implementation status: M0 and M1 are done** (`docs/design.md` §17), and M2's
+bus work came with them because the CPU needed somewhere to read from.
+
+What exists: the two-target build, `src/core/config.h`, the page-table bus, and
+a 6502 that passes Klaus Dormann's functional test. What does not: the 8255,
+the MC6847, the keyboard, tape, snapshots, and everything in `src/port/` past
+clocks and a banner.
+
+**M2 is next**, and what is left of it is the 8255, MC6847 row generation and
+golden images for all nine modes.
 
 ## The two documents
 
@@ -54,6 +60,48 @@ source, not as a binary. Until it is, decimal mode is covered by the functional
 test's decimal section plus exhaustive valid-BCD checks in
 `test/host/test_m6502_decimal.c`; invalid-BCD operands are the remaining gap.
 
+## Where things are
+
+`docs/design.md` §14 has the full intended tree. What is built so far:
+
+| Path | Holds |
+|---|---|
+| `src/core/config.h` | every fixed capacity; §5's budget lives or dies here |
+| `src/core/m6502.*` | the interpreter — switch dispatch, explicit cycle accounting |
+| `src/core/bus.*` | `bus_read`/`bus_write` inline fast path, slow path in the `.c` |
+| `src/core/atom.*` | `atom_t`, the page table, config, the run loop |
+| `src/port/board.*` | clocks and board identification |
+| `src/port/main.c` | bring-up; M0's share only |
+| `test/host/` | CTest binaries, one per area, plus `test_util.h` |
+| `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` |
+
+**Device hooks that do not exist yet are marked in place**, as `/* M2: ... */`
+and `/* M9: ... */` comments at the point in `src/core/bus.c` where the call
+belongs. Grep for `M[0-9]:` before assuming a device is missing entirely — the
+decode is already written and only the device is absent. Keep that convention
+when you stub something.
+
+## Conventions
+
+- **Comments cite the document, not the reasoning they replace.** `(§7.1)` or
+  `(hardware-notes.md §5.3)` next to a decision that looks arbitrary. The
+  cross-references are load-bearing in the docs and they are load-bearing here.
+- **Guest addresses are `#XXXX` in comments and `0x` in code**, the same split
+  the design document uses.
+- **No dynamic allocation in `src/core/`.** State lives in `atom_t` or in
+  statically sized buffers from `config.h`.
+- **`atom_run` is the seam.** It executes whole instructions until at least the
+  requested cycles have elapsed and returns the true count; the caller carries
+  the overshoot as debt (`atom_t.budget`). Do not add a "run exactly N cycles"
+  variant — the debt-carry pattern is what keeps long-run timing from drifting.
+- **Tests use no framework.** `test_util.h` has `CHECK` and `TEST_DONE`; a test
+  returning `77` is reported as skipped, which is how a missing third-party
+  binary is handled. One binary per area, registered in
+  `test/host/CMakeLists.txt`.
+- Prefer asserting behaviour by **executing** it over comparing two tables in
+  the same repository. `test_m6502_cycles.c` does both, and only the first
+  catches an addressing-mode bug.
+
 ## Architecture: the parts that are easy to violate
 
 Read `docs/design.md` before writing emulator code. These are the decisions that
@@ -61,10 +109,10 @@ a plausible-looking change silently breaks:
 
 - **`src/core/` must not depend on the Pico SDK.** The 6502, bus, 8255, MC6847,
   tape and keymap are portable C with no dynamic allocation, validated on a
-  workstation against the Klaus Dormann and Bruce Clark 6502 suites before any
-  hardware exists. The core building clean on both toolchains is the mechanism
-  that keeps SDK dependencies from leaking down. `src/port/` is the only place
-  SDK headers belong.
+  workstation before any hardware exists — the 6502 passes Dormann's functional
+  test today. The core building clean on both toolchains is the mechanism that
+  keeps SDK dependencies from leaking down, so run the host build too, not just
+  the firmware one. `src/port/` is the only place SDK headers belong.
 - **The SPI wire is the bottleneck, not the 6502.** A 1 MHz Atom costs an
   estimated 8–17% of one core; a full-screen redraw is ~12.3 ms against a
   16.7 ms field. Optimisation effort belongs on pixels transmitted, not on the
