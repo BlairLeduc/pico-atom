@@ -14,7 +14,9 @@ option(PICO_ATOM_HOST "Build the portable core and its host tests, with no Pico 
 set(PICO_ATOM_CORE_SOURCES
     src/core/atom.c
     src/core/bus.c
+    src/core/i8255.c
     src/core/m6502.c
+    src/core/mc6847.c
 )
 
 set(PICO_ATOM_WARNINGS -Wall -Wextra -Werror)

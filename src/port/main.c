@@ -12,6 +12,7 @@
 
 #include "atom.h"
 #include "board.h"
+#include "mc6847.h"
 
 /* The guest lives in .bss, not the heap: src/core/ has no allocator, and
  * keeping it static is what makes the §5 budget a link-time fact. */
@@ -39,6 +40,10 @@ int main(void) {
     printf("  guest        : %u cycles/field at %u Hz, %u KiB address space\n",
            (unsigned)atom_cycles_per_field(&g_atom), g_atom.cfg.field_hz,
            (unsigned)(ATOM_ADDR_SPACE / 1024u));
+    if (!mc6847_has_font(&g_atom.vdg)) {
+        printf("  WARNING: no MC6847 character ROM supplied; alpha mode will "
+               "draw placeholder cells (design.md §16)\n");
+    }
 
     /* No ROMs yet: they come off the SD card at M4, and the build ships
      * none (design.md §1, §11.1). Until then the machine has nothing to
@@ -54,12 +59,20 @@ int main(void) {
             g_atom.budget -= (int32_t)atom_run(&g_atom, (uint32_t)g_atom.budget);
         }
 
+        /* FS, port C bit 7: low for the flyback interval, which is about
+         * 6 % of a field (§12.1). Atom programs poll it to avoid writing
+         * VRAM during active display. */
+        atom_field_sync(&g_atom, true);
+        atom_field_sync(&g_atom, false);
+
         if (++field % (g_atom.cfg.field_hz * 5u) == 0) {
+            const mc6847_mode_info_t *vdg = mc6847_mode_info(atom_vdg_mode(&g_atom));
             printf("  heartbeat    : %lu fields, %llu guest cycles, "
-                   "%u undocumented opcode(s)\n",
+                   "%u undocumented opcode(s), VDG %s\n",
                    (unsigned long)field,
                    (unsigned long long)g_atom.cpu.cycles,
-                   (unsigned)g_atom.cpu.undoc_count);
+                   (unsigned)g_atom.cpu.undoc_count,
+                   vdg->name);
         }
     }
 }

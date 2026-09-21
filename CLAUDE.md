@@ -7,16 +7,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0 and M1 are done** (`docs/design.md` §17), and M2's
-bus work came with them because the CPU needed somewhere to read from.
+**Implementation status: M0, M1 and most of M2 are done** (`docs/design.md`
+§17).
 
-What exists: the two-target build, `src/core/config.h`, the page-table bus, and
-a 6502 that passes Klaus Dormann's functional test. What does not: the 8255,
-the MC6847, the keyboard, tape, snapshots, and everything in `src/port/` past
-clocks and a banner.
+What exists: the two-target build, `src/core/config.h`, the page-table bus, a
+6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
+keyboard matrix and field sync, and MC6847 mode decode, expansion LUT and row
+generation for all nine modes.
 
-**M2 is next**, and what is left of it is the 8255, MC6847 row generation and
-golden images for all nine modes.
+What does not: the MC6847 character ROM (see below), committed golden images,
+tape, snapshots, and everything in `src/port/` past clocks and a banner.
+
+**M3 is next** — board bring-up: I²C, LCD, a test pattern at (32,64), and the
+first real measurement of present time against §8.4's ~12.3 ms estimate.
 
 ## The two documents
 
@@ -69,7 +72,9 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/config.h` | every fixed capacity; §5's budget lives or dies here |
 | `src/core/m6502.*` | the interpreter — switch dispatch, explicit cycle accounting |
 | `src/core/bus.*` | `bus_read`/`bus_write` inline fast path, slow path in the `.c` |
-| `src/core/atom.*` | `atom_t`, the page table, config, the run loop |
+| `src/core/i8255.*` | the PPI; generic Intel part, Atom wiring as accessors |
+| `src/core/mc6847.*` | mode decode, palette, expansion LUT, row generation |
+| `src/core/atom.*` | `atom_t`, the page table, config, the run loop, §4.1's API |
 | `src/port/board.*` | clocks and board identification |
 | `src/port/main.c` | bring-up; M0's share only |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h` |
@@ -166,8 +171,20 @@ time. They apply to every driver in `src/port/`:
   and were written from secondary knowledge. Transcribe them from primary
   sources before they become `#define`s; do not treat the document as
   authoritative for them.
+- **The design document contradicts itself about the port A mode bits.** §2.3
+  lists bits 4–7 ascending as `A/G, GM0, GM1, GM2`, putting `A/G` at bit 4;
+  §2.4 lists bits 7..4 descending as `A/G, GM2..GM0`, putting it at bit 7.
+  That is §16's medium-confidence row, so it is `atom_config_t.vdg_bit_order`
+  rather than a constant, defaulting to §2.4's reading. Settle it against the
+  circuit diagram, then collapse it — do not quietly pick one.
 - **No ROM binaries in the tree.** Acorn's ROMs are copyrighted; the user
   supplies them on SD card under `/atom/roms/`.
+- **There is no MC6847 character ROM, deliberately.** §16 requires it be
+  transcribed from the datasheet and then verified by golden image, so the
+  emulator carries no guess. `mc6847_set_font()` takes one; with none set,
+  alpha mode draws a hollow box for every glyph — obviously wrong on sight,
+  which is the point. A plausible invented font would be wrong in a way nobody
+  notices. Do not fabricate one.
 
 ## Measurement discipline
 

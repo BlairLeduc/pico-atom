@@ -3,9 +3,21 @@
  * otherwise be the first thing to notice.
  *
  * The read-modify-write double write is not asserted here: with a bare
- * RAM machine both writes land on the same byte and are indistinguishable.
- * It becomes observable at M2, where an RMW on an 8255 register is the
- * case that matters, and the assertion belongs in test_i8255.c.
+ * RAM machine both writes land on the same byte and are
+ * indistinguishable.
+ *
+ * It does not become observable at M2 either, contrary to what an
+ * earlier version of this comment said. Every writable 8255 register is
+ * an idempotent latch, and the one register with a side effect — the
+ * control word at #B003 — is write-only, so an RMW reads the open bus,
+ * which for absolute addressing into #B000-#B3FF is always the operand's
+ * high byte and therefore always has bit 7 set. Both writes are then
+ * mode-sets and the net effect matches a single write. test_i8255.c
+ * asserts that harmlessness directly.
+ *
+ * The first register in this machine whose write has a side effect the
+ * second write would repeat is the 6522 VIA's interrupt flag register,
+ * so the assertion lands at M9.
  */
 
 #include <string.h>

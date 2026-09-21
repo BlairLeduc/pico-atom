@@ -6,6 +6,8 @@ set(PICO_ATOM_HOST_TESTS
     test_m6502_behaviour
     test_m6502_decimal
     test_bus
+    test_i8255
+    test_mc6847
 )
 
 foreach(t ${PICO_ATOM_HOST_TESTS})

@@ -15,6 +15,7 @@ void atom_config_default(atom_config_t *cfg) {
     cfg->via_fitted     = false;
     cfg->atomdos        = false;
     cfg->field_hz       = ATOM_FIELD_HZ_DEFAULT;
+    cfg->vdg_bit_order  = VDG_BITS_AG_HIGH;   /* §2.4's reading; see §16 */
 }
 
 static void map_open(atom_t *m, unsigned first_page, unsigned last_page) {
@@ -73,6 +74,10 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
     /* ROM sockets stay unpopulated until an image is supplied; the build
      * ships no ROM binaries (§1, §11.1). */
 
+    i8255_reset(&m->ppi);
+    mc6847_init(&m->vdg);
+    atom_refresh_ppi_inputs(m);
+
     m6502_init(&m->cpu);
     m->budget = 0;
     atom_reset(m);
@@ -122,4 +127,60 @@ uint32_t atom_run(atom_t *m, uint32_t cycles) {
         done += m6502_step(m);
     }
     return done;
+}
+
+
+/* ---- keyboard, field sync and the VDG mode (design.md §4.1) --------- */
+
+/* Rebuild port B and port C's input nibble from machine state. Port B's
+ * row sense and the CTRL/SHIFT/REPT lines are all active low (§2.3). */
+void atom_refresh_ppi_inputs(atom_t *m) {
+    uint8_t col = i8255_kbd_column(&m->ppi);
+
+    /* Columns 0-9 exist; anything above selects nothing and senses no
+     * key, which is how the MOS's idle scan value behaves. */
+    uint8_t rows = (col < ATOM_KEY_COLS) ? m->key_col[col] : 0u;
+
+    uint8_t b = (uint8_t)(~rows & 0x3Fu);          /* bits 0-5, active low */
+    if (!m->key_ctrl)  b |= 0x40u;                 /* bit 6, active low    */
+    if (!m->key_shift) b |= 0x80u;                 /* bit 7, active low    */
+    m->ppi.in_b = b;
+
+    uint8_t c = m->ppi.in_c & 0x0Fu;
+    if (!m->key_rept)   c |= I8255_IN_C_REPT;      /* active low           */
+    if (!m->in_flyback) c |= I8255_IN_C_FS;
+    /* Cassette inputs stay where the tape decoder left them (M8). */
+    c |= (uint8_t)(m->ppi.in_c & (I8255_IN_C_CASSETTE_TONE |
+                                  I8255_IN_C_CASSETTE_DATA));
+    m->ppi.in_c = c;
+}
+
+void atom_key_set(atom_t *m, uint8_t row, uint8_t col, bool down) {
+    if (row >= ATOM_KEY_ROWS || col >= ATOM_KEY_COLS) return;
+    uint8_t bit = (uint8_t)(1u << row);
+    if (down) m->key_col[col] |= bit;
+    else      m->key_col[col] = (uint8_t)(m->key_col[col] & ~bit);
+    atom_refresh_ppi_inputs(m);
+}
+
+void atom_key_mods(atom_t *m, bool shift, bool ctrl, bool rept) {
+    m->key_shift = shift;
+    m->key_ctrl  = ctrl;
+    m->key_rept  = rept;
+    atom_refresh_ppi_inputs(m);
+}
+
+void atom_field_sync(atom_t *m, bool in_flyback) {
+    m->in_flyback = in_flyback;
+    atom_refresh_ppi_inputs(m);
+}
+
+uint8_t atom_vdg_mode(const atom_t *m) {
+    return mc6847_pack_mode(i8255_vdg_nibble(&m->ppi),
+                            i8255_css(&m->ppi),
+                            m->cfg.vdg_bit_order);
+}
+
+bool atom_speaker(const atom_t *m) {
+    return i8255_speaker(&m->ppi);
 }

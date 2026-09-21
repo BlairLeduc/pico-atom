@@ -7,6 +7,9 @@
 
 #include "bus.h"
 
+#include "i8255.h"
+#include "mc6847.h"
+
 #define IS_8255(a)   (((a) & 0xFC00u) == 0xB000u)
 #define IS_EXPAN(a)  (((a) & 0xFC00u) == 0xB400u)
 #define IS_VIA(a)    (((a) & 0xFC00u) == 0xB800u)
@@ -30,8 +33,14 @@ uint8_t bus_read_slow(atom_t *m, uint16_t a) {
 
     if (m->page_flags[a >> 8] & PAGE_IO) {
         if (IS_8255(a)) {
-            /* M2: i8255_read(&m->ppi, a & 3). */
-            return m->open_bus;
+            /* Decoded by mask, so the chip mirrors every four bytes
+             * through its block and some software relies on it (§7.3).
+             * #B003 is write-only on the real part, so it is not driven. */
+            uint8_t reg = (uint8_t)(a & 3u);
+            if (!i8255_reg_drives_bus(reg)) return m->open_bus;
+            uint8_t v = i8255_read(&m->ppi, reg);
+            m->open_bus = v;
+            return v;
         }
         if (IS_VIA(a) && m->cfg.via_fitted) {
             /* M9: via6522_read(&m->via, a & 15). */
@@ -62,7 +71,20 @@ void bus_write_slow(atom_t *m, uint16_t a, uint8_t v) {
 
     if (m->page_flags[a >> 8] & PAGE_IO) {
         if (IS_8255(a)) {
-            /* M2: i8255_write(&m->ppi, a & 3, v). */
+            uint8_t reg = (uint8_t)(a & 3u);
+            i8255_write(&m->ppi, reg, v);
+
+            /* Port A carries the keyboard column in its low nibble and
+             * the VDG mode in its high one, so *every keyboard scan
+             * writes the video mode too* (§2.3). The column change means
+             * port B's row sense must be recomputed; the mode nibble is
+             * compared rather than the whole port, so a scan does not
+             * look like a mode change. A control-register write can move
+             * port C's direction or clear the latches, so it counts as
+             * both. */
+            if (reg == 0u || reg == 3u) atom_refresh_ppi_inputs(m);
+            if (reg == 0u || reg == 2u || reg == 3u)
+                mc6847_set_mode(&m->vdg, atom_vdg_mode(m));
             return;
         }
         if (IS_VIA(a) && m->cfg.via_fitted) {
