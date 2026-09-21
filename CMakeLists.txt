@@ -1,0 +1,80 @@
+# pico-atom — one source tree, two targets (design.md §14):
+#   - the UF2 for the PicoCalc (default)
+#   - a host test binary that compiles src/core/ with the system compiler
+#     and no Pico SDK, behind -DPICO_ATOM_HOST=ON, run under CTest.
+#
+# The core building clean under -Wall -Wextra -Werror on both toolchains
+# is the mechanism that keeps SDK dependencies from leaking downwards.
+
+cmake_minimum_required(VERSION 3.13)
+
+option(PICO_ATOM_HOST "Build the portable core and its host tests, with no Pico SDK" OFF)
+
+# Every fixed capacity lives in src/core/config.h; nothing here duplicates one.
+set(PICO_ATOM_CORE_SOURCES
+    src/core/atom.c
+    src/core/bus.c
+    src/core/m6502.c
+)
+
+set(PICO_ATOM_WARNINGS -Wall -Wextra -Werror)
+
+if (PICO_ATOM_HOST)
+    project(pico_atom_host C)
+    set(CMAKE_C_STANDARD 11)
+    set(CMAKE_C_STANDARD_REQUIRED ON)
+    set(CMAKE_C_EXTENSIONS OFF)
+
+    add_library(pico_atom_core STATIC ${PICO_ATOM_CORE_SOURCES})
+    target_include_directories(pico_atom_core PUBLIC src/core)
+    target_compile_options(pico_atom_core PRIVATE ${PICO_ATOM_WARNINGS})
+
+    enable_testing()
+    add_subdirectory(test/host)
+else()
+    # Primary target: Raspberry Pi Pico 2 (RP2350A) — design.md §3.1.
+    if (NOT DEFINED PICO_BOARD)
+        set(PICO_BOARD pico2)
+    endif()
+    if (NOT DEFINED PICO_PLATFORM AND PICO_BOARD STREQUAL "pico2")
+        set(PICO_PLATFORM rp2350)
+    endif()
+
+    include(cmake/pico_sdk_import.cmake)
+
+    project(pico_atom C CXX ASM)
+    set(CMAKE_C_STANDARD 11)
+    set(CMAKE_CXX_STANDARD 17)
+
+    pico_sdk_init()
+
+    add_executable(pico-atom
+        src/port/main.c
+        src/port/board.c
+        ${PICO_ATOM_CORE_SOURCES}
+    )
+    target_include_directories(pico-atom PRIVATE src/core src/port)
+    target_compile_options(pico-atom PRIVATE ${PICO_ATOM_WARNINGS})
+
+    # clk_peri does not follow clk_sys by default; the SPI baud and the
+    # audio carrier are re-applied in code as well (hardware-notes §3).
+    target_compile_definitions(pico-atom PRIVATE
+        PICO_CLOCK_ADJUST_PERI_CLOCK_WITH_SYS_CLOCK=1
+        # UART1 at 115200 8-N-1, TX GP4 / RX GP5 (hardware-notes §2.7).
+        PICO_DEFAULT_UART=1
+        PICO_DEFAULT_UART_TX_PIN=4
+        PICO_DEFAULT_UART_RX_PIN=5
+    )
+
+    target_link_libraries(pico-atom
+        pico_stdlib
+        pico_multicore
+        pico_unique_id
+        hardware_clocks
+    )
+
+    pico_enable_stdio_uart(pico-atom 1)
+    pico_enable_stdio_usb(pico-atom 0)
+
+    pico_add_extra_outputs(pico-atom)
+endif()

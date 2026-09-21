@@ -53,3 +53,9 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Build trees
+build/
+
+# Third-party test suites, fetched by tools/fetch-test-suites.sh
+test/suites/

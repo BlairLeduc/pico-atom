@@ -7,10 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**The repository is currently documentation only.** There is no source tree, no
-`CMakeLists.txt` and no build. Do not invent build, lint or test commands — none
-exist yet. The first implementation milestone (M0 in `docs/design.md` §17) is
-what creates them.
+**Implementation status: M0 and M1 are done** (`docs/design.md` §17). The build,
+`src/core/config.h`, the bus and the 6502 exist; the 8255, MC6847, keyboard,
+tape and the whole of `src/port/` beyond clocks and the banner do not. M2 —
+bus, 8255, VDG row generation, golden images — is next.
 
 ## The two documents
 
@@ -27,13 +27,32 @@ Address notation: **`#XXXX` is a guest (Atom) address, `0x` is a host value.**
 The design document is deliberate about this because it discusses two machines
 at once.
 
-## Planned build (does not exist yet)
+## Build and test
 
-`docs/design.md` §14 specifies one CMake source tree producing two targets: the
-UF2, and a host test binary that compiles `src/core/` with the system compiler
-and no Pico SDK, gated behind a `PICO_ATOM_HOST` option and run under CTest.
-Both toolchains build with `-Wall -Wextra -Werror`. When implementing M0, match
-that specification rather than reinventing it.
+One CMake source tree, two targets, both under `-Wall -Wextra -Werror`
+(`docs/design.md` §14).
+
+```sh
+# host: src/core/ with the system compiler, no Pico SDK, under CTest
+cmake -S . -B build/host -DPICO_ATOM_HOST=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/host -j
+ctest --test-dir build/host --output-on-failure
+
+# firmware: needs PICO_SDK_PATH and arm-none-eabi-gcc on PATH
+cmake -S . -B build/pico -DPICO_BOARD=pico2 -DCMAKE_BUILD_TYPE=Release
+cmake --build build/pico -j          # -> build/pico/pico-atom.uf2
+```
+
+`test_m6502_functional` runs Klaus Dormann's suite and reports as **skipped**
+unless the binary is present. `./tools/fetch-test-suites.sh` downloads it into
+`test/suites/` (gitignored — the tree ships no binaries it did not build); the
+test finds it there without any environment variable. A skip is not a pass:
+treat a skipped functional test as an unverified CPU.
+
+Bruce Clark's decimal test is **not yet wired up** — it is distributed as
+source, not as a binary. Until it is, decimal mode is covered by the functional
+test's decimal section plus exhaustive valid-BCD checks in
+`test/host/test_m6502_decimal.c`; invalid-BCD operands are the remaining gap.
 
 ## Architecture: the parts that are easy to violate
 
@@ -60,7 +79,12 @@ a plausible-looking change silently breaks:
   guest RAM while the 6502 runs.
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
-  in one place.
+  in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
+  at M1 `.bss` is ~70 KiB of the 520 KiB budget.
+- **`page_t` is exactly two pointers**, with `atom_t.page_flags[]` alongside it.
+  Adding a third field pads the descriptor to twelve bytes and puts the page
+  table 1 KiB over §5's line for it; the flags are slow-path only, so they do
+  not belong in the hot struct.
 
 ## Hardware invariants that are not negotiable
 
