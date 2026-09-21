@@ -171,12 +171,12 @@ time. They apply to every driver in `src/port/`:
   and were written from secondary knowledge. Transcribe them from primary
   sources before they become `#define`s; do not treat the document as
   authoritative for them.
-- **The design document contradicts itself about the port A mode bits.** §2.3
-  lists bits 4–7 ascending as `A/G, GM0, GM1, GM2`, putting `A/G` at bit 4;
-  §2.4 lists bits 7..4 descending as `A/G, GM2..GM0`, putting it at bit 7.
-  That is §16's medium-confidence row, so it is `atom_config_t.vdg_bit_order`
-  rather than a constant, defaulting to §2.4's reading. Settle it against the
-  circuit diagram, then collapse it — do not quietly pick one.
+- **The port A mode bits are settled: `A/G` is bit 4**, `GM0`–`GM2` are bits
+  5–7, read off the Atom circuit diagram. §2.3 had this right and §2.4 had it
+  backwards; §2.4 has been corrected and §16's row now records the answer. The
+  constants are `VDG_PORT_A_*_BIT` in `mc6847.h`. This was runtime
+  configuration while it was unverified and is a constant now that it is not —
+  that is the intended lifecycle for a §16 item, not an exception to it.
 - **No ROM binaries in the tree.** Acorn's ROMs are copyrighted; the user
   supplies them on SD card under `/atom/roms/`.
 - **There is no MC6847 character ROM, deliberately.** §16 requires it be

@@ -34,20 +34,14 @@ static const uint8_t cg_set[2][4] = {
 /* RG modes: black plus one. */
 static const uint8_t rg_fg[2] = { VDG_GREEN, VDG_BUFF };
 
-uint8_t mc6847_pack_mode(uint8_t port_a_nibble, bool css, vdg_bit_order_t order) {
-    uint8_t ag, gm;
-    if (order == VDG_BITS_AG_HIGH) {
-        /* bit7 = A/G, bit6 = GM2, bit5 = GM1, bit4 = GM0. Bits 6:4 are
-         * already GM2:GM1:GM0 in order, so one shift lifts them out. */
-        ag = (uint8_t)((port_a_nibble >> 7) & 1u);
-        gm = (uint8_t)((port_a_nibble >> 4) & 7u);
-    } else {
-        /* bit4 = A/G, bit5 = GM0, bit6 = GM1, bit7 = GM2 */
-        ag = (uint8_t)((port_a_nibble >> 4) & 1u);
-        gm = (uint8_t)((((port_a_nibble >> 7) & 1u) << 2) |   /* GM2 */
-                       (((port_a_nibble >> 6) & 1u) << 1) |   /* GM1 */
-                       (((port_a_nibble >> 5) & 1u) << 0));   /* GM0 */
-    }
+uint8_t mc6847_pack_mode(uint8_t port_a_nibble, bool css) {
+    /* bit 4 = A/G, bit 5 = GM0, bit 6 = GM1, bit 7 = GM2 (schematic).
+     * The GM bits ascend as the bit number rises, so they come out
+     * reversed relative to the GM2:GM1:GM0 value the mode table uses. */
+    uint8_t ag = (uint8_t)((port_a_nibble >> VDG_PORT_A_AG_BIT) & 1u);
+    uint8_t gm = (uint8_t)((((port_a_nibble >> VDG_PORT_A_GM2_BIT) & 1u) << 2) |
+                           (((port_a_nibble >> VDG_PORT_A_GM1_BIT) & 1u) << 1) |
+                           (((port_a_nibble >> VDG_PORT_A_GM0_BIT) & 1u) << 0));
     return (uint8_t)((ag ? VDG_AG : 0u) |
                      ((gm << VDG_GM_SHIFT) & VDG_GM_MASK) |
                      (css ? VDG_CSS : 0u));

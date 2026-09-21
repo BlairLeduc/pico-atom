@@ -23,21 +23,21 @@
 #define VDG_AG        0x10u   /* alpha (0) or graphics (1)            */
 #define VDG_MODE_MASK 0x1Fu
 
-/* Which port A bit carries A/G is `docs/design.md` §16's medium-confidence
- * item, and the document states it two different ways: §2.3 lists bits 4-7
- * ascending as A/G, GM0, GM1, GM2, while §2.4 lists bits 7..4 descending
- * as A/G, GM2..GM0. Those disagree about where A/G sits. Until the Atom
- * circuit diagram settles it this is configuration, not a constant —
- * the same treatment §18 prescribes for the field rate. */
-typedef enum {
-    /* §2.4's reading: bit7=A/G, bit6=GM2, bit5=GM1, bit4=GM0. */
-    VDG_BITS_AG_HIGH = 0,
-    /* §2.3's reading: bit4=A/G, bit5=GM0, bit6=GM1, bit7=GM2. */
-    VDG_BITS_AG_LOW  = 1
-} vdg_bit_order_t;
+/* Port A's mode nibble, read off the Atom circuit diagram:
+ *
+ *     bit 4 = A/G, bit 5 = GM0, bit 6 = GM1, bit 7 = GM2
+ *
+ * This settles §16's medium-confidence row and the contradiction between
+ * design.md §2.3 (which had it right) and §2.4 (which did not). It was
+ * configuration while it was unverified; now that the schematic has
+ * spoken it is a constant, so there is nothing left to pick wrong. */
+#define VDG_PORT_A_AG_BIT   4u
+#define VDG_PORT_A_GM0_BIT  5u
+#define VDG_PORT_A_GM1_BIT  6u
+#define VDG_PORT_A_GM2_BIT  7u
 
 /* Pack port A's top nibble and port C's CSS bit into the mode byte. */
-uint8_t mc6847_pack_mode(uint8_t port_a_nibble, bool css, vdg_bit_order_t order);
+uint8_t mc6847_pack_mode(uint8_t port_a_nibble, bool css);
 
 /* ---- modes (§2.4, §8.3) --------------------------------------------- */
 

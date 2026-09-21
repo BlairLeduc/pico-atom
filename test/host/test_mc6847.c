@@ -62,32 +62,47 @@ int main(void) {
         }
     }
 
-    /* ---- the port A bit order, both readings (§16) ------------------- */
+    /* ---- the port A mode nibble, off the circuit diagram (§16) -------
+     *
+     * bit 4 = A/G, bit 5 = GM0, bit 6 = GM1, bit 7 = GM2. Each bit is
+     * exercised on its own so a transposition cannot hide behind a
+     * symmetric test value. */
     {
-        /* §2.4: bit7 = A/G, bit6 = GM2, bit5 = GM1, bit4 = GM0. */
-        CHECK(mc6847_pack_mode(0x80, false, VDG_BITS_AG_HIGH) == mode_of(true, 0, false),
-              "AG_HIGH: 0x80 should be graphics with GM2:0 = 0");
-        CHECK(mc6847_pack_mode(0xF0, false, VDG_BITS_AG_HIGH) == mode_of(true, 7, false),
-              "AG_HIGH: 0xF0 should be RG6");
-        CHECK(mc6847_pack_mode(0x40, false, VDG_BITS_AG_HIGH) == mode_of(false, 4, false),
-              "AG_HIGH: bit 7 clear is alpha whatever else is set");
+        CHECK(mc6847_pack_mode(0x00, false) == mode_of(false, 0, false),
+              "an empty nibble is alpha");
+        CHECK(mc6847_pack_mode(0x10, false) == mode_of(true, 0, false),
+              "bit 4 alone should be graphics with GM2:0 = 0 (CG1)");
+        CHECK(mc6847_pack_mode(0xF0, false) == mode_of(true, 7, false),
+              "a full nibble should be RG6");
 
-        /* §2.3: bit4 = A/G, bit5 = GM0, bit6 = GM1, bit7 = GM2. */
-        CHECK(mc6847_pack_mode(0x10, false, VDG_BITS_AG_LOW) == mode_of(true, 0, false),
-              "AG_LOW: 0x10 should be graphics with GM2:0 = 0");
-        CHECK(mc6847_pack_mode(0xF0, false, VDG_BITS_AG_LOW) == mode_of(true, 7, false),
-              "AG_LOW: 0xF0 should be RG6");
-        CHECK(mc6847_pack_mode(0x20, false, VDG_BITS_AG_LOW) == mode_of(false, 1, false),
-              "AG_LOW: bit 4 clear is alpha");
+        /* One GM bit at a time, with A/G set. */
+        CHECK(mc6847_pack_mode(0x30, false) == mode_of(true, 1, false),
+              "bit 5 is GM0, so 0x30 should be RG1");
+        CHECK(mc6847_pack_mode(0x50, false) == mode_of(true, 2, false),
+              "bit 6 is GM1, so 0x50 should be CG2");
+        CHECK(mc6847_pack_mode(0x90, false) == mode_of(true, 4, false),
+              "bit 7 is GM2, so 0x90 should be CG3");
 
-        /* The two readings genuinely differ, which is why this is
-         * configuration and not a constant. */
-        CHECK(mc6847_pack_mode(0x80, false, VDG_BITS_AG_HIGH) !=
-              mc6847_pack_mode(0x80, false, VDG_BITS_AG_LOW),
-              "the two bit orders should disagree about 0x80");
+        /* Bit 4 clear is alpha whatever the GM bits say. */
+        for (unsigned n = 0; n < 8u; n++) {
+            uint8_t nibble = (uint8_t)((n << 5) & 0xE0u);
+            CHECK(mc6847_mode_info(mc6847_pack_mode(nibble, false))->kind == VDG_ALPHA,
+                  "nibble 0x%02X has bit 4 clear and must be alpha", nibble);
+        }
 
-        /* CSS rides along from port C either way. */
-        CHECK((mc6847_pack_mode(0x80, true, VDG_BITS_AG_HIGH) & VDG_CSS) != 0,
+        /* Every GM value is reachable and distinct. */
+        bool seen[8] = { false };
+        for (unsigned n = 0; n < 8u; n++) {
+            uint8_t nibble = (uint8_t)(0x10u | ((n << 5) & 0xE0u));
+            unsigned gm = (mc6847_pack_mode(nibble, false) & VDG_GM_MASK) >> VDG_GM_SHIFT;
+            CHECK(!seen[gm], "GM value %u reached twice", gm);
+            seen[gm] = true;
+        }
+        for (unsigned gm = 0; gm < 8u; gm++)
+            CHECK(seen[gm], "GM value %u is unreachable from port A", gm);
+
+        /* CSS rides along from port C. */
+        CHECK((mc6847_pack_mode(0x10, true) & VDG_CSS) != 0,
               "CSS should reach the mode byte");
     }
 

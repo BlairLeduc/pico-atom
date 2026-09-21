@@ -156,7 +156,9 @@ Three consequences:
 
 ### 2.4 MC6847 modes
 
-`A/G`, `GM2..GM0` (port A bits 7..4) and `CSS` (port C bit 3) select the mode.
+`A/G` (port A bit 4), `GM0`, `GM1` and `GM2` (bits 5, 6 and 7 respectively) and
+`CSS` (port C bit 3) select the mode. Note that the `GM` bits ascend with the
+bit number, so they read out reversed relative to the `GM2:0` column below.
 Atom BASIC's `CLEAR n` maps onto these:
 
 | `A/G` | `GM2:0` | VDG mode | Resolution | Colours | VRAM | Atom |
@@ -1153,7 +1155,7 @@ class of bug in emulation.
 |---|---|---|
 | 8255 port bit assignments (§2.3) | Atom service manual / theory of operation | high — cross-check anyway |
 | MC6847 mode table (§2.4) | MC6847 datasheet | high |
-| VDG mode bit order in port A bits 7–4 | Atom circuit diagram | **medium** — the `A/G`/`GM2:0` ordering must be read off the schematic |
+| VDG mode bit order in port A bits 7–4 | Atom circuit diagram | **confirmed** — `A/G` is bit 4, `GM0`–`GM2` bits 5–7, read off the schematic. §2.3 had this right; an earlier §2.4 had `A/G` at bit 7 and has been corrected |
 | Keyboard matrix cell assignments (10×6) | Atom service manual keyboard table | **low** — transcribe; do not reconstruct |
 | `OSLOAD`/`OSSAVE` entry addresses and page-2 vectors (§11.2) | MOS disassembly | **low** |
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source | **medium** — affects §12.1 throughout |

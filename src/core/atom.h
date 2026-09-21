@@ -41,11 +41,6 @@ typedef struct {
     bool via_fitted;      /* 6522 at #B800 */
     bool atomdos;         /* 8271 FDC at #0A00 — steals 4 bytes of page #0A */
     unsigned field_hz;    /* 50 or 60; §16 medium confidence, so configurable */
-
-    /* Which port A bit carries A/G. §16 marks this medium confidence and
-     * the design document states it both ways (§2.3 vs §2.4), so it is
-     * configuration until the circuit diagram settles it. */
-    vdg_bit_order_t vdg_bit_order;
 } atom_config_t;
 
 typedef struct atom_s {

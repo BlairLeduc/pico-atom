@@ -15,7 +15,6 @@ void atom_config_default(atom_config_t *cfg) {
     cfg->via_fitted     = false;
     cfg->atomdos        = false;
     cfg->field_hz       = ATOM_FIELD_HZ_DEFAULT;
-    cfg->vdg_bit_order  = VDG_BITS_AG_HIGH;   /* §2.4's reading; see §16 */
 }
 
 static void map_open(atom_t *m, unsigned first_page, unsigned last_page) {
@@ -176,9 +175,7 @@ void atom_field_sync(atom_t *m, bool in_flyback) {
 }
 
 uint8_t atom_vdg_mode(const atom_t *m) {
-    return mc6847_pack_mode(i8255_vdg_nibble(&m->ppi),
-                            i8255_css(&m->ppi),
-                            m->cfg.vdg_bit_order);
+    return mc6847_pack_mode(i8255_vdg_nibble(&m->ppi), i8255_css(&m->ppi));
 }
 
 bool atom_speaker(const atom_t *m) {
