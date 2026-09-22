@@ -666,6 +666,33 @@ Cost estimate, from the 4.0 Mpx/s effective rate measured in hardware notes §4.
 | Cursor blink (one cell) | 96 | ~0.05 ms |
 | Full redraw at 25 MHz SPI, for comparison | 49,152 | ~37 ms |
 
+**Measured at M3, 2026-09-22** — Pimoroni Pico Plus 2 W (RP2350 rev 2, id
+`7458DC82A89AAC12`), `pico2` build, 150 MHz, spi1 configured at 75 MHz, with
+core 0 running the guest's field loop throughout (the mode we ship). Each figure
+is the mean of 20 presents; min-to-max spread was under 3 %.
+
+| Case | Pixels | Estimate | Measured |
+|---|---:|---:|---:|
+| Control: `lcd_fill` of the same rectangle, no row generation | 49,152 | — | 11.48 ms |
+| Full redraw, RG6 / CG1 / alpha | 49,152 | ~12.8 ms | **11.52 / 11.52 / 11.51 ms** |
+| One text line changed (2 bands) | 4,096 | ~1.0 ms | 1.11 ms |
+| One cell changed (2 bands × 8 rows × 8 px) | 128 | ~0.05 ms | 0.28 ms |
+| Nothing changed (live, `@` screen) | 0 | — | 0.11 ms |
+
+What the numbers say:
+
+- **Row generation is free.** A full redraw costs the same as the control fill
+  to within 0.4 %, in every mode, so expansion is entirely hidden behind the
+  DMA. The present is wire-bound, as §8.1 intended, at 4.27 Mpx/s — better than
+  the 4.0 Mpx/s the estimate borrowed from a pipeline that did more per pixel.
+- **The estimate had no fixed cost for a small present.** ~0.1 ms goes on the
+  24-band diff and the 6 KiB shadow copy whether anything changed or not, and
+  each dirty band adds a window and eight row DMAs. That is why one cell costs
+  0.28 ms, not 0.05; it is still under 2 % of a field.
+- A full-screen redraw every field leaves ~5.2 ms of the 16.7 ms field for
+  everything else on core 1 — enough for one southbridge poll, which is why the
+  poll moves to every second field (below) rather than the redraw rate dropping.
+
 **This is the machine's real constraint.** A field is 16.7 ms; a full-screen
 redraw plus a 4–5 ms southbridge poll is ~18 ms, so core 1 saturates when the
 whole screen changes every field. Mitigations, in the order they are applied:

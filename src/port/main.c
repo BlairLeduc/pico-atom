@@ -174,6 +174,8 @@ static void measure_present(void) {
 }
 
 static void core1_main(void) {
+    printf("  core 1       : up\n");
+
     /* 1. Southbridge first: a dead bus is the first thing to know about
      *    (hardware-notes.md §10). */
     uint32_t i2c_hz = sb_init();

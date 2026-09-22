@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0, M1 and M2 are done; M3 is written and awaiting
-hardware** (`docs/design.md` §17).
+**Implementation status: M0, M1 and M2 are done; M3 runs on hardware and is
+awaiting its visual check** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -18,10 +18,11 @@ generation for all nine modes, the character ROM, and §15.1's golden images in
 
 M3's code exists: the flyback-split field loop (`atom_run_field`), the §4.2
 snapshot pool, the §8.4 dirty-band presenter on core 1, and drivers for the
-southbridge and LCD. None of it has run on a board yet. M3 is **done** only
-when someone has seen the test pattern's four corners on the panel and
-captured the `M3 present` lines over UART (design.md §17) — until then the LCD
-init sequence, the colour order and every present time are unverified.
+southbridge and LCD. It has run on a Plus 2 W: present times are measured
+and recorded in design.md §8.4 (full redraw 11.5 ms, wire-bound), and the
+southbridge answers with zero I²C errors. What is **not** yet verified is the
+panel image itself — the test pattern's four corners, colour order and
+orientation need a person looking at the screen before M3 is done.
 
 What does not exist: keyboard, audio, SD, tape, the status band.
 
@@ -55,6 +56,18 @@ ctest --test-dir build/host --output-on-failure
 cmake -S . -B build/pico -DPICO_BOARD=pico2 -DCMAKE_BUILD_TYPE=Release
 cmake --build build/pico -j          # -> build/pico/pico-atom.uf2
 ```
+
+On hardware, with the Debug Probe's SWD and UART both connected:
+
+```sh
+tools/uart-log.sh 30 out/run.log &   # capture UART1 first, so the banner is in it
+tools/flash.sh                       # program, verify, reset both cores together
+```
+
+`flash.sh` resets with `reset halt` + `resume`, never `reset run`; the reason is
+in the script and in hardware-notes.md §2.7. `uart-log.sh` refuses to open a
+port something else is reading — two readers split the byte stream and both
+logs come out scrambled. `out/` is ignored scratch space for logs.
 
 `test_m6502_functional` runs Klaus Dormann's suite and reports as **skipped**
 unless the binary is present. `./tools/fetch-test-suites.sh` downloads it into
