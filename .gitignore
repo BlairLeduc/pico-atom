@@ -67,3 +67,6 @@ roms/*
 
 # macOS directory metadata
 .DS_Store
+
+# Rendered images test_mc6847_golden writes on a mismatch
+*.actual.ppm

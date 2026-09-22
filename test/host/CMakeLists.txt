@@ -32,10 +32,26 @@ target_compile_definitions(test_m6502_functional PRIVATE
 add_test(NAME test_m6502_functional COMMAND test_m6502_functional)
 set_tests_properties(test_m6502_functional PROPERTIES SKIP_RETURN_CODE 77)
 
-# A tool, not a test: renders the VDG to PPM so the character ROM can be
-# verified by eye, which is §16's prescribed method for it.
+# §15.1's golden images. The scenes are shared with vdg-ppm, which is
+# what writes test/golden/, so the writer and the checker cannot drift.
+add_library(vdg_scenes STATIC vdg_scenes.c)
+target_link_libraries(vdg_scenes PUBLIC pico_atom_core)
+target_include_directories(vdg_scenes PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(vdg_scenes PRIVATE ${PICO_ATOM_WARNINGS})
+
+add_executable(test_mc6847_golden test_mc6847_golden.c)
+target_link_libraries(test_mc6847_golden PRIVATE vdg_scenes)
+target_compile_options(test_mc6847_golden PRIVATE ${PICO_ATOM_WARNINGS})
+target_compile_definitions(test_mc6847_golden PRIVATE
+    PICO_ATOM_GOLDEN_DIR="${CMAKE_SOURCE_DIR}/test/golden"
+)
+add_test(NAME test_mc6847_golden COMMAND test_mc6847_golden)
+
+# A tool, not a test: renders the VDG to PPM, both to verify the
+# character ROM by eye (§16's prescribed method) and to regenerate the
+# goldens above.
 add_executable(vdg-ppm ${CMAKE_SOURCE_DIR}/tools/vdg-ppm.c)
-target_link_libraries(vdg-ppm PRIVATE pico_atom_core)
+target_link_libraries(vdg-ppm PRIVATE vdg_scenes)
 target_compile_options(vdg-ppm PRIVATE ${PICO_ATOM_WARNINGS})
 
 # tools/mkfont.py round trip. Guards a bug that silently dropped every

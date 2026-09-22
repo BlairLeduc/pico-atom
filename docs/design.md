@@ -1104,13 +1104,16 @@ pico-atom/
 ├── test/
 │   ├── host/                   # CTest
 │   │   ├── test_m6502.c        # Dormann functional, Clark decimal
-│   │   ├── test_mc6847.c       # golden images, all nine modes
+│   │   ├── test_mc6847.c       # mode table, LUT, font layout
+│   │   ├── test_mc6847_golden.c  # golden images, all nine modes
+│   │   ├── vdg_scenes.c/.h     # the VRAM behind them, shared with vdg-ppm
 │   │   ├── test_i8255.c
 │   │   ├── test_keymap.c
 │   │   └── test_tape.c
 │   └── golden/                 # committed reference PPMs
 └── tools/
     ├── mkfont.py               # MC6847 character ROM → header
+    ├── vdg-ppm.c               # render the scenes; regenerates test/golden/
     ├── atm.py                  # inspect/build ATM files
     └── trace-diff.py           # compare a trace against a reference emulator
 ```
