@@ -864,6 +864,26 @@ emulator boots to its menu with an explanatory screen rather than into a dead
 machine — a blank screen is the single most expensive failure mode to debug on
 this hardware.
 
+The four names above that are not `utility.rom` are Atomulator's, which is the
+set most Atom software assumes and the one [`README.md`](../README.md#rom-images)
+points a user at. They map onto §2.2 as:
+
+| File | Guest address | SHA-1 of the Atomulator image |
+|---|---|---|
+| `akernel.rom` | `#F000`–`#FFFF` | `2621f27d652d4673e0a79aa669e729b8c3051ab6` |
+| `abasic.rom` | `#C000`–`#CFFF` | `a8ea19f10d4c98fbc1b666e5968f06d46af9a84c` |
+| `afloat.rom` | `#D000`–`#DFFF` | `ebcde5b36cb3a3344567cbba4c7b9fde015f4802` |
+| `dosrom.rom` | `#E000`–`#EFFF` | `71ea0a4b8d9c3caf9718fc7cc279f4306a23b39c` |
+| `utility.rom` | `#A000`–`#AFFF` | user's choice; `axr1.rom` is the usual one |
+
+Each is 4 KiB. **`abasic.rom` and `akernel.rom` are the two halves of MAME's
+8 KiB `abasic.ic20`**, in that order — a collection that offers one 8 KiB file
+rather than two 4 KiB ones has the same data, split differently, and the loader
+should say so rather than reject it. Recording the hashes here is not DRM: Atom
+images have been re-dumped and renamed for forty years, and a near-miss
+produces a machine that boots and then misbehaves, which §16 already calls the
+most expensive class of bug on this project.
+
 SD access follows hardware notes §7.1: 400 kHz for init then 25 MHz requested,
 card detect on GP22 active-low with a pull-up, 512-byte blocks, SDSC byte
 addressing distinguished from SDHC block addressing, and **all card work done at
@@ -1033,9 +1053,11 @@ state (§8.4).
 ```
 pico-atom/
 ├── CMakeLists.txt              # pico-sdk build; host build behind PICO_ATOM_HOST
+├── THIRD-PARTY.md              # material that is not ours, and under what terms
 ├── docs/
 │   ├── hardware-notes.md
 │   └── design.md
+├── roms/                       # workstation staging only, gitignored (§11.1)
 ├── src/
 │   ├── core/                   # portable C11, no SDK, no allocator
 │   │   ├── config.h            # every fixed capacity, in one place
@@ -1044,7 +1066,7 @@ pico-atom/
 │   │   ├── atom.c/.h
 │   │   ├── i8255.c/.h
 │   │   ├── mc6847.c/.h         # mode decode, LUT build, row generation
-│   │   ├── mc6847_font.h       # 64-glyph character ROM
+│   │   ├── mc6847_font.c/.h    # 64-glyph character ROM (XRoar's, THIRD-PARTY.md)
 │   │   ├── via6522.c/.h
 │   │   ├── keymatrix.c/.h
 │   │   ├── keymap_picocalc.c   # data table (§10.3)
@@ -1161,11 +1183,16 @@ class of bug in emulation.
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source | **medium** — affects §12.1 throughout |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
 | 8271 base address `#0A00` (§7.3) | AtomDOS documentation | medium |
-| MC6847 character ROM bitmap | datasheet figure or an extracted table | transcribe, then verify by golden image |
+| MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |
 
-The verification method for the last one is the honest one: render the full
-64-glyph set, photograph a real Atom or compare against a reference emulator's
-output, and commit the result as a golden image.
+The last one was settled the way this section asks. The table is XRoar's
+`src/mc6847/font-6847.c`, byte for byte (`THIRD-PARTY.md`); the full 64-glyph
+set was rendered with `tools/vdg-ppm` and read by eye — `@ABC`…`XYZ[\]^_` then
+space through `?`, inverse video and both colour sets correct. What the data
+carries rather than the renderer assuming it — 5 px in bits 5..1, rows 3..9 of
+the cell, MC6847 glyph order — is asserted against the data in
+`test/host/test_mc6847.c`, so a differently laid-out substitute fails loudly
+instead of rendering plausible-but-wrong glyphs.
 
 ---
 
@@ -1220,7 +1247,12 @@ everything after it is refinement.
   NMOS 6502*.
 - Existing Atom emulators (Atomulator, Wouter Ras's emulator) — for
   cross-checking behaviour and for the trace-diff harness of §15.1, not for
-  copying code.
+  copying code. Atomulator, David Banks' fork at
+  <https://github.com/hoglet67/Atomulator>, is also where §11.1 sends a user
+  for ROM images.
+- **XRoar**, Ciaran Anscomb, <https://www.6809.org.uk/xroar/> — the source of
+  the MC6847 character ROM table in `src/core/mc6847_font.c`, taken verbatim
+  under the GPL-3.0-or-later. See [`THIRD-PARTY.md`](../THIRD-PARTY.md).
 
 **The host** — all collected in [`hardware-notes.md`](hardware-notes.md) §11:
 the ClockworkPi PicoCalc repository and mainboard schematic, the ST7365P

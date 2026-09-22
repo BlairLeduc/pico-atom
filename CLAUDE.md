@@ -185,10 +185,18 @@ time. They apply to every driver in `src/port/`:
   configuration while it was unverified and is a constant now that it is not —
   that is the intended lifecycle for a §16 item, not an exception to it.
 - **No ROM binaries in the tree.** Acorn's ROMs are copyrighted; the user
-  supplies them on SD card under `/atom/roms/`.
+  supplies them on SD card under `/atom/roms/`. `README.md` says which five
+  files, where to get them (hoglet67's Atomulator) and their SHA-1s;
+  `design.md` §11.1 maps them onto the §2.2 address map. The repo-root
+  `roms/` is a workstation staging area — ignored except for its `README.md`,
+  and nothing reads it at run time.
 - **The MC6847 character ROM has a layout that is easy to get wrong.** It is
   `src/core/mc6847_font.c`, a flat `const uint8_t font_6847[768]` with an
-  `extern` in the matching `.h`. Three things about it:
+  `extern` in the matching `.h`. It is **XRoar's `src/mc6847/font-6847.c`
+  taken verbatim**, byte-identical bar the comment header, under the
+  GPL-3.0-or-later — keep the attribution in that header and in
+  `THIRD-PARTY.md` if you ever regenerate it, since `mkfont.py` emits its own
+  banner and would drop it. Three things about the layout:
 
   - A glyph is **5 px wide in bits 5..1**, not bit 7 leftmost. The renderer
     shifts it left by `MC6847_FONT_LSHIFT`, leaving the three spacing columns
