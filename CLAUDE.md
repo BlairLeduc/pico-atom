@@ -79,6 +79,8 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/port/main.c` | bring-up; M0's share only |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h` |
 | `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` |
+| `tools/mkfont.py` | character ROM -> `mc6847_font.h`, and `--dump` to proof it |
+| `tools/vdg-ppm.c` | renders the VDG to PPM; host target only, not firmware |
 
 **Device hooks that do not exist yet are marked in place**, as `/* M2: ... */`
 and `/* M9: ... */` comments at the point in `src/core/bus.c` where the call
@@ -180,11 +182,24 @@ time. They apply to every driver in `src/port/`:
 - **No ROM binaries in the tree.** Acorn's ROMs are copyrighted; the user
   supplies them on SD card under `/atom/roms/`.
 - **There is no MC6847 character ROM, deliberately.** §16 requires it be
-  transcribed from the datasheet and then verified by golden image, so the
-  emulator carries no guess. `mc6847_set_font()` takes one; with none set,
-  alpha mode draws a hollow box for every glyph — obviously wrong on sight,
-  which is the point. A plausible invented font would be wrong in a way nobody
-  notices. Do not fabricate one.
+  transcribed from a primary source and then verified by golden image, so the
+  emulator carries no guess. With none set, alpha mode draws a hollow box for
+  every glyph — obviously wrong on sight, which is the point. A plausible
+  invented font would be wrong in a way nobody notices. **Do not fabricate
+  one.** To install a real one:
+
+  ```sh
+  ./tools/mkfont.py <source> -o src/core/mc6847_font.h   # 64x12, bit 7 left
+  ./tools/mkfont.py src/core/mc6847_font.h --dump        # proof it by eye
+  ./build/host/test/host/vdg-ppm out/                    # render to PPM
+  ```
+
+  Both builds detect `src/core/mc6847_font.h` by existence and define
+  `PICO_ATOM_HAVE_FONT`; nothing else needs changing. `mkfont.py` handles a
+  narrower or shorter source cell via `--cols/--rows/--pad-top/--pad-bottom/
+  --align`. Three things must be pinned down before trusting any of it: which
+  ASCII code glyph 0 is, where a 5x7 glyph sits inside the 8x12 cell, and that
+  bit 7 is the leftmost pixel.
 
 ## Measurement discipline
 

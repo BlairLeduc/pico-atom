@@ -14,6 +14,10 @@
 #include "board.h"
 #include "mc6847.h"
 
+#if PICO_ATOM_HAVE_FONT
+#include "mc6847_font.h"
+#endif
+
 /* The guest lives in .bss, not the heap: src/core/ has no allocator, and
  * keeping it static is what makes the §5 budget a link-time fact. */
 static atom_t g_atom;
@@ -37,6 +41,9 @@ int main(void) {
     atom_config_t cfg;
     atom_config_default(&cfg);
     atom_init(&g_atom, &cfg);
+#if PICO_ATOM_HAVE_FONT
+    mc6847_set_font(&g_atom.vdg, mc6847_font);
+#endif
     printf("  guest        : %u cycles/field at %u Hz, %u KiB address space\n",
            (unsigned)atom_cycles_per_field(&g_atom), g_atom.cfg.field_hz,
            (unsigned)(ATOM_ADDR_SPACE / 1024u));
