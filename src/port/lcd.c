@@ -17,6 +17,8 @@
 #include "hardware/spi.h"
 #include "pico/stdlib.h"
 
+#include "config.h"
+
 /* hardware-notes.md §1.1. CS, D/CX and RST are plain GPIOs: the SPI
  * peripheral does not manage chip select here, and that matters (§4.3). */
 #define LCD_SPI      spi1
@@ -186,7 +188,7 @@ uint32_t lcd_init(void) {
 
     /* Clear visible frame memory before DISPON, so startup does not show
      * uninitialised pixels (hardware-notes.md §4.4). */
-    lcd_fill(0, 0, 320, 320, 0x0000);
+    lcd_fill(0, 0, ATOM_PANEL_W, ATOM_PANEL_H, 0x0000);
     lcd_cmd(CMD_DISPON, NULL, 0);
     sleep_ms(20);
 

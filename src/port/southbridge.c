@@ -23,7 +23,10 @@
 #define SB_TIMEOUT_US 20000u
 
 static volatile bool s_busy;
-static uint32_t s_errors;
+/* Written here on core 1, read by core 0's heartbeat. One writer and an
+ * aligned 32-bit word, so volatile is enough: it forces each read to go to
+ * memory rather than trusting a copy, as for main.c's g_c1. */
+static volatile uint32_t s_errors;
 
 /* Guard the bus with a flag, so a foreground read and a background poll
  * cannot interleave (hardware-notes.md §6.1). It is a same-core guard:
