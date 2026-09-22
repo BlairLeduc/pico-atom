@@ -56,6 +56,11 @@
  * lives here and the machine carries it in atom_t. */
 #define ATOM_FIELD_HZ_DEFAULT  60u
 
+/* FS (port C bit 7) is low for the flyback interval, ~6 % of a field
+ * (§12.1): 999 cycles at 60 Hz. §16 lists this as unconfirmed; it is a
+ * percentage so that it follows the field rate if that changes. */
+#define ATOM_FLYBACK_PERCENT    6u
+
 /* ---- Audio (design.md §9.2, §9.4) ------------------------------------ */
 
 #define ATOM_PWM_TOP         2047u  /* 11 bits, 73.2 kHz carrier          */

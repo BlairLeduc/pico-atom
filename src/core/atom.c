@@ -80,7 +80,6 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
      * ships no ROM binaries (§1, §11.1). */
 
     i8255_reset(&m->ppi);
-    mc6847_init(&m->vdg);
     atom_refresh_ppi_inputs(m);
 
     m6502_init(&m->cpu);
@@ -131,6 +130,33 @@ uint32_t atom_run(atom_t *m, uint32_t cycles) {
     while (done < cycles) {
         done += m6502_step(m);
     }
+    return done;
+}
+
+/* Spend whatever the accumulator holds. A negative budget is debt from
+ * the last instruction's overshoot and is paid off by running nothing. */
+static uint32_t run_budget(atom_t *m) {
+    if (m->budget <= 0) return 0;
+    uint32_t done = atom_run(m, (uint32_t)m->budget);
+    m->budget -= (int32_t)done;
+    return done;
+}
+
+uint32_t atom_run_field(atom_t *m) {
+    uint32_t flyback = atom_flyback_cycles(m);
+    uint32_t done = 0;
+
+    m->budget += (int32_t)(atom_cycles_per_field(m) - flyback);
+    done += run_budget(m);
+
+    /* Guest instructions must execute while FS is low, or the flag is
+     * unobservable and the MOS's screen-writing loops spin for ever
+     * (§12.1). */
+    atom_field_sync(m, true);
+    m->budget += (int32_t)flyback;
+    done += run_budget(m);
+    atom_field_sync(m, false);
+
     return done;
 }
 

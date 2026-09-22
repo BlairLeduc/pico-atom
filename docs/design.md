@@ -304,9 +304,23 @@ Handoff is an **immutable snapshot with explicit ownership**, over a pool of
 | `rendering` | core 1 owns it |
 
 Per field, core 0 marks its `filling` buffer `ready` and takes any `free` one;
-core 1, when idle, takes the newest `ready` buffer, marks it `rendering`, and
-frees it on completion. Any older `ready` buffer is dropped unrendered — that is
-§12.2's superseded-snapshot rule, made explicit.
+core 1, when idle, takes the `ready` buffer, marks it `rendering`, and frees it
+on completion. Publishing drops any older `ready` buffer unrendered, on the
+spot — that is §12.2's superseded-snapshot rule, made explicit, and doing it at
+publish rather than at take is what guarantees core 0's next claim always finds
+a `free` buffer. At most one buffer is ever `ready`, so core 1 needs no sequence
+numbers to find the newest.
+
+The state machine is `src/core/snappool.c` and holds no lock of its own; the
+port calls each transition under the spinlock described below. Keeping the
+lock out of it is what lets `test_present` drive it on a host through a long
+randomised interleaving.
+
+The renderer — `mc6847_t` and its 8 KiB expansion LUT — belongs to core 1 and
+is **not** part of `atom_t`. Core 0 carries only VRAM and the port latches; the
+mode byte is read off them with `atom_vdg_mode()` when the snapshot is taken.
+A LUT that core 0 rebuilt on a port A write while core 1 expanded rows through
+it would be a race, and a second copy would cost the 8 KiB §5 does not have.
 
 **Three buffers, not two, and the third one is the whole point.** Core 1's worst
 case is ~17–18 ms (§8.4) against core 0's 16.7 ms field, so the consumer can be
@@ -652,6 +666,33 @@ Cost estimate, from the 4.0 Mpx/s effective rate measured in hardware notes §4.
 | Cursor blink (one cell) | 96 | ~0.05 ms |
 | Full redraw at 25 MHz SPI, for comparison | 49,152 | ~37 ms |
 
+**Measured at M3, 2026-09-22** — Pimoroni Pico Plus 2 W (RP2350 rev 2, id
+`7458DC82A89AAC12`), `pico2` build, 150 MHz, spi1 configured at 75 MHz, with
+core 0 running the guest's field loop throughout (the mode we ship). Each figure
+is the mean of 20 presents; min-to-max spread was under 3 %.
+
+| Case | Pixels | Estimate | Measured |
+|---|---:|---:|---:|
+| Control: `lcd_fill` of the same rectangle, no row generation | 49,152 | — | 11.48 ms |
+| Full redraw, RG6 / CG1 / alpha | 49,152 | ~12.8 ms | **11.52 / 11.52 / 11.51 ms** |
+| One text line changed (2 bands) | 4,096 | ~1.0 ms | 1.11 ms |
+| One cell changed (2 bands × 8 rows × 8 px) | 128 | ~0.05 ms | 0.28 ms |
+| Nothing changed (live, `@` screen) | 0 | — | 0.11 ms |
+
+What the numbers say:
+
+- **Row generation is free.** A full redraw costs the same as the control fill
+  to within 0.4 %, in every mode, so expansion is entirely hidden behind the
+  DMA. The present is wire-bound, as §8.1 intended, at 4.27 Mpx/s — better than
+  the 4.0 Mpx/s the estimate borrowed from a pipeline that did more per pixel.
+- **The estimate had no fixed cost for a small present.** ~0.1 ms goes on the
+  24-band diff and the 6 KiB shadow copy whether anything changed or not, and
+  each dirty band adds a window and eight row DMAs. That is why one cell costs
+  0.28 ms, not 0.05; it is still under 2 % of a field.
+- A full-screen redraw every field leaves ~5.2 ms of the 16.7 ms field for
+  everything else on core 1 — enough for one southbridge poll, which is why the
+  poll moves to every second field (below) rather than the redraw rate dropping.
+
 **This is the machine's real constraint.** A field is 16.7 ms; a full-screen
 redraw plus a 4–5 ms southbridge poll is ~18 ms, so core 1 saturates when the
 whole screen changes every field. Mitigations, in the order they are applied:
@@ -971,12 +1012,15 @@ the real Atom's screen-writing routines do. The debt carry survives the split
 because `atom_run` reports its true cycle count on each call, so two runs
 against one accumulator behave as one.
 
-The M0/M2 bring-up loop in `src/port/main.c` **does not do this yet** — it
-pulses `FS` at the end of the slice, which is harmless only because no ROM is
-loaded and nothing polls it. M3 builds the real core 0 loop and is where this
-shape has to arrive; a host test should run a guest loop polling `FS` and
-assert that it both observes the low state and escapes, since asserting that
-the accessor flips the bit does not catch this.
+This loop is `atom_run_field()` in `src/core/atom.c`, so the firmware and the
+host test run the same code. `test/host/test_field.c` runs a guest loop polling
+`FS` and asserts that it both observes the low state and escapes once per
+field, since asserting that the accessor flips the bit does not catch this. It
+also runs the old M0 shape — pulse `FS` after the whole field — as a control
+that must see nothing, so the test is known to be able to tell the two apart.
+
+The flyback interval is `ATOM_FLYBACK_PERCENT` of a field: 999 cycles at
+60 Hz. The ~6 % figure is itself unconfirmed (§16).
 
 Within a slice, the audio integrator emits a sample every 27.31 guest cycles via
 a fixed-point accumulator, so audio and CPU share one clock by construction and
@@ -1083,8 +1127,9 @@ pico-atom/
 │   │   ├── bus.c/.h
 │   │   ├── atom.c/.h
 │   │   ├── i8255.c/.h
-│   │   ├── mc6847.c/.h         # mode decode, LUT build, row generation
+│   │   ├── mc6847.c/.h         # mode decode, LUT build, row generation, band diff
 │   │   ├── mc6847_font.c/.h    # 64-glyph character ROM (XRoar's, THIRD-PARTY.md)
+│   │   ├── snappool.c/.h       # §4.2's three-buffer handoff; the state machine, no lock
 │   │   ├── via6522.c/.h
 │   │   ├── keymatrix.c/.h
 │   │   ├── keymap_picocalc.c   # data table (§10.3)
@@ -1096,7 +1141,8 @@ pico-atom/
 │   │   ├── lcd.c/.h            # ST7789P init, windows, DMA blit
 │   │   ├── display.c/.h        # snapshot diff, band present, status band
 │   │   ├── audio.c/.h          # PWM slice, chained DMA, SPSC queue
-│   │   ├── kbd.c/.h            # southbridge poll, normalisation
+│   │   ├── southbridge.c/.h    # i2c1 register layer: read, write, busy flag, errors
+│   │   ├── kbd.c/.h            # key-event normalisation on top of it
 │   │   ├── sd.c/.h  fs.c/.h    # SPI0, FatFs
 │   │   ├── ui.c/.h
 │   │   └── perf.c/.h
@@ -1104,13 +1150,18 @@ pico-atom/
 ├── test/
 │   ├── host/                   # CTest
 │   │   ├── test_m6502.c        # Dormann functional, Clark decimal
-│   │   ├── test_mc6847.c       # golden images, all nine modes
+│   │   ├── test_mc6847.c       # mode table, LUT, font layout
+│   │   ├── test_mc6847_golden.c  # golden images, all nine modes
+│   │   ├── vdg_scenes.c/.h     # the VRAM behind them, shared with vdg-ppm
 │   │   ├── test_i8255.c
+│   │   ├── test_field.c        # §12.1: a guest polling FS sees it low and escapes
+│   │   ├── test_present.c      # §8.4 dirty bands by execution; §4.2 snapshot pool
 │   │   ├── test_keymap.c
 │   │   └── test_tape.c
 │   └── golden/                 # committed reference PPMs
 └── tools/
     ├── mkfont.py               # MC6847 character ROM → header
+    ├── vdg-ppm.c               # render the scenes; regenerates test/golden/
     ├── atm.py                  # inspect/build ATM files
     └── trace-diff.py           # compare a trace against a reference emulator
 ```
@@ -1199,6 +1250,7 @@ class of bug in emulation.
 | Keyboard matrix cell assignments (10×6) | Atom service manual keyboard table | **low** — transcribe; do not reconstruct |
 | `OSLOAD`/`OSSAVE` entry addresses and page-2 vectors (§11.2) | MOS disassembly | **low** |
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source | **medium** — affects §12.1 throughout |
+| `FS` low interval, ~6 % of a field (§12.1) | MC6847 datasheet, `FS` timing | **low** — `ATOM_FLYBACK_PERCENT`; software polls the edge, so the length matters less than that it exists |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
 | 8271 base address `#0A00` (§7.3) | AtomDOS documentation | medium |
 | MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |

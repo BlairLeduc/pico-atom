@@ -256,6 +256,19 @@ The driver reaches the chip over a **PIO SPI whose divider is fixed against
   with the pin header. Multiple enabled stdio drivers can receive output;
   synchronous logging can also consume the time needed by audio or simulation.
 
+- **Reset both cores together from OpenOCD, or core 1 is lost.** The
+  `rp2350.cfg` shipped with the Pico SDK's OpenOCD (0.12.0+dev) gives each core
+  `reset_config sysresetreq` and asserts it per core, and on RP2350 that resets
+  only the core that asks. `reset run` — including the reset in
+  `program … reset` — restarts core 0 first; the firmware boots and launches
+  core 1 within milliseconds, and then OpenOCD resets core 1 back into the
+  bootrom, where it waits for a launch that has already happened. It looks
+  like core 1 printing one line and hanging, intermittently, depending on how
+  far it got. Found 2026-09-22 on a Plus 2 W; SWD showed core 1 at PC `0xda`
+  with the bootrom's `0xf0000000` stack. Use `reset halt` then `resume`, so
+  both cores are held until the per-core resets are done. A power-on reset is
+  unaffected.
+
 On macOS, keeping the serial descriptor open while setting baud and reading
 avoids an adapter reverting to its defaults between a separate `stty` command
 and the reader. A startup banner plus consecutive heartbeat messages is more
@@ -410,7 +423,10 @@ wiring or clock problem.
 Use the panel-specific gamma and power settings from the
 [ClockworkPi firmware examples](https://github.com/clockworkpi/PicoCalc/tree/master/Code)
 and the matching controller specification. A known-working RGB565 setup uses
-`MADCTL=0x48`, `COLMOD=0x55` and entry mode `0x06`. Some examples use 18-bit
+`MADCTL=0x48`, `COLMOD=0x55` and entry mode `0x06`. Confirmed again 2026-09-22 on a Plus 2 W:
+with ClockworkPi's gamma/power block and those three values, a corner-coded
+test pattern showed correct orientation and R/B order at 75 MHz (pico-atom
+M3, `src/port/lcd.c`). Some examples use 18-bit
 pixels; their pixel format and transfer width must be adapted together.
 The initialization includes gamma, power/VCOM, interface and frame-rate
 controls, inversion, display-function controls and manufacturer commands.

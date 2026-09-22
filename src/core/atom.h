@@ -46,7 +46,12 @@ typedef struct {
 typedef struct atom_s {
     m6502_t  cpu;
     i8255_t  ppi;
-    mc6847_t vdg;
+
+    /* No mc6847_t here. The guest's video state is VRAM plus the five
+     * mode bits, and both are read out through atom_vram() and
+     * atom_vdg_mode() at snapshot time. The renderer, and its 8 KiB LUT,
+     * belong to whoever presents — core 1 on the device (§4.2, §8.4) —
+     * so core 0 never rebuilds a table the other core may be reading. */
 
     /* Keyboard matrix: one bit per row, per column, 1 = key down. The
      * cell assignments are §16's low-confidence item and live in the
@@ -78,6 +83,14 @@ void atom_reset(atom_t *m);
 /* Run at least `cycles` guest cycles, finishing whole instructions.
  * Returns the cycles actually run, which the caller carries as debt. */
 uint32_t atom_run(atom_t *m, uint32_t cycles);
+
+/* Run one field, split at the flyback boundary (§12.1): the active part
+ * with FS high, then FS low and the flyback part, then FS high again.
+ * The guest executes on both sides of the edge, so a program polling
+ * #B002 bit 7 sees the low state and escapes. Debt carries in
+ * m->budget across both halves and across fields. Returns the cycles
+ * actually run. */
+uint32_t atom_run_field(atom_t *m);
 
 /* Load a ROM image at a guest address, marking its pages PAGE_ROM. */
 bool atom_load_rom(atom_t *m, uint16_t addr, const uint8_t *data, size_t len);
@@ -113,6 +126,10 @@ bool atom_speaker(const atom_t *m);
 static inline uint32_t atom_cycles_per_field(const atom_t *m) {
     unsigned hz = m->cfg.field_hz ? m->cfg.field_hz : ATOM_FIELD_HZ_DEFAULT;
     return (uint32_t)(ATOM_CPU_HZ / hz);
+}
+
+static inline uint32_t atom_flyback_cycles(const atom_t *m) {
+    return atom_cycles_per_field(m) * ATOM_FLYBACK_PERCENT / 100u;
 }
 
 #endif /* PICO_ATOM_ATOM_H */
