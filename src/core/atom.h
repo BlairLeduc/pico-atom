@@ -12,7 +12,9 @@
 #include <stdint.h>
 
 #include "config.h"
+#include "i8255.h"
 #include "m6502.h"
+#include "mc6847.h"
 
 /* Page descriptor flags (§7.1). */
 #define PAGE_ROM   0x01u  /* writes ignored                            */
@@ -42,7 +44,17 @@ typedef struct {
 } atom_config_t;
 
 typedef struct atom_s {
-    m6502_t cpu;
+    m6502_t  cpu;
+    i8255_t  ppi;
+    mc6847_t vdg;
+
+    /* Keyboard matrix: one bit per row, per column, 1 = key down. The
+     * cell assignments are §16's low-confidence item and live in the
+     * keymap, not here; this is only the mechanism. */
+    uint8_t key_col[ATOM_KEY_COLS];
+    bool    key_shift, key_ctrl, key_rept;
+
+    bool in_flyback;      /* drives FS, port C bit 7 */
 
     uint8_t ram[ATOM_ADDR_SPACE];
     page_t  page[ATOM_PAGE_COUNT];
@@ -73,6 +85,26 @@ bool atom_load_rom(atom_t *m, uint16_t addr, const uint8_t *data, size_t len);
 /* Make a region plain read/write RAM. Used by the host tests, which need a
  * bare 64 KiB machine for the Dormann and Clark suites. */
 void atom_map_ram(atom_t *m, uint16_t addr, uint32_t len);
+
+/* ---- the seam every test in §15 exercises (design.md §4.1) ---------- */
+
+/* Recompute the 8255's input sources from machine state. Called for
+ * you by the setters below and after every port A write. */
+void atom_refresh_ppi_inputs(atom_t *m);
+
+void atom_key_set(atom_t *m, uint8_t row, uint8_t col, bool down);
+void atom_key_mods(atom_t *m, bool shift, bool ctrl, bool rept);
+void atom_field_sync(atom_t *m, bool in_flyback);
+
+static inline const uint8_t *atom_vram(const atom_t *m) {
+    return &m->ram[ATOM_VRAM_BASE];
+}
+
+/* A/G, GM2:0 and CSS packed into five bits (§8.1). */
+uint8_t atom_vdg_mode(const atom_t *m);
+
+/* Is the loudspeaker bit currently high? Port C bit 2 (§9.1). */
+bool atom_speaker(const atom_t *m);
 
 /* Cycles in one field, from the configured field rate (§12.1).
  * atom_init sanitises field_hz, but cfg is public and callers can reach

@@ -59,3 +59,11 @@ build/
 
 # Third-party test suites, fetched by tools/fetch-test-suites.sh
 test/suites/
+
+# ROM images, which we cannot redistribute (README.md, "ROM images").
+# roms/README.md says so in place and is kept.
+roms/*
+!roms/README.md
+
+# macOS directory metadata
+.DS_Store

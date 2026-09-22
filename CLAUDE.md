@@ -7,16 +7,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0 and M1 are done** (`docs/design.md` §17), and M2's
-bus work came with them because the CPU needed somewhere to read from.
+**Implementation status: M0, M1 and most of M2 are done** (`docs/design.md`
+§17).
 
-What exists: the two-target build, `src/core/config.h`, the page-table bus, and
-a 6502 that passes Klaus Dormann's functional test. What does not: the 8255,
-the MC6847, the keyboard, tape, snapshots, and everything in `src/port/` past
-clocks and a banner.
+What exists: the two-target build, `src/core/config.h`, the page-table bus, a
+6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
+keyboard matrix and field sync, and MC6847 mode decode, expansion LUT and row
+generation for all nine modes.
 
-**M2 is next**, and what is left of it is the 8255, MC6847 row generation and
-golden images for all nine modes.
+What does not: the MC6847 character ROM (see below), committed golden images,
+tape, snapshots, and everything in `src/port/` past clocks and a banner.
+
+**M3 is next** — board bring-up: I²C, LCD, a test pattern at (32,64), and the
+first real measurement of present time against §8.4's ~12.3 ms estimate.
 
 ## The two documents
 
@@ -69,11 +72,15 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/config.h` | every fixed capacity; §5's budget lives or dies here |
 | `src/core/m6502.*` | the interpreter — switch dispatch, explicit cycle accounting |
 | `src/core/bus.*` | `bus_read`/`bus_write` inline fast path, slow path in the `.c` |
-| `src/core/atom.*` | `atom_t`, the page table, config, the run loop |
+| `src/core/i8255.*` | the PPI; generic Intel part, Atom wiring as accessors |
+| `src/core/mc6847.*` | mode decode, palette, expansion LUT, row generation |
+| `src/core/atom.*` | `atom_t`, the page table, config, the run loop, §4.1's API |
 | `src/port/board.*` | clocks and board identification |
 | `src/port/main.c` | bring-up; M0's share only |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h` |
 | `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` |
+| `tools/mkfont.py` | character ROM -> `mc6847_font.h`, and `--dump` to proof it |
+| `tools/vdg-ppm.c` | renders the VDG to PPM; host target only, not firmware |
 
 **Device hooks that do not exist yet are marked in place**, as `/* M2: ... */`
 and `/* M9: ... */` comments at the point in `src/core/bus.c` where the call
@@ -122,6 +129,11 @@ a plausible-looking change silently breaks:
   from a snapshot through a mode LUT straight into DMA line buffers. Adding a
   framebuffer would reintroduce the second copy of the screen this design exists
   to avoid.
+- **Power-on RAM is zero-filled and the checkerboard is not modelled.** Real
+  hardware comes up with uninitialised RAM showing a checkerboard of `0x00`
+  and `0xFF` whose pattern depends on the RAM chips fitted. That is
+  per-machine noise no software can depend on, so `atom_init` zero-fills and
+  leaves it there.
 - **Core 0 owns the 6502, 8255 and audio; core 1 owns the LCD, I²C and SD.**
   Handoff is an immutable snapshot with explicit ownership — core 1 never reads
   guest RAM while the 6502 runs.
@@ -166,8 +178,53 @@ time. They apply to every driver in `src/port/`:
   and were written from secondary knowledge. Transcribe them from primary
   sources before they become `#define`s; do not treat the document as
   authoritative for them.
+- **The port A mode bits are settled: `A/G` is bit 4**, `GM0`–`GM2` are bits
+  5–7, read off the Atom circuit diagram. §2.3 had this right and §2.4 had it
+  backwards; §2.4 has been corrected and §16's row now records the answer. The
+  constants are `VDG_PORT_A_*_BIT` in `mc6847.h`. This was runtime
+  configuration while it was unverified and is a constant now that it is not —
+  that is the intended lifecycle for a §16 item, not an exception to it.
 - **No ROM binaries in the tree.** Acorn's ROMs are copyrighted; the user
-  supplies them on SD card under `/atom/roms/`.
+  supplies them on SD card under `/atom/roms/`. `README.md` says which five
+  files, where to get them (hoglet67's Atomulator) and their SHA-1s;
+  `design.md` §11.1 maps them onto the §2.2 address map. The repo-root
+  `roms/` is a workstation staging area — ignored except for its `README.md`,
+  and nothing reads it at run time.
+- **The MC6847 character ROM has a layout that is easy to get wrong.** It is
+  `src/core/mc6847_font.c`, a flat `const uint8_t font_6847[768]` with an
+  `extern` in the matching `.h`. It is **XRoar's `src/mc6847/font-6847.c`
+  taken verbatim**, byte-identical bar the comment header, under the
+  GPL-3.0-or-later — keep the attribution in that header and in
+  `THIRD-PARTY.md` if you ever regenerate it, since `mkfont.py` emits its own
+  banner and would drop it. Three things about the layout:
+
+  - A glyph is **5 px wide in bits 5..1**, not bit 7 leftmost. The renderer
+    shifts it left by `MC6847_FONT_LSHIFT`, leaving the three spacing columns
+    at the right of the 8-wide cell. Bits 7, 6 and 0 are unused.
+  - The 7 glyph rows sit at **rows 3..9** of the 12-row cell.
+  - Glyph order is the **MC6847's own, not ASCII**: index 0–31 are `$40`–`$5F`
+    (`@A`–`Z[\]^_`), index 32–63 are `$20`–`$3F` (space onwards). Use
+    `mc6847_glyph_ascii()` rather than open-coding it.
+
+  `test_mc6847.c` asserts all three against the data itself, so a differently
+  laid-out ROM fails loudly instead of rendering plausible-but-wrong glyphs.
+
+  **A screen of `@` is correct, not a bug.** Glyph 0 is `@`, so zeroed VRAM
+  renders as `@` throughout until the MOS clears the screen by writing spaces.
+  Do not make the renderer substitute blanks — that would hide a ROM that
+  never cleared the screen, and there is a test pinning the behaviour.
+  `MC6847_GLYPH_SPACE` exists for tooling that wants a legible blank page,
+  such as the `vdg-ppm` font sheets; the emulator never uses it.
+
+  Both builds detect `src/core/mc6847_font.c` by existence, compile it in, and
+  define `PICO_ATOM_HAVE_FONT`. Without it alpha mode draws a hollow box per
+  cell and says so at boot. **Do not fabricate a font**; §16 wants it
+  transcribed and then verified by image:
+
+  ```sh
+  ./tools/mkfont.py src/core/mc6847_font.c --dump   # proof glyphs as text
+  ./build/host/test/host/vdg-ppm out/               # render sheets to PPM
+  ```
 
 ## Measurement discipline
 

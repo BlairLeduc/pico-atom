@@ -6,6 +6,8 @@ set(PICO_ATOM_HOST_TESTS
     test_m6502_behaviour
     test_m6502_decimal
     test_bus
+    test_i8255
+    test_mc6847
 )
 
 foreach(t ${PICO_ATOM_HOST_TESTS})
@@ -29,3 +31,19 @@ target_compile_definitions(test_m6502_functional PRIVATE
 )
 add_test(NAME test_m6502_functional COMMAND test_m6502_functional)
 set_tests_properties(test_m6502_functional PROPERTIES SKIP_RETURN_CODE 77)
+
+# A tool, not a test: renders the VDG to PPM so the character ROM can be
+# verified by eye, which is §16's prescribed method for it.
+add_executable(vdg-ppm ${CMAKE_SOURCE_DIR}/tools/vdg-ppm.c)
+target_link_libraries(vdg-ppm PRIVATE pico_atom_core)
+target_compile_options(vdg-ppm PRIVATE ${PICO_ATOM_WARNINGS})
+
+# tools/mkfont.py round trip. Guards a bug that silently dropped every
+# glyph row beginning with a lit pixel, because '#' is both the lit-pixel
+# character and the comment character.
+find_package(Python3 COMPONENTS Interpreter)
+if (Python3_FOUND)
+    add_test(NAME test_mkfont
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/test_mkfont.py
+                     ${CMAKE_SOURCE_DIR}/tools/mkfont.py)
+endif()

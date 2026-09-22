@@ -156,7 +156,9 @@ Three consequences:
 
 ### 2.4 MC6847 modes
 
-`A/G`, `GM2..GM0` (port A bits 7..4) and `CSS` (port C bit 3) select the mode.
+`A/G` (port A bit 4), `GM0`, `GM1` and `GM2` (bits 5, 6 and 7 respectively) and
+`CSS` (port C bit 3) select the mode. Note that the `GM` bits ascend with the
+bit number, so they read out reversed relative to the `GM2:0` column below.
 Atom BASIC's `CLEAR n` maps onto these:
 
 | `A/G` | `GM2:0` | VDG mode | Resolution | Colours | VRAM | Atom |
@@ -862,6 +864,26 @@ emulator boots to its menu with an explanatory screen rather than into a dead
 machine — a blank screen is the single most expensive failure mode to debug on
 this hardware.
 
+The four names above that are not `utility.rom` are Atomulator's, which is the
+set most Atom software assumes and the one [`README.md`](../README.md#rom-images)
+points a user at. They map onto §2.2 as:
+
+| File | Guest address | SHA-1 of the Atomulator image |
+|---|---|---|
+| `akernel.rom` | `#F000`–`#FFFF` | `2621f27d652d4673e0a79aa669e729b8c3051ab6` |
+| `abasic.rom` | `#C000`–`#CFFF` | `a8ea19f10d4c98fbc1b666e5968f06d46af9a84c` |
+| `afloat.rom` | `#D000`–`#DFFF` | `ebcde5b36cb3a3344567cbba4c7b9fde015f4802` |
+| `dosrom.rom` | `#E000`–`#EFFF` | `71ea0a4b8d9c3caf9718fc7cc279f4306a23b39c` |
+| `utility.rom` | `#A000`–`#AFFF` | user's choice; `axr1.rom` is the usual one |
+
+Each is 4 KiB. **`abasic.rom` and `akernel.rom` are the two halves of MAME's
+8 KiB `abasic.ic20`**, in that order — a collection that offers one 8 KiB file
+rather than two 4 KiB ones has the same data, split differently, and the loader
+should say so rather than reject it. Recording the hashes here is not DRM: Atom
+images have been re-dumped and renamed for forty years, and a near-miss
+produces a machine that boots and then misbehaves, which §16 already calls the
+most expensive class of bug on this project.
+
 SD access follows hardware notes §7.1: 400 kHz for init then 25 MHz requested,
 card detect on GP22 active-low with a pull-up, 512-byte blocks, SDSC byte
 addressing distinguished from SDHC block addressing, and **all card work done at
@@ -929,14 +951,32 @@ the one accepted violator of it (hardware notes §5.4, §7.2).
 | Guest cycles per field | 16,667 |
 | `FS` (port C bit 7) low for | the flyback interval, ~6 % of a field |
 
-Core 0 runs in **field-sized slices** with cycle-debt carry-forward:
+Core 0 runs in **field-sized slices** with cycle-debt carry-forward. The slice
+is **split at the flyback boundary**, and that split is the whole point:
 
 ```c
-budget += CYCLES_PER_FIELD;
+budget += ACTIVE_CYCLES;            /* the field less the flyback interval */
 budget -= atom_run(&m, budget);     /* returns true cycles; debt carries */
-atom_field_sync(&m, true);  ... atom_field_sync(&m, false);
+atom_field_sync(&m, true);          /* FS low */
+budget += FLYBACK_CYCLES;
+budget -= atom_run(&m, budget);     /* the guest runs while FS is low */
+atom_field_sync(&m, false);         /* FS high */
 snapshot_publish();
 ```
+
+**Guest instructions must execute while `FS` is low**, or the flag is
+unobservable. Asserting and releasing it back to back after a whole field's
+run leaves a program that polls `#B002` bit 7 spinning forever, which is what
+the real Atom's screen-writing routines do. The debt carry survives the split
+because `atom_run` reports its true cycle count on each call, so two runs
+against one accumulator behave as one.
+
+The M0/M2 bring-up loop in `src/port/main.c` **does not do this yet** — it
+pulses `FS` at the end of the slice, which is harmless only because no ROM is
+loaded and nothing polls it. M3 builds the real core 0 loop and is where this
+shape has to arrive; a host test should run a guest loop polling `FS` and
+assert that it both observes the low state and escapes, since asserting that
+the accessor flips the bit does not catch this.
 
 Within a slice, the audio integrator emits a sample every 27.31 guest cycles via
 a fixed-point accumulator, so audio and CPU share one clock by construction and
@@ -1031,9 +1071,11 @@ state (§8.4).
 ```
 pico-atom/
 ├── CMakeLists.txt              # pico-sdk build; host build behind PICO_ATOM_HOST
+├── THIRD-PARTY.md              # material that is not ours, and under what terms
 ├── docs/
 │   ├── hardware-notes.md
 │   └── design.md
+├── roms/                       # workstation staging only, gitignored (§11.1)
 ├── src/
 │   ├── core/                   # portable C11, no SDK, no allocator
 │   │   ├── config.h            # every fixed capacity, in one place
@@ -1042,7 +1084,7 @@ pico-atom/
 │   │   ├── atom.c/.h
 │   │   ├── i8255.c/.h
 │   │   ├── mc6847.c/.h         # mode decode, LUT build, row generation
-│   │   ├── mc6847_font.h       # 64-glyph character ROM
+│   │   ├── mc6847_font.c/.h    # 64-glyph character ROM (XRoar's, THIRD-PARTY.md)
 │   │   ├── via6522.c/.h
 │   │   ├── keymatrix.c/.h
 │   │   ├── keymap_picocalc.c   # data table (§10.3)
@@ -1153,17 +1195,22 @@ class of bug in emulation.
 |---|---|---|
 | 8255 port bit assignments (§2.3) | Atom service manual / theory of operation | high — cross-check anyway |
 | MC6847 mode table (§2.4) | MC6847 datasheet | high |
-| VDG mode bit order in port A bits 7–4 | Atom circuit diagram | **medium** — the `A/G`/`GM2:0` ordering must be read off the schematic |
+| VDG mode bit order in port A bits 7–4 | Atom circuit diagram | **confirmed** — `A/G` is bit 4, `GM0`–`GM2` bits 5–7, read off the schematic. §2.3 had this right; an earlier §2.4 had `A/G` at bit 7 and has been corrected |
 | Keyboard matrix cell assignments (10×6) | Atom service manual keyboard table | **low** — transcribe; do not reconstruct |
 | `OSLOAD`/`OSSAVE` entry addresses and page-2 vectors (§11.2) | MOS disassembly | **low** |
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source | **medium** — affects §12.1 throughout |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
 | 8271 base address `#0A00` (§7.3) | AtomDOS documentation | medium |
-| MC6847 character ROM bitmap | datasheet figure or an extracted table | transcribe, then verify by golden image |
+| MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |
 
-The verification method for the last one is the honest one: render the full
-64-glyph set, photograph a real Atom or compare against a reference emulator's
-output, and commit the result as a golden image.
+The last one was settled the way this section asks. The table is XRoar's
+`src/mc6847/font-6847.c`, byte for byte (`THIRD-PARTY.md`); the full 64-glyph
+set was rendered with `tools/vdg-ppm` and read by eye — `@ABC`…`XYZ[\]^_` then
+space through `?`, inverse video and both colour sets correct. What the data
+carries rather than the renderer assuming it — 5 px in bits 5..1, rows 3..9 of
+the cell, MC6847 glyph order — is asserted against the data in
+`test/host/test_mc6847.c`, so a differently laid-out substitute fails loudly
+instead of rendering plausible-but-wrong glyphs.
 
 ---
 
@@ -1176,7 +1223,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M0** | Skeleton: CMake, host + UF2 targets, CI, `config.h` | both targets build clean under `-Werror` |
 | **M1** | 6502 core, host only | Dormann and Clark tests pass; cycle table asserted |
 | **M2** | Bus, 8255, VDG row generation, host only | golden images match for all nine modes |
-| **M3** | Board bring-up: clocks, I²C, LCD, test pattern | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate |
+| **M3** | Board bring-up: clocks, I²C, LCD, test pattern; the real core 0 slice loop, split at flyback (§12.1) | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate; a guest loop polling `FS` observes the low state and escapes |
 | **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` |
 | **M5** | Audio | integrator verified against a known frequency; underrun and late-refill counters both zero over 10 minutes |
 | **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs |
@@ -1218,7 +1265,12 @@ everything after it is refinement.
   NMOS 6502*.
 - Existing Atom emulators (Atomulator, Wouter Ras's emulator) — for
   cross-checking behaviour and for the trace-diff harness of §15.1, not for
-  copying code.
+  copying code. Atomulator, David Banks' fork at
+  <https://github.com/hoglet67/Atomulator>, is also where §11.1 sends a user
+  for ROM images.
+- **XRoar**, Ciaran Anscomb, <https://www.6809.org.uk/xroar/> — the source of
+  the MC6847 character ROM table in `src/core/mc6847_font.c`, taken verbatim
+  under the GPL-3.0-or-later. See [`THIRD-PARTY.md`](../THIRD-PARTY.md).
 
 **The host** — all collected in [`hardware-notes.md`](hardware-notes.md) §11:
 the ClockworkPi PicoCalc repository and mainboard schematic, the ST7365P
