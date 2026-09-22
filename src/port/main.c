@@ -42,7 +42,7 @@ int main(void) {
     atom_config_default(&cfg);
     atom_init(&g_atom, &cfg);
 #if PICO_ATOM_HAVE_FONT
-    mc6847_set_font(&g_atom.vdg, mc6847_font);
+    mc6847_set_font(&g_atom.vdg, font_6847);
 #endif
     printf("  guest        : %u cycles/field at %u Hz, %u KiB address space\n",
            (unsigned)atom_cycles_per_field(&g_atom), g_atom.cfg.field_hz,

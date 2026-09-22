@@ -76,7 +76,7 @@ void mc6847_init(mc6847_t *v) {
     mc6847_set_mode(v, 0);
 }
 
-void mc6847_set_font(mc6847_t *v, const uint8_t (*font)[MC6847_FONT_ROWS]) {
+void mc6847_set_font(mc6847_t *v, const uint8_t *font) {
     v->font = font;
 }
 
@@ -157,7 +157,11 @@ static void render_alpha_cell(const mc6847_t *v, uint8_t byte,
 
     uint8_t bits;
     if (v->font) {
-        bits = v->font[byte & 0x3Fu][row_in_cell];
+        /* The glyph is 5 wide in bits 5..1 of the ROM byte; shift it to
+         * bit 7 leftmost, which leaves the three spacing columns on the
+         * right of the 8-wide cell. */
+        bits = (uint8_t)(v->font[(byte & 0x3Fu) * MC6847_FONT_ROWS + row_in_cell]
+                         << MC6847_FONT_LSHIFT);
     } else {
         /* No character ROM supplied. Draw a hollow box for every glyph:
          * unmistakably wrong on sight, which is the point — a plausible

@@ -72,8 +72,37 @@ extern const uint16_t mc6847_palette[VDG_COLOUR_COUNT];
 
 #define MC6847_FONT_GLYPHS ATOM_FONT_GLYPHS   /* 64 */
 #define MC6847_FONT_ROWS   ATOM_FONT_ROWS     /* 12 */
+#define MC6847_FONT_BYTES  (MC6847_FONT_GLYPHS * MC6847_FONT_ROWS)   /* 768 */
 
-typedef uint8_t mc6847_font_t[MC6847_FONT_GLYPHS][MC6847_FONT_ROWS];
+/* The ROM is a flat array: glyph g row r is font[g * 12 + r].
+ *
+ * A glyph is 5 pixels wide and sits in *bits 5..1* of its byte, which is
+ * how the part's own ROM is laid out — not bit 7 leftmost. The renderer
+ * shifts it into the 8-wide cell, leaving the three spacing columns on
+ * the right. Bits 7, 6 and 0 are unused by the data.
+ *
+ * Vertically the 7 glyph rows occupy rows 3..9 of the 12-row cell; that
+ * is carried by the data itself and needs no handling here.
+ *
+ * Glyph order is the MC6847's internal one, which is *not* plain ASCII:
+ *
+ *     index  0..31  ->  ASCII $40..$5F   (@ A..Z [ \ ] ^ _)
+ *     index 32..63  ->  ASCII $20..$3F   (space ! " ... ?)
+ *
+ * so ascii = 0x20 + ((index + 0x20) & 0x3F). The Atom's VRAM byte
+ * supplies the index directly in bits 5..0, so nothing translates. */
+#define MC6847_FONT_GLYPH_W  5u
+#define MC6847_FONT_LEFT_BIT 5u
+#define MC6847_FONT_LSHIFT   (7u - MC6847_FONT_LEFT_BIT)
+
+/* Glyph 0 is '@', not the space; a page of zeroed VRAM is a page of
+ * '@'. The space is glyph 32. */
+#define MC6847_GLYPH_SPACE 32u
+
+/* ASCII code of a glyph index, for tooling and diagnostics. */
+static inline uint8_t mc6847_glyph_ascii(uint8_t index) {
+    return (uint8_t)(0x20u + ((index + 0x20u) & 0x3Fu));
+}
 
 /* ---- the VDG ---------------------------------------------------------- */
 
@@ -86,9 +115,9 @@ typedef struct {
      * Worst case 16 pixels x 2 B x 256 = 8 KiB, which is ATOM_LUT_SIZE. */
     uint16_t lut[256u * (ATOM_LUT_ENTRY_MAX / 2u)];
 
-    /* The 64-glyph character ROM. NULL until one is supplied; see
-     * mc6847_set_font. */
-    const uint8_t (*font)[MC6847_FONT_ROWS];
+    /* The 64-glyph character ROM, MC6847_FONT_BYTES long. NULL until one
+     * is supplied; see mc6847_set_font. */
+    const uint8_t *font;
 } mc6847_t;
 
 void mc6847_init(mc6847_t *v);
@@ -101,7 +130,7 @@ void mc6847_set_mode(mc6847_t *v, uint8_t mode);
  * datasheet and then verified by golden image, so the emulator does not
  * carry a guess: with no font set, alpha mode renders a placeholder that
  * is obviously wrong rather than subtly wrong. */
-void mc6847_set_font(mc6847_t *v, const uint8_t (*font)[MC6847_FONT_ROWS]);
+void mc6847_set_font(mc6847_t *v, const uint8_t *font);
 static inline bool mc6847_has_font(const mc6847_t *v) { return v->font != NULL; }
 
 /* Generate one display row (0..191) as ATOM_SCREEN_W RGB565 pixels.

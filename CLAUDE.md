@@ -181,25 +181,32 @@ time. They apply to every driver in `src/port/`:
   that is the intended lifecycle for a §16 item, not an exception to it.
 - **No ROM binaries in the tree.** Acorn's ROMs are copyrighted; the user
   supplies them on SD card under `/atom/roms/`.
-- **There is no MC6847 character ROM, deliberately.** §16 requires it be
-  transcribed from a primary source and then verified by golden image, so the
-  emulator carries no guess. With none set, alpha mode draws a hollow box for
-  every glyph — obviously wrong on sight, which is the point. A plausible
-  invented font would be wrong in a way nobody notices. **Do not fabricate
-  one.** To install a real one:
+- **The MC6847 character ROM has a layout that is easy to get wrong.** It is
+  `src/core/mc6847_font.c`, a flat `const uint8_t font_6847[768]` with an
+  `extern` in the matching `.h`. Three things about it:
+
+  - A glyph is **5 px wide in bits 5..1**, not bit 7 leftmost. The renderer
+    shifts it left by `MC6847_FONT_LSHIFT`, leaving the three spacing columns
+    at the right of the 8-wide cell. Bits 7, 6 and 0 are unused.
+  - The 7 glyph rows sit at **rows 3..9** of the 12-row cell.
+  - Glyph order is the **MC6847's own, not ASCII**: index 0–31 are `$40`–`$5F`
+    (`@A`–`Z[\]^_`), index 32–63 are `$20`–`$3F` (space onwards). So glyph 0
+    is `@` and a page of zeroed VRAM is a page of `@`, not blanks — the space
+    is `MC6847_GLYPH_SPACE` (32). Use `mc6847_glyph_ascii()` rather than
+    open-coding it.
+
+  `test_mc6847.c` asserts all three against the data itself, so a differently
+  laid-out ROM fails loudly instead of rendering plausible-but-wrong glyphs.
+
+  Both builds detect `src/core/mc6847_font.c` by existence, compile it in, and
+  define `PICO_ATOM_HAVE_FONT`. Without it alpha mode draws a hollow box per
+  cell and says so at boot. **Do not fabricate a font**; §16 wants it
+  transcribed and then verified by image:
 
   ```sh
-  ./tools/mkfont.py <source> -o src/core/mc6847_font.h   # 64x12, bit 7 left
-  ./tools/mkfont.py src/core/mc6847_font.h --dump        # proof it by eye
-  ./build/host/test/host/vdg-ppm out/                    # render to PPM
+  ./tools/mkfont.py src/core/mc6847_font.c --dump   # proof glyphs as text
+  ./build/host/test/host/vdg-ppm out/               # render sheets to PPM
   ```
-
-  Both builds detect `src/core/mc6847_font.h` by existence and define
-  `PICO_ATOM_HAVE_FONT`; nothing else needs changing. `mkfont.py` handles a
-  narrower or shorter source cell via `--cols/--rows/--pad-top/--pad-bottom/
-  --align`. Three things must be pinned down before trusting any of it: which
-  ASCII code glyph 0 is, where a 5x7 glyph sits inside the 8x12 cell, and that
-  bit 7 is the leftmost pixel.
 
 ## Measurement discipline
 

@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
 
     mc6847_init(&vdg);
 #if PICO_ATOM_HAVE_FONT
-    mc6847_set_font(&vdg, mc6847_font);
+    mc6847_set_font(&vdg, font_6847);
     printf("character ROM: present\n");
 #else
     printf("character ROM: ABSENT — alpha pages will show placeholder cells.\n"
@@ -69,8 +69,11 @@ int main(int argc, char **argv) {
 #endif
 
     /* The font sheet: all 64 glyphs, normal then inverse, laid out 32 to
-     * a line so the whole set fits on two pairs of character rows. */
-    memset(vram, 0, sizeof(vram));
+     * a line so the whole set fits on two pairs of character rows. The
+     * page is filled with the space glyph rather than zero, because
+     * glyph 0 is '@' and a page of those obscures the thing being
+     * checked. */
+    memset(vram, MC6847_GLYPH_SPACE, sizeof(vram));
     for (unsigned g = 0; g < 64u; g++) {
         vram[(g / 32u) * 32u + (g % 32u)]                 = (uint8_t)g;
         vram[(2u + g / 32u) * 32u + (g % 32u)]            = (uint8_t)(g | 0x40u);
@@ -81,7 +84,7 @@ int main(int argc, char **argv) {
     write_ppm(dir, "font-sheet-css1");
 
     /* Every SG4 cell pattern: 16 quadrant combinations x 8 colours. */
-    memset(vram, 0, sizeof(vram));
+    memset(vram, MC6847_GLYPH_SPACE, sizeof(vram));
     for (unsigned c = 0; c < 8u; c++)
         for (unsigned q = 0; q < 16u; q++)
             vram[c * 32u + q] = (uint8_t)(0x80u | (c << 4) | q);

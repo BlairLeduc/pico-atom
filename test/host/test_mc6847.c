@@ -11,6 +11,9 @@
 
 #include "config.h"
 #include "mc6847.h"
+#if PICO_ATOM_HAVE_FONT
+#include "mc6847_font.h"
+#endif
 #include "test_util.h"
 
 static mc6847_t g_vdg;
@@ -197,9 +200,14 @@ int main(void) {
 
     /* ---- alpha: glyph lookup, inverse video, and the missing font ---- */
     {
-        static uint8_t font[MC6847_FONT_GLYPHS][MC6847_FONT_ROWS];
+        /* Flat, like a ROM dump: glyph g row r at font[g * 12 + r], with
+         * the 5-wide glyph in bits 5..1. 0x2A is #.#.# in those bits —
+         * a real row from the ROM — and becomes 0xA8 once the renderer
+         * shifts it to bit 7 leftmost. A value with bit 0 set would be
+         * outside the 5-wide field and would light a spacing column. */
+        static uint8_t font[MC6847_FONT_BYTES];
         memset(font, 0, sizeof(font));
-        font[5][3] = 0xA5;          /* a recognisable glyph row */
+        font[5 * MC6847_FONT_ROWS + 3] = 0x2A;
 
         mc6847_init(&g_vdg);
         mc6847_set_mode(&g_vdg, mode_of(false, 0, false));
@@ -218,10 +226,15 @@ int main(void) {
 
         mc6847_render_row(&g_vdg, g_vram, 3, g_row);
         for (unsigned x = 0; x < 8u; x++) {
-            bool lit = ((0xA5u >> (7u - x)) & 1u) != 0;
+            bool lit = ((0x2Au << MC6847_FONT_LSHIFT) >> (7u - x)) & 1u;
             CHECK(g_row[x] == mc6847_palette[lit ? VDG_GREEN : VDG_BLACK],
                   "alpha glyph pixel %u wrong", x);
         }
+        /* The three spacing columns on the right of the cell are always
+         * background: the glyph is 5 wide in an 8-wide cell. */
+        for (unsigned x = MC6847_FONT_GLYPH_W; x < 8u; x++)
+            CHECK(g_row[x] == mc6847_palette[VDG_BLACK],
+                  "cell column %u is spacing and should be background", x);
 
         /* A row the glyph does not set is background. */
         mc6847_render_row(&g_vdg, g_vram, 4, g_row);
@@ -233,12 +246,69 @@ int main(void) {
         CHECK(g_row[0] == mc6847_palette[VDG_BLACK], "inverse video should swap fg and bg");
         CHECK(g_row[1] == mc6847_palette[VDG_GREEN], "inverse video should swap fg and bg");
 
+        /* Glyph index to ASCII is the MC6847's own order, not plain
+         * ASCII: 0..31 are $40..$5F and 32..63 are $20..$3F. */
+        CHECK(mc6847_glyph_ascii(0)  == 0x40u, "glyph 0 is '@'");
+        CHECK(mc6847_glyph_ascii(1)  == 0x41u, "glyph 1 is 'A'");
+        CHECK(mc6847_glyph_ascii(26) == 0x5Au, "glyph 26 is 'Z'");
+        CHECK(mc6847_glyph_ascii(32) == 0x20u, "glyph 32 is space");
+        CHECK(mc6847_glyph_ascii(63) == 0x3Fu, "glyph 63 is '?'");
+        {
+            bool seen[64] = { false };
+            for (unsigned g = 0; g < 64u; g++) {
+                unsigned a = mc6847_glyph_ascii((uint8_t)g);
+                CHECK(a >= 0x20u && a < 0x60u, "glyph %u maps outside $20-$5F", g);
+                CHECK(!seen[a - 0x20u], "ASCII 0x%02X reached twice", a);
+                seen[a - 0x20u] = true;
+            }
+            for (unsigned i = 0; i < 64u; i++)
+                CHECK(seen[i], "ASCII 0x%02X is unreachable", i + 0x20u);
+        }
+
         /* CSS gives orange on black rather than green on black. */
         g_vram[0] = 5;
         mc6847_set_mode(&g_vdg, mode_of(false, 0, true));
         mc6847_render_row(&g_vdg, g_vram, 3, g_row);
         CHECK(g_row[0] == mc6847_palette[VDG_ORANGE], "alpha with CSS should be orange");
     }
+
+#if PICO_ATOM_HAVE_FONT
+    /* ---- the supplied ROM honours the layout the renderer assumes ---
+     *
+     * A ROM laid out differently — bit 7 leftmost, say — would render as
+     * plausible-looking but wrong glyphs rather than failing loudly, so
+     * the contract is checked against the data rather than assumed. */
+    {
+        unsigned used = 0;
+        for (unsigned i = 0; i < MC6847_FONT_BYTES; i++) used |= font_6847[i];
+        CHECK((used & 0xC1u) == 0,
+              "the ROM uses bits outside 5..1 (union 0x%02X); the 5-wide "
+              "glyph field is not where the renderer expects it", used);
+
+        /* Rows 0-2 and 10-11 of every cell are vertical spacing. */
+        for (unsigned g = 0; g < MC6847_FONT_GLYPHS; g++) {
+            for (unsigned r = 0; r < 3u; r++)
+                CHECK(font_6847[g * MC6847_FONT_ROWS + r] == 0,
+                      "glyph %u row %u should be blank spacing", g, r);
+            for (unsigned r = 10u; r < MC6847_FONT_ROWS; r++)
+                CHECK(font_6847[g * MC6847_FONT_ROWS + r] == 0,
+                      "glyph %u row %u should be blank spacing", g, r);
+        }
+
+        /* Glyph 32 is the space and must be entirely blank; the letters
+         * either side of it must not be. */
+        for (unsigned r = 0; r < MC6847_FONT_ROWS; r++)
+            CHECK(font_6847[32u * MC6847_FONT_ROWS + r] == 0,
+                  "glyph 32 is the space and should be blank");
+        unsigned ink_a = 0, ink_z = 0;
+        for (unsigned r = 0; r < MC6847_FONT_ROWS; r++) {
+            ink_a |= font_6847[1u * MC6847_FONT_ROWS + r];
+            ink_z |= font_6847[26u * MC6847_FONT_ROWS + r];
+        }
+        CHECK(ink_a != 0, "glyph 1 is 'A' and should have ink");
+        CHECK(ink_z != 0, "glyph 26 is 'Z' and should have ink");
+    }
+#endif
 
     /* ---- a full frame in every mode writes exactly 256 px per row ---- */
     {
