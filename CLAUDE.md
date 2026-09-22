@@ -7,8 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0, M1 and M2 are done; M3 runs on hardware and is
-awaiting its visual check** (`docs/design.md` §17).
+**Implementation status: M0–M3 are done** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -18,11 +17,15 @@ generation for all nine modes, the character ROM, and §15.1's golden images in
 
 M3's code exists: the flyback-split field loop (`atom_run_field`), the §4.2
 snapshot pool, the §8.4 dirty-band presenter on core 1, and drivers for the
-southbridge and LCD. It has run on a Plus 2 W: present times are measured
-and recorded in design.md §8.4 (full redraw 11.5 ms, wire-bound), and the
-southbridge answers with zero I²C errors. What is **not** yet verified is the
-panel image itself — the test pattern's four corners, colour order and
-orientation need a person looking at the screen before M3 is done.
+southbridge and LCD. Verified on a Plus 2 W on 2026-09-22: the test pattern's
+four corners, colour order and orientation were checked by eye on the panel;
+present times are measured and recorded in design.md §8.4 (full redraw
+11.5 ms, wire-bound); the southbridge answers with zero I²C errors.
+
+**M4 is next** — the Atom boots: ROMs from SD, the display live, the keyboard
+mapped. Two things block it that code cannot settle: the keyboard matrix
+(§16, low confidence — transcribe it from a primary source) and the user's
+ROM files on SD.
 
 What does not exist: keyboard, audio, SD, tape, the status band.
 

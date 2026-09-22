@@ -423,7 +423,10 @@ wiring or clock problem.
 Use the panel-specific gamma and power settings from the
 [ClockworkPi firmware examples](https://github.com/clockworkpi/PicoCalc/tree/master/Code)
 and the matching controller specification. A known-working RGB565 setup uses
-`MADCTL=0x48`, `COLMOD=0x55` and entry mode `0x06`. Some examples use 18-bit
+`MADCTL=0x48`, `COLMOD=0x55` and entry mode `0x06`. Confirmed again 2026-09-22 on a Plus 2 W:
+with ClockworkPi's gamma/power block and those three values, a corner-coded
+test pattern showed correct orientation and R/B order at 75 MHz (pico-atom
+M3, `src/port/lcd.c`). Some examples use 18-bit
 pixels; their pixel format and transfer width must be adapted together.
 The initialization includes gamma, power/VCOM, interface and frame-rate
 controls, inversion, display-function controls and manufacturer commands.
