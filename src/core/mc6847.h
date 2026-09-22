@@ -145,4 +145,23 @@ static inline bool mc6847_has_font(const mc6847_t *v) { return v->font != NULL; 
 void mc6847_render_row(const mc6847_t *v, const uint8_t *vram,
                        unsigned y, uint16_t *dst);
 
+/* ---- dirty bands (§8.4) ----------------------------------------------- */
+
+/* Compare the VRAM a band of ATOM_BAND_ROWS display rows depends on, in
+ * `mode`, between the snapshot and the shadow. If anything differs,
+ * return true with the inclusive screen-pixel column span [x0..x1]
+ * covering every changed byte. Over-marks rather than under-marks: an
+ * alpha cell row straddles two bands and dirties both.
+ *
+ * This is VRAM-only. A mode or CSS change repaints everything while all
+ * 6 KiB can stay byte-identical, so the caller compares the mode byte
+ * first; this function cannot see it. */
+bool mc6847_band_span(uint8_t mode, const uint8_t *vram, const uint8_t *shadow,
+                      unsigned band, uint16_t *x0, uint16_t *x1);
+
+/* A key for display row y: two rows with the same key in the same mode
+ * render identically, so the presenter can re-send the line buffer
+ * instead of regenerating it — vertical stretch is free (§8.3). */
+unsigned mc6847_row_source(uint8_t mode, unsigned y);
+
 #endif /* PICO_ATOM_MC6847_H */

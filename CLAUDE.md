@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0, M1 and M2 are done** (`docs/design.md` §17).
+**Implementation status: M0, M1 and M2 are done; M3 is written and awaiting
+hardware** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -15,11 +16,14 @@ keyboard matrix and field sync, MC6847 mode decode, expansion LUT and row
 generation for all nine modes, the character ROM, and §15.1's golden images in
 `test/golden/`, checked by eye before they were committed.
 
-What does not: tape, snapshots, and everything in `src/port/` past clocks and a
-banner.
+M3's code exists: the flyback-split field loop (`atom_run_field`), the §4.2
+snapshot pool, the §8.4 dirty-band presenter on core 1, and drivers for the
+southbridge and LCD. None of it has run on a board yet. M3 is **done** only
+when someone has seen the test pattern's four corners on the panel and
+captured the `M3 present` lines over UART (design.md §17) — until then the LCD
+init sequence, the colour order and every present time are unverified.
 
-**M3 is next** — board bring-up: I²C, LCD, a test pattern at (32,64), and the
-first real measurement of present time against §8.4's ~12.3 ms estimate.
+What does not exist: keyboard, audio, SD, tape, the status band.
 
 ## The two documents
 
@@ -75,8 +79,12 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/i8255.*` | the PPI; generic Intel part, Atom wiring as accessors |
 | `src/core/mc6847.*` | mode decode, palette, expansion LUT, row generation |
 | `src/core/atom.*` | `atom_t`, the page table, config, the run loop, §4.1's API |
+| `src/core/snappool.*` | §4.2's three-buffer handoff; state machine only, the port holds the lock |
 | `src/port/board.*` | clocks and board identification |
-| `src/port/main.c` | bring-up; M0's share only |
+| `src/port/southbridge.*` | i2c1 register layer; refuses to read `RST` (`0x08`), which resets the MCU |
+| `src/port/lcd.*` | panel init, windows, fills, polled-DMA ping-pong blit |
+| `src/port/display.*` | the §8.4 presenter; owns the renderer, its LUT, the shadow and line buffers |
+| `src/port/main.c` | core 0's field loop, core 1's bring-up, M3 measurement and live present |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h` |
 | `test/host/vdg_scenes.*` | the VRAM behind the golden images, shared by the test and `vdg-ppm` |
 | `test/golden/` | §15.1's reference PPMs, all nine modes, both colour sets |
@@ -147,11 +155,17 @@ a plausible-looking change silently breaks:
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
   in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
-  at M1 `.bss` is ~70 KiB of the 520 KiB budget.
+  at M3 `.bss` is ~111 KiB of the 520 KiB budget.
 - **`page_t` is exactly two pointers**, with `atom_t.page_flags[]` alongside it.
   Adding a third field pads the descriptor to twelve bytes and puts the page
   table 1 KiB over §5's line for it; the flags are slow-path only, so they do
   not belong in the hot struct.
+- **The renderer is not part of `atom_t`.** `mc6847_t` and its 8 KiB LUT live
+  in `src/port/display.c` on core 1; core 0 carries VRAM and the port latches,
+  and the mode byte is read with `atom_vdg_mode()` at snapshot time. Putting a
+  `mc6847_t` back in `atom_t`, or rebuilding a LUT from a bus write, makes
+  core 0 rewrite a table core 1 is expanding through — a cross-core race —
+  and costs a second 8 KiB LUT (design.md §4.2).
 
 ## Hardware invariants that are not negotiable
 

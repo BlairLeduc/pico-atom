@@ -27,6 +27,22 @@ The layout that comes with the data is documented in the file header and in
 `test/host/test_mc6847.c` asserts all three against the data itself, so
 substituting a differently laid-out ROM fails loudly.
 
+## PicoCalc LCD initialisation values — ClockworkPi
+
+`src/port/lcd.c` sends the panel's gamma, power, VCOM, frame-rate, inversion,
+display-function and manufacturer commands with the parameter bytes used by
+ClockworkPi's own driver, `Code/picocalc_helloworld/lcdspi/lcdspi.c` in
+<https://github.com/clockworkpi/PicoCalc> at commit
+`f91519806d4b2e0a62c4638a9f695cd5162c5479`. Only the register values were
+taken — the driver around them is this project's — and hardware-notes.md §4.4
+directs using them because generic controller defaults may not suit this glass.
+The pixel format (`0x55`) and entry mode (`0x06`) differ from that driver's
+18-bit setup and come from hardware-notes.md §4.4 instead.
+
+GitHub detects no licence file in that repository at that revision. The
+southbridge reply layout in `src/port/southbridge.c` was likewise checked
+against the same repository's keyboard firmware, but no code was taken from it.
+
 ## Klaus Dormann's 6502 functional tests
 
 Not in the tree. `tools/fetch-test-suites.sh` downloads the assembled binary

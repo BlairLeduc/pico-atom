@@ -220,3 +220,49 @@ void mc6847_render_row(const mc6847_t *v, const uint8_t *vram,
         }
     }
 }
+
+/* ---- dirty bands (design.md §8.4) ------------------------------------ */
+
+/* The source rows a band of display rows reads, from the same geometry
+ * mc6847_render_row uses — so the diff and the renderer cannot disagree
+ * about which bytes a band depends on. */
+static void band_source_rows(const mc6847_mode_info_t *info, unsigned band,
+                             unsigned *first, unsigned *last) {
+    unsigned y0 = band * ATOM_BAND_ROWS;
+    unsigned y1 = y0 + ATOM_BAND_ROWS - 1u;
+    unsigned per = (info->kind == VDG_ALPHA) ? MC6847_FONT_ROWS : info->y_scale;
+    *first = y0 / per;
+    *last  = y1 / per;
+}
+
+bool mc6847_band_span(uint8_t mode, const uint8_t *vram, const uint8_t *shadow,
+                      unsigned band, uint16_t *x0, uint16_t *x1) {
+    const mc6847_mode_info_t *info = mc6847_mode_info(mode);
+    unsigned first, last;
+    band_source_rows(info, band, &first, &last);
+
+    unsigned lo = info->bytes_per_row, hi = 0;
+    for (unsigned r = first; r <= last; r++) {
+        const uint8_t *a = vram   + r * info->bytes_per_row;
+        const uint8_t *b = shadow + r * info->bytes_per_row;
+        for (unsigned c = 0; c < info->bytes_per_row; c++) {
+            if (a[c] != b[c]) {
+                if (c < lo) lo = c;
+                if (c > hi) hi = c;
+            }
+        }
+    }
+    if (lo > hi) return false;
+
+    *x0 = (uint16_t)(lo * info->px_per_byte);
+    *x1 = (uint16_t)((hi + 1u) * info->px_per_byte - 1u);
+    return true;
+}
+
+unsigned mc6847_row_source(uint8_t mode, unsigned y) {
+    const mc6847_mode_info_t *info = mc6847_mode_info(mode);
+    /* Alpha rows are all distinct — each is a different glyph row — so
+     * only graphics modes have repeats to reuse. */
+    if (info->kind == VDG_ALPHA) return y;
+    return y / info->y_scale;
+}

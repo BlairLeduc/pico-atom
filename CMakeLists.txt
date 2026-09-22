@@ -17,6 +17,7 @@ set(PICO_ATOM_CORE_SOURCES
     src/core/i8255.c
     src/core/m6502.c
     src/core/mc6847.c
+    src/core/snappool.c
 )
 
 # The MC6847 character ROM is not in the tree: §16 requires it be
@@ -69,6 +70,9 @@ else()
     add_executable(pico-atom
         src/port/main.c
         src/port/board.c
+        src/port/display.c
+        src/port/lcd.c
+        src/port/southbridge.c
         ${PICO_ATOM_CORE_SOURCES}
     )
     target_include_directories(pico-atom PRIVATE src/core src/port)
@@ -90,6 +94,10 @@ else()
         pico_multicore
         pico_unique_id
         hardware_clocks
+        hardware_dma
+        hardware_i2c
+        hardware_spi
+        hardware_sync
     )
 
     pico_enable_stdio_uart(pico-atom 1)

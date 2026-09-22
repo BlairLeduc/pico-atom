@@ -8,6 +8,8 @@ set(PICO_ATOM_HOST_TESTS
     test_bus
     test_i8255
     test_mc6847
+    test_field
+    test_present
 )
 
 foreach(t ${PICO_ATOM_HOST_TESTS})
