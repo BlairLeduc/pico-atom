@@ -95,8 +95,15 @@ extern const uint16_t mc6847_palette[VDG_COLOUR_COUNT];
 #define MC6847_FONT_LEFT_BIT 5u
 #define MC6847_FONT_LSHIFT   (7u - MC6847_FONT_LEFT_BIT)
 
-/* Glyph 0 is '@', not the space; a page of zeroed VRAM is a page of
- * '@'. The space is glyph 32. */
+/* Glyph 0 is '@' and glyph 32 is the space, so a page of zeroed VRAM
+ * shows '@' throughout. That is correct and is not to be "fixed": the
+ * MOS clears the screen by writing spaces when it wants a blank one, and
+ * an emulator that quietly substituted blanks would hide a ROM that
+ * failed to do so.
+ *
+ * This constant exists for tooling that wants a legible blank page, such
+ * as the font sheets in tools/vdg-ppm. The emulator itself never
+ * substitutes it. */
 #define MC6847_GLYPH_SPACE 32u
 
 /* ASCII code of a glyph index, for tooling and diagnostics. */

@@ -273,6 +273,39 @@ int main(void) {
     }
 
 #if PICO_ATOM_HAVE_FONT
+    /* ---- a zeroed VRAM page shows '@', and that is correct ----------
+     *
+     * Glyph 0 is '@', not the space, so an uncleared screen is a screen
+     * of '@'. The MOS writes spaces when it wants a blank screen. An
+     * emulator that substituted blanks here would hide a ROM that never
+     * cleared the screen, so this is pinned down rather than left to
+     * look like an oversight worth correcting. */
+    {
+        mc6847_init(&g_vdg);
+        mc6847_set_font(&g_vdg, font_6847);
+        mc6847_set_mode(&g_vdg, mode_of(false, 0, false));
+        memset(g_vram, 0, sizeof(g_vram));
+
+        unsigned ink = 0;
+        for (unsigned y = 0; y < ATOM_SCREEN_H; y++) {
+            mc6847_render_row(&g_vdg, g_vram, y, g_row);
+            for (unsigned x = 0; x < ATOM_SCREEN_W; x++)
+                if (g_row[x] != mc6847_palette[VDG_BLACK]) ink++;
+        }
+        CHECK(ink > 0, "a zeroed VRAM page should render '@', not blanks");
+
+        /* And the space glyph really does give a blank page, so the
+         * difference is the VRAM contents and not the renderer. */
+        memset(g_vram, MC6847_GLYPH_SPACE, sizeof(g_vram));
+        unsigned blank_ink = 0;
+        for (unsigned y = 0; y < ATOM_SCREEN_H; y++) {
+            mc6847_render_row(&g_vdg, g_vram, y, g_row);
+            for (unsigned x = 0; x < ATOM_SCREEN_W; x++)
+                if (g_row[x] != mc6847_palette[VDG_BLACK]) blank_ink++;
+        }
+        CHECK(blank_ink == 0, "a page of the space glyph should have no ink");
+    }
+
     /* ---- the supplied ROM honours the layout the renderer assumes ---
      *
      * A ROM laid out differently — bit 7 leftmost, say — would render as

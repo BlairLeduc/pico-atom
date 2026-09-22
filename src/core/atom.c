@@ -42,6 +42,12 @@ static void map_io(atom_t *m, unsigned first_page, unsigned last_page) {
 }
 
 void atom_init(atom_t *m, const atom_config_t *cfg) {
+    /* Power-on RAM is zero-filled, so a fresh machine shows a screen of
+     * '@' (glyph 0) until the MOS clears it. Real hardware comes up with
+     * uninitialised RAM and shows a checkerboard of 0x00 and 0xFF whose
+     * pattern depends on the RAM chips fitted; that is deliberately not
+     * modelled, because it is per-machine noise rather than behaviour
+     * any software can depend on. */
     memset(m, 0, sizeof(*m));
     m->cfg = *cfg;
 

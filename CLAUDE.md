@@ -129,6 +129,11 @@ a plausible-looking change silently breaks:
   from a snapshot through a mode LUT straight into DMA line buffers. Adding a
   framebuffer would reintroduce the second copy of the screen this design exists
   to avoid.
+- **Power-on RAM is zero-filled and the checkerboard is not modelled.** Real
+  hardware comes up with uninitialised RAM showing a checkerboard of `0x00`
+  and `0xFF` whose pattern depends on the RAM chips fitted. That is
+  per-machine noise no software can depend on, so `atom_init` zero-fills and
+  leaves it there.
 - **Core 0 owns the 6502, 8255 and audio; core 1 owns the LCD, I²C and SD.**
   Handoff is an immutable snapshot with explicit ownership — core 1 never reads
   guest RAM while the 6502 runs.
@@ -190,13 +195,18 @@ time. They apply to every driver in `src/port/`:
     at the right of the 8-wide cell. Bits 7, 6 and 0 are unused.
   - The 7 glyph rows sit at **rows 3..9** of the 12-row cell.
   - Glyph order is the **MC6847's own, not ASCII**: index 0–31 are `$40`–`$5F`
-    (`@A`–`Z[\]^_`), index 32–63 are `$20`–`$3F` (space onwards). So glyph 0
-    is `@` and a page of zeroed VRAM is a page of `@`, not blanks — the space
-    is `MC6847_GLYPH_SPACE` (32). Use `mc6847_glyph_ascii()` rather than
-    open-coding it.
+    (`@A`–`Z[\]^_`), index 32–63 are `$20`–`$3F` (space onwards). Use
+    `mc6847_glyph_ascii()` rather than open-coding it.
 
   `test_mc6847.c` asserts all three against the data itself, so a differently
   laid-out ROM fails loudly instead of rendering plausible-but-wrong glyphs.
+
+  **A screen of `@` is correct, not a bug.** Glyph 0 is `@`, so zeroed VRAM
+  renders as `@` throughout until the MOS clears the screen by writing spaces.
+  Do not make the renderer substitute blanks — that would hide a ROM that
+  never cleared the screen, and there is a test pinning the behaviour.
+  `MC6847_GLYPH_SPACE` exists for tooling that wants a legible blank page,
+  such as the `vdg-ppm` font sheets; the emulator never uses it.
 
   Both builds detect `src/core/mc6847_font.c` by existence, compile it in, and
   define `PICO_ATOM_HAVE_FONT`. Without it alpha mode draws a hollow box per
