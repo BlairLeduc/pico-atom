@@ -68,7 +68,14 @@ int main(void) {
 
         /* FS, port C bit 7: low for the flyback interval, which is about
          * 6 % of a field (§12.1). Atom programs poll it to avoid writing
-         * VRAM during active display. */
+         * VRAM during active display.
+         *
+         * M3: this pulse is wrong and is only harmless here. Nothing runs
+         * while FS is low, so a guest polling #B002 bit 7 would spin
+         * forever; no ROM is loaded yet, so nothing does. The real core 0
+         * loop splits the slice at the flyback boundary and runs the guest
+         * on both sides of it — §12.1 has the shape and the test it wants.
+         */
         atom_field_sync(&g_atom, true);
         atom_field_sync(&g_atom, false);
 

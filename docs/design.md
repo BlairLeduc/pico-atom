@@ -951,14 +951,32 @@ the one accepted violator of it (hardware notes §5.4, §7.2).
 | Guest cycles per field | 16,667 |
 | `FS` (port C bit 7) low for | the flyback interval, ~6 % of a field |
 
-Core 0 runs in **field-sized slices** with cycle-debt carry-forward:
+Core 0 runs in **field-sized slices** with cycle-debt carry-forward. The slice
+is **split at the flyback boundary**, and that split is the whole point:
 
 ```c
-budget += CYCLES_PER_FIELD;
+budget += ACTIVE_CYCLES;            /* the field less the flyback interval */
 budget -= atom_run(&m, budget);     /* returns true cycles; debt carries */
-atom_field_sync(&m, true);  ... atom_field_sync(&m, false);
+atom_field_sync(&m, true);          /* FS low */
+budget += FLYBACK_CYCLES;
+budget -= atom_run(&m, budget);     /* the guest runs while FS is low */
+atom_field_sync(&m, false);         /* FS high */
 snapshot_publish();
 ```
+
+**Guest instructions must execute while `FS` is low**, or the flag is
+unobservable. Asserting and releasing it back to back after a whole field's
+run leaves a program that polls `#B002` bit 7 spinning forever, which is what
+the real Atom's screen-writing routines do. The debt carry survives the split
+because `atom_run` reports its true cycle count on each call, so two runs
+against one accumulator behave as one.
+
+The M0/M2 bring-up loop in `src/port/main.c` **does not do this yet** — it
+pulses `FS` at the end of the slice, which is harmless only because no ROM is
+loaded and nothing polls it. M3 builds the real core 0 loop and is where this
+shape has to arrive; a host test should run a guest loop polling `FS` and
+assert that it both observes the low state and escapes, since asserting that
+the accessor flips the bit does not catch this.
 
 Within a slice, the audio integrator emits a sample every 27.31 guest cycles via
 a fixed-point accumulator, so audio and CPU share one clock by construction and
@@ -1205,7 +1223,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M0** | Skeleton: CMake, host + UF2 targets, CI, `config.h` | both targets build clean under `-Werror` |
 | **M1** | 6502 core, host only | Dormann and Clark tests pass; cycle table asserted |
 | **M2** | Bus, 8255, VDG row generation, host only | golden images match for all nine modes |
-| **M3** | Board bring-up: clocks, I²C, LCD, test pattern | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate |
+| **M3** | Board bring-up: clocks, I²C, LCD, test pattern; the real core 0 slice loop, split at flyback (§12.1) | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate; a guest loop polling `FS` observes the low state and escapes |
 | **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` |
 | **M5** | Audio | integrator verified against a known frequency; underrun and late-refill counters both zero over 10 minutes |
 | **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs |
