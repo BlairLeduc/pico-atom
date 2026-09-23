@@ -256,7 +256,9 @@ int main(void) {
         bus_write(n, 0xB003, ATOM_CTRL_WORD);
         bus_write(n, 0xB002, 0x05);
         n->ppi.in_c = 0xF0;
-        bus_write(n, 0xB002, (uint8_t)(i8255_read(&n->ppi, 2) << 1));
+        /* Through the bus, as the CPU reads it: the cassette inputs,
+         * bits 4 and 5, are driven at the read (cassette.h). */
+        bus_write(n, 0xB002, (uint8_t)(bus_read(n, 0xB002) << 1));
 
         CHECK(after_rmw == n->ppi.out_c,
               "an RMW on port C should land where a single write does: "

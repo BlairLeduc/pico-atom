@@ -11,11 +11,13 @@ void atom_config_default(atom_config_t *cfg) {
     /* A fully expanded machine by default (§7.2). */
     cfg->block_zero     = true;
     cfg->text_space     = true;
+    cfg->upper_ram      = true;    /* games need #0000-#7FFF (§7.2) */
     cfg->video          = true;
     cfg->video_aperture = false;   /* absent on a stock machine */
     cfg->via_fitted     = true;    /* the MOS hangs without it (via6522.h) */
     cfg->atomdos        = false;
     cfg->tape_traps     = true;
+    cfg->tape_cues      = true;
     cfg->field_hz       = ATOM_FIELD_HZ_DEFAULT;
 }
 
@@ -64,6 +66,7 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
 
     if (m->cfg.block_zero) map_rw(m, 0x00u, 0x03u, 0);
     if (m->cfg.text_space) map_rw(m, 0x04u, 0x3Fu, 0);
+    if (m->cfg.upper_ram)  map_rw(m, 0x40u, 0x7Fu, 0);
     if (m->cfg.video)      map_rw(m, 0x80u, 0x97u, PAGE_VRAM);
     if (m->cfg.video_aperture) map_rw(m, 0x98u, 0x9Fu, PAGE_VRAM);
 
@@ -96,11 +99,13 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
 
     beeper_init(&m->beeper, m->cpu.cycles, atom_speaker(m), ATOM_CPU_HZ,
                 ATOM_AUDIO_RATE_NUM, ATOM_AUDIO_RATE_DEN);
+    cassette_init(&m->cas);
 }
 
 void atom_reset(atom_t *m) {
     m->tape.op = TAPE_NONE;
     m->tape.pass = false;
+    m->tape.cue_play = false;
     m->cpu.reset_pending = false;
     m6502_reset(&m->cpu, m);
 }
@@ -145,14 +150,22 @@ void atom_map_ram(atom_t *m, uint16_t addr, uint32_t len) {
     map_rw(m, first, last, 0);
 }
 
+/* The low bytes of the PCs tape.c wants to see (tape_at): one load per
+ * instruction rather than a compare per address. Not const, so that it
+ * sits in SRAM beside the loop rather than behind the XIP cache. */
+static uint8_t tape_pc_lo[256] = {
+    [TAPE_OSLOAD_PC & 0xFFu] = 1, [TAPE_OSSAVE_PC & 0xFFu] = 1,
+    [TAPE_PROMPT_PC & 0xFFu] = 1, [TAPE_ANSWERED_PC & 0xFFu] = 1,
+    [TAPE_LOADED_PC & 0xFFu] = 1,
+};
+
 uint32_t ATOM_HOT2(atom_run)(atom_t *m, uint32_t cycles) {
     uint32_t done = 0, n = 0;
     /* Whole instructions until at least `cycles` have elapsed; the caller
      * carries the overshoot forward as debt (§6.2, §12.1). */
     while (done < cycles) {
         uint32_t c;
-        if (__builtin_expect(m->cpu.pc == TAPE_OSLOAD_PC ||
-                             m->cpu.pc == TAPE_OSSAVE_PC, 0) && tape_trap(m)) {
+        if (__builtin_expect(tape_pc_lo[m->cpu.pc & 0xFFu], 0) && tape_at(m)) {
             /* Stalled on a tape request, like a 6502 with RDY low: the
              * rest of the slice passes with no instruction run (§11.2). */
             c = cycles - done;
@@ -198,6 +211,12 @@ uint32_t atom_run_field(atom_t *m) {
     done += run_budget(m);
     atom_field_sync(m, false);
 
+    /* A playing tape moves whether or not the guest reads it; keep its
+     * position current for the menu and for turbo (§11.3). And keep bit
+     * 4's next change within 2^31 cycles of the clock, which the inline
+     * compare needs, however long the guest goes without reading. */
+    atom_cassette_sync(m);
+
     return done;
 }
 
@@ -221,7 +240,7 @@ void ATOM_HOT1(atom_refresh_ppi_inputs)(atom_t *m) {
     uint8_t c = m->ppi.in_c & 0x0Fu;
     if (!m->key_rept)   c |= I8255_IN_C_REPT;      /* active low           */
     if (!m->in_flyback) c |= I8255_IN_C_FS;
-    /* Cassette inputs stay where the tape decoder left them (M8). */
+    /* Cassette inputs stay where atom_cassette_sync left them. */
     c |= (uint8_t)(m->ppi.in_c & (I8255_IN_C_CASSETTE_TONE |
                                   I8255_IN_C_CASSETTE_DATA));
     m->ppi.in_c = c;
@@ -253,6 +272,42 @@ uint8_t atom_vdg_mode(const atom_t *m) {
 
 bool atom_speaker(const atom_t *m) {
     return i8255_speaker(&m->ppi);
+}
+
+/* ---- the cassette (design.md §11.3) --------------------------------- */
+
+void ATOM_HOT1(atom_cassette_sync_slow)(atom_t *m) {
+    uint64_t now = m->cpu.cycles;
+    uint8_t c = (uint8_t)(m->ppi.in_c & ~(I8255_IN_C_CASSETTE_TONE | I8255_IN_C_CASSETTE_DATA));
+    if (cassette_ref_2400(&m->cas, now)) c |= I8255_IN_C_CASSETTE_TONE;
+    if (cassette_input(&m->cas, now))    c |= I8255_IN_C_CASSETTE_DATA;
+    m->ppi.in_c = c;
+    /* A moving tape can change bit 5 before bit 4 changes. */
+    if (m->cas.playing && (int32_t)((uint32_t)m->cas.edge - m->cas.ref_next) < 0)
+        m->cas.ref_next = (uint32_t)m->cas.edge;
+}
+
+/* Each of these can move bit 5 without the tape playing, which the
+ * inline path in atom.h would not see, so each ends in the slow one. */
+bool atom_cassette_insert(atom_t *m, const uint8_t *img, size_t len) {
+    bool ok = cassette_insert(&m->cas, img, len);
+    atom_cassette_sync_slow(m);
+    return ok;
+}
+
+void atom_cassette_eject(atom_t *m) {
+    cassette_eject(&m->cas);
+    atom_cassette_sync_slow(m);
+}
+
+void atom_cassette_play(atom_t *m, bool on) {
+    cassette_play(&m->cas, m->cpu.cycles, on);
+    atom_cassette_sync_slow(m);
+}
+
+void atom_cassette_rewind(atom_t *m) {
+    cassette_rewind(&m->cas, m->cpu.cycles);
+    atom_cassette_sync_slow(m);
 }
 
 /* ---- audio (design.md §9) ------------------------------------------- */

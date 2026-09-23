@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M7 are done** (`docs/design.md` §17).
+**Implementation status: M0–M8 are done** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -77,10 +77,28 @@ cycles per instruction, 35–46 % of core 0, headroom 2.2–2.9×. That is 3–4
 the old estimate. Hot code moves to SRAM in tiers (`src/core/hot.h`), and
 tier 2 ships: 1.12–1.19× for 25 KiB. Core 1's `sleep_us` was taking an
 alarm IRQ on core 0 every 20 µs; replacing it was worth 1.11× on its own
-(hardware-notes.md §9.7). Next is M8, tape at signal level.
+(hardware-notes.md §9.7).
 
-What does not exist: tape at signal level (M8), discs and the 8271 (M9),
-the status band, settings persisted to flash (§11.6).
+M8 is done: tape at signal level. A `.uef` (gzipped or not, `inflate.c`) is
+walked into half-cycles (`uef.c`) and played onto port C bit 5 in guest
+cycles (`cassette.c`), with bit 4's 2.4 kHz reference beside it. Both are
+brought up to date when port C is read, not per instruction. While a UEF is
+in the deck the OSLOAD trap stands aside, and the deck follows the stock
+kernel's cues: it stops at `PLAY TAPE`, starts on the key that answers it,
+and stops when OSLOAD returns, unless the load was a `*RUN`. While the tape
+plays, core 0 runs the guest unpaced (turbo, 2.7–2.8×) and feeds the PCM
+queue silence. `test_cassette` records the ROM's own `SAVE` off port C,
+decodes it into a UEF and loads it back through the ROM's `LOAD`. On a
+Plus 2 W on 2026-09-23 Chuckie Egg's two-part UEF loaded through its own
+BASIC loader and was played. Two findings: **`LOAD ""` is the ROM's nameless
+format, not "the next file"** (the menu names a UEF's first file), and games
+want RAM at `#4000`–`#7FFF`, now fitted by default (design.md §7.2). The port
+C hook costs 3.5 % on scrolling, measured against a control build (§6.3).
+Next is M9, AtomDOS and the 8271.
+
+What does not exist: discs and the 8271 (M9), recording at signal level
+(saves still go to `.atm` files), the status band, settings persisted to
+flash (§11.6).
 
 ## The two documents
 
@@ -123,7 +141,10 @@ tools/uart-type.sh 'PRINT 2+2\r'     # type at the guest over the same UART
 
 Characters sent to UART1 are typed at the guest as PicoCalc key events
 (`PICO_ATOM_UART_KEYS` in `main.c`). That is how a hardware run is driven
-without anyone at the keyboard. Send slowly: `uart-type.sh` paces at 0.25 s a
+without anyone at the keyboard. Byte `0x1E` is not a key: it plays or stops
+the deck. A build configured with `-DPICO_ATOM_BOOT_TAPE=/atom/tapes/x.uef`,
+in its own build directory, boots with that tape in the deck, because the
+menu cannot be reached over the UART. Send slowly: `uart-type.sh` paces at 0.25 s a
 character because the MOS takes about eight fields a key.
 
 **Core 0 never calls `printf` after the guest starts.** Its lines go through
@@ -161,7 +182,10 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/atom.*` | `atom_t`, the page table, config, the run loop, §4.1's API |
 | `src/core/beeper.*` | PC2 → PCM: box filter at the rational sample period, DC blocker (§9.3) |
 | `src/core/snappool.*` | §4.2's three-buffer handoff; state machine only, the port holds the lock |
-| `src/core/tape.*` | §11.2's OSLOAD/OSSAVE trap, the stall, ATM headers, and the ROM's page-zero leavings |
+| `src/core/tape.*` | §11.2's OSLOAD/OSSAVE trap, the stall, ATM headers, and the ROM's page-zero leavings; §11.3's deck cues (`tape_at`), found by one table lookup in `atom_run` |
+| `src/core/uef.*` | §11.3's walker: a UEF image as half-cycles, in quarters of the base period |
+| `src/core/cassette.*` | the half-cycles on port C bit 5 in guest cycles, and bit 4's 2.4 kHz reference; brought up to date on a port C read, not per instruction |
+| `src/core/inflate.*` | gzip into a flat buffer, for UEF images; static tables, not reentrant |
 | `src/core/snapshot.*` | §11.5's format: explicit fields, CRC, ROM hash, two-pass load |
 | `src/core/via6522.*` | the VIA; fitted by default because the MOS reads its PCR on every character |
 | `src/core/keymatrix.*` | held-key set, paced replay of southbridge events into the matrix (§10.2) |
@@ -178,12 +202,13 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/port/audio.*` | PWM slice, chained ping-pong DMA, PCM queue; the throttle (§9.4, §12.2) |
 | `src/port/log.*` | core 0's UART lines, formatted into a ring that core 1 drains |
 | `src/port/storage.*` | mount and unmount the card, once per piece of card work |
-| `src/port/tapeio.*` | serves a stalled tape call from `/atom/tapes/`; the tape list and the inserted tape |
+| `src/port/tapeio.*` | serves a stalled tape call from `/atom/tapes/`; the tape list and the inserted tape; a `.uef` decompressed into the deck's 64 KiB buffer |
 | `src/port/snapio.*` | snapshot slots in `/atom/snaps/`: temp file, publish, recovery on load |
 | `src/port/keymapio.*` | the layouts the menu offers: built-in, then `/atom/keymaps/`; the first parse error for the status row |
 | `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer |
-| `src/port/main.c` | core 0's field loop, core 1's bring-up and live present; the park/handoff that gives core 1 the machine for tape calls and the menu; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
+| `src/port/main.c` | core 0's field loop, turbo while a tape plays, core 1's bring-up and live present; the park/handoff that gives core 1 the machine for tape calls and the menu; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot`, `test_tape` and `test_snapshot` run the real MOS when `roms/` holds the images |
+| `test/host/test_uef.c`, `test_cassette.c` | inflate against the system's `gzip`; the waveform to the cycle; the ROM's own SAVE recorded off port C, decoded, and loaded back by its own LOAD. `test_cassette` writes `m8-two-part.uef`, the hardware check's tape |
 | `test/host/guest.*` | the real machine on the host for those tests: ROMs found by SHA-1, keys typed through keymatrix |
 | `test/host/vdg_scenes.*` | the VRAM behind the golden images, shared by the test and `vdg-ppm` |
 | `test/golden/` | §15.1's reference PPMs, all nine modes, both colour sets |
@@ -256,8 +281,8 @@ a plausible-looking change silently breaks:
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
   in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
-  at M7 `.bss` is ~144 KiB and `.data` ~27 KiB (the SRAM-resident
-  interpreter) of the 520 KiB budget.
+  at M8 `.bss` is ~210 KiB, of which 64 KiB is the UEF deck, and `.data`
+  ~27 KiB (the SRAM-resident interpreter) of the 520 KiB budget.
 - **Copy a machine with `atom_copy`, never `=`.** The page table points into
   `ram[]`, so a struct assignment leaves the copy reading and writing the
   original's memory.

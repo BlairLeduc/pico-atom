@@ -32,6 +32,11 @@ void audio_rate(uint32_t *rate_num, uint32_t *rate_den);
  * starts once ATOM_PCM_QUEUE_START samples are waiting. */
 void audio_push(const int16_t *pcm, size_t n);
 
+/* Samples the queue can take now without blocking. Turbo (main.c)
+ * tops the queue up with silence to this, so an unpaced guest never
+ * waits on it and the ring never runs dry. */
+size_t audio_room(void);
+
 /* 0..256. Muted samples are still queued and consumed, so muting does
  * not change the guest's timing (hardware-notes.md §5.8). */
 void audio_set_volume(unsigned volume);

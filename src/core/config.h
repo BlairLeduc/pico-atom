@@ -115,6 +115,17 @@
 
 #define ATOM_ATM_NAME_LEN      16u
 #define ATOM_PATH_MAX         128u
-#define ATOM_TAPE_LIST_MAX     48u  /* .atm files the menu lists (§13)     */
+#define ATOM_TAPE_LIST_MAX     48u  /* tape files the menu lists (§13)     */
+
+/* Port C bit 4, the 2.4 kHz reference the MOS times each recorded bit
+ * against (#FCD8), in guest cycles per period. §16, medium: 4 MHz / 1664
+ * is 2403.8 Hz, which MAME's Atom driver also uses; the ROM reads the
+ * tape by its own loop timing, so only saving depends on it. */
+#define ATOM_CASSETTE_REF_CYCLES 416u
+
+/* The largest UEF image the deck holds, decompressed (§11.3). The
+ * Atom's 300 baud makes an image about 1.1x the data it carries plus
+ * its tones, so this is room for the biggest multi-part games. */
+#define ATOM_UEF_MAX         65536u
 
 #endif /* PICO_ATOM_CONFIG_H */

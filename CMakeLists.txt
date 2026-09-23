@@ -15,7 +15,9 @@ set(PICO_ATOM_CORE_SOURCES
     src/core/atom.c
     src/core/beeper.c
     src/core/bus.c
+    src/core/cassette.c
     src/core/i8255.c
+    src/core/inflate.c
     src/core/keylayout.c
     src/core/keymap_picocalc.c
     src/core/keymatrix.c
@@ -26,6 +28,7 @@ set(PICO_ATOM_CORE_SOURCES
     src/core/snappool.c
     src/core/snapshot.c
     src/core/tape.c
+    src/core/uef.c
     src/core/via6522.c
 )
 
@@ -130,6 +133,15 @@ else()
     # Each tier was measured on the board; design.md §6.3 has the table
     # and says why this one ships.
     set(PICO_ATOM_RAM_TIER 2 CACHE STRING "Hot-code SRAM tier, 0-2 (src/core/hot.h)")
+
+    # A tape put in the deck at boot, stopped, for a run driven over the
+    # UART, where the menu cannot be reached (src/port/main.c). Empty in
+    # a build that ships.
+    set(PICO_ATOM_BOOT_TAPE "" CACHE STRING "Card path of a tape to insert at boot, or empty")
+    if (PICO_ATOM_BOOT_TAPE)
+        target_compile_definitions(pico-atom PRIVATE
+            PICO_ATOM_BOOT_TAPE="${PICO_ATOM_BOOT_TAPE}")
+    endif()
 
     # clk_peri does not follow clk_sys by default; the SPI baud and the
     # audio carrier are re-applied in code as well (hardware-notes §3).

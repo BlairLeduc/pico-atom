@@ -105,6 +105,7 @@ populate fewer blocks; the populated set is configuration, not code (§7.2).
 | `#0100`–`#01FF` | 256 B | 6502 stack |
 | `#0200`–`#03FF` | 512 B | MOS workspace, indirection vectors, buffers |
 | `#0400`–`#3FFF` | 15 KiB | User RAM / BASIC text space (expansion) |
+| `#4000`–`#7FFF` | 16 KiB | User RAM on a 32 KiB machine, which games assume (§7.2) |
 | `#8000`–`#97FF` | 6 KiB | **Video RAM**, read by the VDG |
 | `#9800`–`#9FFF` | 2 KiB | Video RAM aperture, unpopulated on a stock machine |
 | `#A000`–`#AFFF` | 4 KiB | Utility ROM socket |
@@ -393,6 +394,7 @@ DMA storage and peak heap together (hardware notes §2.3).
 | Presented shadow | 6,144 | dirty-band diffing |
 | Mode expansion LUT | 8,192 | rebuilt on mode/`CSS` change (§8.3) |
 | RGB565 line buffers, 2 × 320 × 2 B | 1,280 | DMA ping-pong (§4.6) |
+| UEF deck, decompressed | 65,536 | `ATOM_UEF_MAX`, added at M8 (§11.3) |
 | MC6847 character ROM | 768 | 64 glyphs × 12 rows |
 | Audio DMA ring, 2 halves × 128 frames × **2 slots** × 4 B | 2,048 | power-of-two, aligned, hardware wrap |
 | PCM software queue, 1024 × 4 B | 4,096 | ~28 ms (§5.8) |
@@ -401,7 +403,7 @@ DMA storage and peak heap together (hardware notes §2.3).
 | FatFs + SD buffers | ~2,500 | |
 | Stacks, both cores | 8,192 | |
 | Heap, UI, perf counters, misc | ~16,000 | |
-| **Total** | **~154 KiB** | **30 % of 520 KiB** |
+| **Total** | **~218 KiB** | **42 % of 520 KiB** |
 
 Two observations worth acting on:
 
@@ -509,6 +511,14 @@ replacing it with `busy_wait_us_32` took compute from 197 to 176 host cycles
 per instruction and idle from 245 to 218 at the same tier — 1.11×, and the
 run-to-run spread fell from ±4 to ±0.1 (hardware notes §9.7).
 
+**At M8** the same four workloads were rerun with the cassette in place
+(§11.3). Compute, idle and bell are within 1 % of the table above: 178.1,
+219.3 and 159.3. Scroll is 225.8, and a control build with only the port C
+hook removed reads 218.2, so the hook costs 3.5 % there and headroom falls
+from 2.40× to 2.32×. The first version cost 18 %, three calls on every
+port C read. Turbo while a tape plays measured 2.7–2.8×, the headroom of the
+MOS's tape loops.
+
 ### 6.4 Interrupts and reset
 
 - `RES` — the Atom's **BREAK key is wired to reset**, so the UI maps a host key
@@ -580,8 +590,16 @@ machine:
 |---|---|---|
 | Block zero | `#0000`–`#03FF` | present |
 | Text / user space | `#0400`–`#3FFF` | present |
+| Upper RAM | `#4000`–`#7FFF` | present |
 | Video | `#8000`–`#97FF` | present |
 | Video aperture | `#9800`–`#9FFF` | absent |
+
+Upper RAM was added at M8. Chuckie Egg's loader runs code at `#439C`,
+and its notes ask for "32 KB RAM (#0000-#7FFF)". Without that block the
+game loaded off tape with every checksum good, jumped into open bus and
+fell back into BASIC as `ERROR 5`. Atomulator fits the same 32 KiB. A
+snapshot records the block in its configuration byte, so one saved before
+M8 is refused as another machine (§11.5).
 
 Unpopulated pages read as open bus. Modelling open bus as "last value on the
 bus" rather than `0xFF` costs one field in the struct and occasionally matters;
@@ -1264,9 +1282,9 @@ is not reproduced: an empty name is an ordinary file with an empty name.
 
 ### 11.3 Tape, phase 2: signal level
 
-The honest path, and affordable because §6.3 leaves 80 % of core 0 idle: model
-the cassette input bits (port C bits 4–5) as a real 300 baud CUTS waveform
-decoded from a `.uef` or `.tap` file, clocked in guest cycles.
+The honest path, and affordable because §6.3 leaves over half of core 0 idle:
+model the cassette input bits (port C bits 4–5) as a real 300 baud CUTS waveform
+decoded from a `.uef` file, clocked in guest cycles.
 
 - Works with any MOS, any loader, and anything with non-standard block timing.
 - Turbo loading is free: speed the guest clock during a load and the whole thing
@@ -1274,6 +1292,104 @@ decoded from a `.uef` or `.tap` file, clocked in guest cycles.
 - Saving is the inverse: sample port C bit 0 at the guest cycle rate and encode.
 
 The cassette *audio* is not synthesised into the speaker mix by default (§9.3).
+
+**The signal, read off the kernel ROM.** The writer at `#FC7C` sends a byte as a
+0 start bit, eight data bits LSB first and a 1 stop bit. A 0 is four cycles of
+1200 Hz, made by toggling port C bit 0 once per period of the 2.4 kHz
+reference. A 1 is eight cycles of 2400 Hz, made by setting bits 0 and 1 so that
+the hardware gates the reference itself onto the output. Every bit is timed by
+`#FCD8` waiting on the reference, port C bit 4. That input was not modelled
+before M8, so a `SAVE` that phase 1 declined would have hung. The reader at `#FBEE`
+never looks at bit 4. It counts transitions on bit 5 over 83 turns of a
+40-cycle loop, about one bit time, and takes 12 or more as a 1. Before
+each byte it waits for eight long half-cycles in a row, which is the start bit
+(`#FBF4`). Each block is about two seconds of 2400 Hz leader, `****`, the name,
+CR and eight header bytes. Then come half a second of tone, the data and the
+checksum, then two seconds of silence (`#FB3B`). The loader waits for 4,096
+short half-cycles in a row before it trusts a leader (`#FB8E`).
+
+**As built at M8.** `uef.c` walks an uncompressed image and hands out the
+waveform one half-cycle at a time, in quarters of the base period: a 2400 Hz
+half-cycle is one unit and a 1200 Hz one two. It reads the chunks a tape needs:
+&0100, &0102 and &0104 (data), &0110 and &0111 (carrier), &0112 and &0116
+(gaps), &0113 (base frequency), &0114 (security cycles) and &0117 (baud).
+Metadata is skipped. UEF's default is 1200 baud, a BBC Micro's. An image
+without &0117 is taken to be 300 baud, since a 1200 baud tape could not load on
+an Atom anyway. `cassette.c` turns units into guest cycles with the remainder
+carried, so a 2400 Hz half-cycle is 208 or 209 cycles and never drifts.
+It keeps the 2.4 kHz reference in 32 bits against a point that follows the
+clock (§16 has its period). **Nothing is clocked per instruction.** Both
+inputs are brought up to date when port C is read, the only time they can be
+seen, so a machine with no tape pays nothing and one with a tape pays per read.
+A playing tape is also brought up to date once per field, for the menu and for
+turbo. The common case is inline in the bus: the cassette keeps the first cycle
+at which either bit can next change, bit 4's next edge or the tape's, whichever
+is sooner. A read before it is one subtract and a branch, and port C is left as
+it is. The MOS polls FS in its tightest loops, so even that shows. It costs 3.5 %
+on the scrolling workload, 225.8 host cycles per instruction against 218.2 for
+the same build without the hook, and nothing measurable on the others (§6.3).
+
+The deck has play and stop and no motor control, because the Atom has none. A
+playing tape keeps playing in guest time until it ends or is stopped, so a
+paused guest pauses it. Choosing a UEF in the menu (§13) decompresses it whole
+into a 64 KiB buffer, `ATOM_UEF_MAX` (§5). It goes in stopped, and the menu
+names its first file, because **an empty name is not "the next file"** on an
+Atom. OSLOAD with an empty name takes the branch at `#F92F`, which skips every
+block framed with `****` and loads only the nameless format `SAVE ""` writes.
+Phase 1 lets `LOAD ""` take the inserted `.atm` as a convenience. A UEF is read
+by the ROM itself, so it answers to the names on the tape.
+
+**The deck follows the stock kernel's cues**, the way phase 1's trap follows its
+handlers, and stands aside for any other MOS in the same way. A user of the real
+machine stops the tape after a load and starts it at the next `PLAY TAPE`.
+Under turbo, the two-second gap between two files goes by in under a second of
+wall time, so the deck does it: the prompt at `#FC40` with A = 4 stops it, the
+key that answers it (`#FC79`) starts it, and OSLOAD's exit at `#F953` stops it
+again. The exception is a `*RUN`, whose code may go straight on reading the
+tape. The PCs are found by one table lookup on the low byte in `atom_run`, which
+costs the same as the two compares phase 1's trap had. A loader that reads the
+tape without OSLOAD gets no cue, and the deck is played by hand from the menu,
+as on the real machine. UEFs are almost always gzipped. `inflate.c` decodes gzip
+straight into that buffer, a bit at a time as puff does, with no separate
+window, because back-references can be read from the output itself.
+**While a UEF is in the deck the OSLOAD trap stands aside**, so every load
+reads the signal. Saves still go to `.atm` files: recording at signal level is
+not modelled.
+
+**Turbo** is what §6.3's headroom buys. While a tape plays, core 0 stops
+pacing on the PCM queue and runs the guest flat out. The guest's own samples
+are dropped, and the queue is topped up with silence to its start depth without
+blocking, so the ring never runs dry. The tape is clocked in guest cycles, so a
+load finishes sooner by exactly the headroom and the guest can see no
+difference. When the tape stops, the blocking push paces again. Over a
+300 baud load, 2–3× is the difference between six minutes and two or three.
+
+`test_cassette` holds all of this to the ROM at both ends. The kernel's own
+`SAVE` runs with no trap and no hook. What it drives onto port C bits 0–1 is
+recorded cycle by cycle, and must decode as §11.3 says with no framing errors.
+The recording, written out as a UEF, must come back byte for byte through the
+kernel's own `LOAD`, and run. A headerless block read by a loader of its own
+at `#3C00` loads too, which phase 1 cannot do: the loader never calls OSLOAD.
+The last case is the hardware check's tape, `m8-two-part.uef`, driven exactly
+as a user would: `LOAD "LDR"` fetches a BASIC program off the signal, and `RUN`
+pokes that loader into RAM. Once the deck is played again, the loader reads
+part two. The cues are held there too: the tape goes in stopped, waits through
+`PLAY TAPE` for its key, stops when `LOAD` returns, and plays on after a
+`*RUN`, which is a machine-code file the ROM's own `*SAVE` recorded.
+
+**On the board**, 2026-09-23, a Plus 2 W: Chuckie Egg from a UEF made by
+MakeUEF from a CSW capture. It has &0104 data with an extra short wave per
+stop bit, &0113 at 1201.6 Hz before nearly every chunk, and &0114 security
+cycles. `LOAD "CHUCKIE"` read the BASIC loader off the signal, and its `RUN`
+chained `*RUN "CH-EGG"`, 45 blocks, `#2B00`–`#57FF`, every checksum good.
+The game came up in CG6 and was played. The whole tape took 10.5 minutes of
+guest time in about four of wall time, turbo holding 2.7–2.8×. The PCM queue's
+low water stayed at 384 samples or more, with no underruns and no late refills.
+Two things were found on the way, and neither was the signal: `LOAD ""`'s
+meaning, above, and the game's need for RAM at `#4000`–`#7FFF` (§7.2).
+`test_uef` holds `inflate` to the system's `gzip` over stored, fixed and
+dynamic blocks, and the walker and cassette to the spec's arithmetic, edge by
+edge, to the cycle.
 
 ### 11.4 Disc, phase 3
 
@@ -1444,7 +1560,10 @@ on the way back. The menu is a 32×16 text page presented through the ordinary
 renderer in place of the Atom's screen. It offers Resume, snapshot save, load
 and delete over four slots (§11.5), a tape list whose choice is what an empty
 name loads (§11.2), the game keymap (§10.5, added at M6b), Reset, volume and
-backlight. `Esc` or `Alt`+`M` closes it.
+backlight. `Esc` or `Alt`+`M` closes it. At M8 the tape page gained the deck's
+controls, *Eject*, *Play*/*Stop* and *Rewind*, and lists `.uef` images beside
+`.atm` files. Inserting a UEF says which name to `LOAD`. The main page shows
+the deck's state and how far through the tape it is (§11.3).
 The table below is the full intent; disc, machine and display settings wait
 for the milestones that give them something to set, and settings are not yet
 persisted to flash (§11.6).
@@ -1500,7 +1619,10 @@ pico-atom/
 │   │   ├── via6522.c/.h
 │   │   ├── keymatrix.c/.h
 │   │   ├── keymap_picocalc.c   # data table (§10.3)
-│   │   ├── tape.c/.h           # ATM, UEF, CUTS encode/decode
+│   │   ├── tape.c/.h           # phase 1: the OSLOAD/OSSAVE trap, ATM (§11.2)
+│   │   ├── uef.c/.h            # phase 2: a UEF image as half-cycles (§11.3)
+│   │   ├── cassette.c/.h       # the half-cycles on port C, in guest cycles
+│   │   ├── inflate.c/.h        # gzip, for UEF images
 │   │   └── snapshot.c/.h
 │   ├── port/                   # PicoCalc + SDK
 │   │   ├── main.c              # bring-up order per hardware notes §10
@@ -1525,7 +1647,9 @@ pico-atom/
 │   │   ├── test_field.c        # §12.1: a guest polling FS sees it low and escapes
 │   │   ├── test_present.c      # §8.4 dirty bands by execution; §4.2 snapshot pool
 │   │   ├── test_keymap.c
-│   │   └── test_tape.c
+│   │   ├── test_tape.c
+│   │   ├── test_uef.c          # inflate against gzip; the waveform to the cycle
+│   │   └── test_cassette.c     # the ROM's own SAVE recorded, decoded, loaded back
 │   └── golden/                 # committed reference PPMs
 └── tools/
     ├── mkfont.py               # MC6847 character ROM → header
@@ -1625,6 +1749,7 @@ class of bug in emulation.
 | 8271 base address `#0A00` (§7.3) | AtomDOS documentation | medium |
 | VRAM byte wiring in alpha mode (§2.4) | the MOS and BASIC, executed | **confirmed** — bit 6 is `A/S` and `INT/EXT` (SG6), bit 7 is `INV`: the MOS's cursor is `#A0`, and `CLEAR 0` then `PLOT` writes `#40` plus one element bit per point; `test_boot` pins both |
 | SG6 colour from bits 7:6 (§2.4) | MC6847 datasheet; a reference emulator | **confirmed** — the datasheet's `C1:C0` = `D7:D6`, so yellow/red (cyan/orange with `CSS`); `CLEAR 0` + `PLOT` compared by eye against another Atom emulator on 2026-09-22 |
+| 2.4 kHz cassette reference period, port C bit 4 (§11.3) | Atom circuit diagram | **medium**: 416 cycles, 4 MHz ÷ 1664 = 2403.8 Hz, which MAME's Atom driver also uses. `ATOM_CASSETTE_REF_CYCLES`. The ROM reads a tape by its own loop timing, so only the speed of a signal-level save depends on it |
 | MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |
 
 The last one was settled the way this section asks. The table is XRoar's
@@ -1663,7 +1788,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs — **done** 2026-09-22 on a Plus 2 W: Galaxians, extracted from a `games1.dsk` image to `.atm`, loaded off the card by `LOAD "GALAXI"` (4,864 bytes in 5 ms) and was played; `SAVE`/`LOAD` round-tripped through the card; snapshots saved and restored from the menu; a tape chosen in the menu loaded by `LOAD ""` |
 | **M6b** | Game keymaps (§10.5) | Galaxians played with the Games layout: `Left`/`Right` move, `]` fires, moving and firing at once — **done** 2026-09-23 on a Plus 2 W: Galaxians played with the layout, moving and firing at once (fire then on `Up`, moved to `]` after that run); Bouncing Babies played with a card layout its tape load chose |
 | **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to — **done** 2026-09-23 on a Plus 2 W: headroom 2.2–2.9× real time, 158–218 host cycles per guest instruction (§6.3); tier 2 ships, 1.12–1.19× for 25 KiB; tier 3 measured nothing; core 1's `sleep_us` was interrupting core 0, and fixing it was worth 1.11× |
-| **M8** | Tape phase 2 (UEF at signal level), turbo clock | a UEF image that phase 1 cannot load, loads |
+| **M8** | Tape phase 2 (UEF at signal level), turbo clock | a UEF image that phase 1 cannot load, loads — **done** 2026-09-23 on a Plus 2 W: Chuckie Egg's two-part UEF, 45 blocks through its own BASIC loader, loaded at 2.7–2.8× under turbo and was played (§11.3). On the host, the kernel's own `SAVE`, recorded at signal level, loads back through its own `LOAD`, and a headerless block loads through a loader phase 1 never sees |
 | **M9** | AtomDOS + 8271, 6522 VIA | an `.ssd` boots |
 
 M4 is the milestone that matters; everything before it is scaffolding and

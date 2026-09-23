@@ -200,6 +200,10 @@ void audio_push(const int16_t *pcm, size_t n) {
     }
 }
 
+size_t audio_room(void) {
+    return ATOM_PCM_QUEUE_LEN - (size_t)(s_head - s_tail);
+}
+
 void audio_stats(audio_stats_t *st, bool reset_low_water) {
     st->underrun_samples = s_underruns;
     st->late_refills = s_late;

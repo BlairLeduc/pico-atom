@@ -39,6 +39,9 @@ uint8_t ATOM_HOT1(bus_read_slow)(atom_t *m, uint16_t a) {
              * #B003 is write-only on the real part, so it is not driven. */
             uint8_t reg = (uint8_t)(a & 3u);
             if (!i8255_reg_drives_bus(reg)) return m->open_bus;
+            /* The cassette inputs are brought up to date only when they
+             * can be seen (cassette.h, §11.3). */
+            if (reg == 2u) atom_cassette_sync(m);
             uint8_t v = i8255_read(&m->ppi, reg);
             m->open_bus = v;
             return v;

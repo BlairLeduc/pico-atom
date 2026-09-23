@@ -57,7 +57,8 @@ _Static_assert(S_END <= SNAP_STATE_LEN, "the state section has outgrown its leng
 static uint8_t cfg_bits(const atom_config_t *c) {
     return (uint8_t)((c->block_zero ? 0x01u : 0) | (c->text_space ? 0x02u : 0) |
                      (c->video ? 0x04u : 0) | (c->video_aperture ? 0x08u : 0) |
-                     (c->via_fitted ? 0x10u : 0) | (c->atomdos ? 0x20u : 0));
+                     (c->via_fitted ? 0x10u : 0) | (c->atomdos ? 0x20u : 0) |
+                     (c->upper_ram ? 0x40u : 0));
 }
 
 /* Every ROM page, with its page number, so the same images in different
@@ -219,9 +220,13 @@ snap_status_t snapshot_load(atom_t *m, snap_read_fn read, void *ctx) {
     }
 
     m6502_t *c = &m->cpu;
+    uint64_t was = c->cycles;
     c->pc = get16(st + S_PC);
     c->a = st[S_A]; c->x = st[S_X]; c->y = st[S_Y]; c->s = st[S_S]; c->p = st[S_P];
     c->cycles = get64(st + S_CYCLES);
+    /* The tape is not machine state: it stays where it is in the deck,
+     * and carries on from the restored clock (§11.3). */
+    cassette_retime(&m->cas, was, c->cycles);
     c->irq_lines = st[S_IRQ];
     c->nmi_pending = st[S_NMI_PENDING] != 0;
     c->nmi_line = st[S_NMI_LINE] != 0;
@@ -252,9 +257,14 @@ snap_status_t snapshot_load(atom_t *m, snap_read_fn read, void *ctx) {
     memset(m->key_col, 0, sizeof m->key_col);
     m->key_shift = m->key_ctrl = m->key_rept = false;
     atom_refresh_ppi_inputs(m);
+    /* Port C bit 5 is the deck's, not the file's. Bit 4 stays as it was
+     * read: the next read recomputes it from the clock. */
+    m->ppi.in_c = (uint8_t)((m->ppi.in_c & ~I8255_IN_C_CASSETTE_DATA) |
+                            (m->cas.level ? I8255_IN_C_CASSETTE_DATA : 0u));
 
     m->tape.op = TAPE_NONE;
     m->tape.pass = false;
+    m->tape.cue_play = false;
 
     /* The loudspeaker starts again from the restored clock and level, at
      * the rate the port set: cycles per sample num / den, as it was. */
