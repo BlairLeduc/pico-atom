@@ -13,6 +13,7 @@ option(PICO_ATOM_HOST "Build the portable core and its host tests, with no Pico 
 # Every fixed capacity lives in src/core/config.h; nothing here duplicates one.
 set(PICO_ATOM_CORE_SOURCES
     src/core/atom.c
+    src/core/beeper.c
     src/core/bus.c
     src/core/i8255.c
     src/core/keymap_picocalc.c
@@ -95,11 +96,13 @@ else()
 
     add_executable(pico-atom
         src/port/main.c
+        src/port/audio.c
         src/port/board.c
         src/port/diskio.c
         src/port/display.c
         src/port/kbd.c
         src/port/lcd.c
+        src/port/log.c
         src/port/roms.c
         src/port/sd.c
         src/port/southbridge.c
@@ -108,10 +111,18 @@ else()
     target_include_directories(pico-atom PRIVATE src/core src/port)
     target_compile_options(pico-atom PRIVATE ${PICO_ATOM_WARNINGS})
 
+    # PICO_ATOM_AUDIO=OFF paces the guest on the microsecond timer instead
+    # of the PCM queue (design.md §12.2). PICO_ATOM_UART_KEYS types what
+    # arrives on UART1 at the guest (tools/uart-type.sh).
+    option(PICO_ATOM_AUDIO "Audio output, and pacing on the PCM queue" ON)
+    option(PICO_ATOM_UART_KEYS "Type characters received on UART1 at the guest" ON)
+
     # clk_peri does not follow clk_sys by default; the SPI baud and the
     # audio carrier are re-applied in code as well (hardware-notes §3).
     target_compile_definitions(pico-atom PRIVATE
         PICO_ATOM_HAVE_FONT=${PICO_ATOM_HAVE_FONT}
+        PICO_ATOM_AUDIO=$<BOOL:${PICO_ATOM_AUDIO}>
+        PICO_ATOM_UART_KEYS=$<BOOL:${PICO_ATOM_UART_KEYS}>
         PICO_CLOCK_ADJUST_PERI_CLOCK_WITH_SYS_CLOCK=1
         # UART1 at 115200 8-N-1, TX GP4 / RX GP5 (hardware-notes §2.7).
         PICO_DEFAULT_UART=1
@@ -127,6 +138,7 @@ else()
         hardware_clocks
         hardware_dma
         hardware_i2c
+        hardware_pwm
         hardware_spi
         hardware_sync
     )

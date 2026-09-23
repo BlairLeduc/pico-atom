@@ -66,6 +66,16 @@
 #define ATOM_PWM_TOP         2047u  /* 11 bits, 73.2 kHz carrier          */
 #define ATOM_PWM_OVERSAMPLE     2u  /* each frame written twice           */
 
+/* The nominal sample rate as a fraction, 150,000,000 / 4096 Hz (§9.2).
+ * The port recomputes it from clock_get_hz(clk_sys) and hands the real
+ * one to atom_audio_set_rate; this is what a host build runs at. */
+#define ATOM_AUDIO_RATE_NUM  150000000u
+#define ATOM_AUDIO_RATE_DEN  ((ATOM_PWM_TOP + 1u) * ATOM_PWM_OVERSAMPLE)
+
+/* Samples the core holds between drains. One field is 611 at 60 Hz and
+ * 733 at 50 Hz; the port drains after every field (§12.2). */
+#define ATOM_AUDIO_BUF_LEN   1024u
+
 #define ATOM_PCM_QUEUE_LEN   1024u  /* SPSC, ~28 ms                       */
 #define ATOM_PCM_QUEUE_START  768u  /* start streaming at this depth      */
 

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M4 are done** (`docs/design.md` §17).
+**Implementation status: M0–M5 are done** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -32,9 +32,21 @@ wiring (bit 7 `INV`, bit 6 SG6) were both settled by executing the ROMs
 before its first prompt without it. After `CLEAR 0` the cursor is
 invisible over graphics cells; that follows from the wiring, not a bug.
 
-**M5 is next** — audio.
+M5 is done: the Atom has sound. PC2 is integrated into PCM by a box filter at
+the exact rational sample period (`beeper.c`, design.md §9.3), and core 0
+paces the guest on the PCM queue in place of the microsecond timer (§12.2).
+On the host, `test_audio` checks every sample against an independent model of
+a guest-executed square wave, and measures its pitch. `test_boot` rings the
+real MOS bell: 387.64 Hz measured, against 387.60 Hz from the cycle count of
+the loop at `#FD18`. On a Plus 2 W on 2026-09-22 a BASIC loop rang the bell
+continuously for 10 minutes. Underruns and late refills stayed at zero, and
+the consumed sample rate measured against the microsecond timer held at
+36,620–36,626 Hz.
 
-What does not exist: audio, tape, the menu, the status band.
+**M6 is next** — tape phase 1 (ATM via OS traps), snapshots, the menu.
+
+What does not exist: tape, snapshots, the menu, the status band, volume
+control from the UI.
 
 ## The two documents
 
@@ -72,7 +84,17 @@ On hardware, with the Debug Probe's SWD and UART both connected:
 ```sh
 tools/uart-log.sh 30 out/run.log &   # capture UART1 first, so the banner is in it
 tools/flash.sh                       # program, verify, reset both cores together
+tools/uart-type.sh 'PRINT 2+2\r'     # type at the guest over the same UART
 ```
+
+Characters sent to UART1 are typed at the guest as PicoCalc key events
+(`PICO_ATOM_UART_KEYS` in `main.c`). That is how a hardware run is driven
+without anyone at the keyboard. Send slowly: `uart-type.sh` paces at 0.25 s a
+character because the MOS takes about eight fields a key.
+
+**Core 0 never calls `printf` after the guest starts.** Its lines go through
+`log_printf` into a ring that core 1 drains into the UART FIFO. A blocking
+heartbeat costs ~30 ms, and the PCM queue's low-water slack is ~11 ms.
 
 `flash.sh` resets with `reset halt` + `resume`, never `reset run`; the reason is
 in the script and in hardware-notes.md §2.7. `uart-log.sh` refuses to open a
@@ -102,6 +124,7 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/i8255.*` | the PPI; generic Intel part, Atom wiring as accessors |
 | `src/core/mc6847.*` | mode decode, palette, expansion LUT, row generation |
 | `src/core/atom.*` | `atom_t`, the page table, config, the run loop, §4.1's API |
+| `src/core/beeper.*` | PC2 → PCM: box filter at the rational sample period, DC blocker (§9.3) |
 | `src/core/snappool.*` | §4.2's three-buffer handoff; state machine only, the port holds the lock |
 | `src/core/via6522.*` | the VIA; fitted by default because the MOS reads its PCR on every character |
 | `src/core/keymatrix.*` | held-key set, paced replay of southbridge events into the matrix (§10.2) |
@@ -114,13 +137,16 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/port/sd.*`, `diskio.c` | spi0 SD driver and FatFs's disk layer; FatFs itself is copied from the SDK at configure time |
 | `src/port/roms.*` | loads `/atom/roms/` into the machine before the guest starts; the no-ROMs page |
 | `src/port/kbd.*` | core 1 drains the southbridge FIFO into an SPSC ring for core 0 |
-| `src/port/main.c` | core 0's field loop, core 1's bring-up and live present; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT` |
-| `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot` runs the real MOS when `roms/` holds the images |
+| `src/port/audio.*` | PWM slice, chained ping-pong DMA, PCM queue; the throttle (§9.4, §12.2) |
+| `src/port/log.*` | core 0's UART lines, formatted into a ring that core 1 drains |
+| `src/port/main.c` | core 0's field loop, core 1's bring-up and live present; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
+| `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot` runs the real MOS when `roms/` holds the images, and measures its bell |
 | `test/host/vdg_scenes.*` | the VRAM behind the golden images, shared by the test and `vdg-ppm` |
 | `test/golden/` | §15.1's reference PPMs, all nine modes, both colour sets |
 | `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` |
 | `tools/mkfont.py` | character ROM -> `mc6847_font.h`, and `--dump` to proof it |
 | `tools/vdg-ppm.c` | renders the scenes to PPM; `vdg-ppm test/golden` regenerates the goldens |
+| `tools/uart-log.sh`, `uart-type.sh` | capture UART1 to a file; type at the guest over it |
 
 **Device hooks that do not exist yet are marked in place**, as `/* M2: ... */`
 and `/* M9: ... */` comments at the point in `src/core/bus.c` where the call
@@ -185,7 +211,7 @@ a plausible-looking change silently breaks:
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
   in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
-  at M3 `.bss` is ~111 KiB of the 520 KiB budget.
+  at M5 `.bss` is ~130 KiB of the 520 KiB budget.
 - **`page_t` is exactly two pointers**, with `atom_t.page_flags[]` alongside it.
   Adding a third field pads the descriptor to twelve bytes and puts the page
   table 1 KiB over §5's line for it; the flags are slow-path only, so they do
