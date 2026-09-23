@@ -224,6 +224,9 @@ uint16_t atom_tape_load_begin(atom_t *m, const atm_header_t *h) {
     t->hdr = *h;
     t->base = t->own_addr ? h->load : t->addr;
     t->done = 0;
+    record_t r = record(h->load, (uint16_t)(h->load + h->len));
+    t->sum_from = (r.blocks - 1u) * TAPE_BLOCK;
+    t->data_sum = 0;
     return t->base;
 }
 
@@ -232,6 +235,7 @@ void atom_tape_load_data(atom_t *m, const uint8_t *src, size_t n) {
     if (t->op != TAPE_LOAD) return;
     for (size_t i = 0; i < n && t->done < t->hdr.len; i++, t->done++) {
         bus_write(m, (uint16_t)(t->base + t->done), src[i]);
+        if (t->done >= t->sum_from) t->data_sum = (uint8_t)(t->data_sum + src[i]);
     }
 }
 
@@ -259,11 +263,7 @@ void atom_tape_load_end(atom_t *m) {
     };
     for (unsigned i = 0; i < 8; i++) zp_write(m, (uint8_t)(ZP_HDR + 7u - i), hdr[i]);
 
-    uint8_t data_sum = 0;
-    for (uint32_t i = last_off; i < h->len; i++) {
-        data_sum = (uint8_t)(data_sum + peek(m, (uint16_t)(t->base + i)));
-    }
-    uint8_t sum = block_sum(h->name, hdr, data_sum);
+    uint8_t sum = block_sum(h->name, hdr, t->data_sum);
 
     copy_block(m);
     zp_write16(m, ZP_BLOCK + 2u, (uint16_t)(t->base + last_off));   /* #CB */

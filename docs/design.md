@@ -1137,7 +1137,12 @@ that kernel's page-zero contract.
 behaves as if RDY were held low: guest time passes, the VIA ticks, audio keeps
 its cadence, no instruction runs. `atom_run` keeps its contract (§4.1) and the
 port serves the request whenever it gets to it — on the device, core 0 parks at
-the field boundary and core 1 does the card work (§4.2, §11.1). A request no
+the field boundary and core 1 does the card work (§4.2, §11.1). The wall time
+spent parked is not guest time, as with the menu (§13): to the guest the stall
+runs to the end of the field it began in. No program can count on the length
+of a tape call, which on the real machine is seconds and varies with the tape,
+so core 1 advancing the clock while it holds the machine would buy nothing but
+a second writer of the cycle count. A request no
 file answers to is **declined**, and the ROM routine then runs as though there
 were no trap: it prints `PLAY TAPE` and waits on the cassette input, and the
 user escapes as on the real machine. BREAK cancels an outstanding request.

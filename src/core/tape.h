@@ -77,6 +77,11 @@ typedef struct {
     atm_header_t hdr;
     uint16_t  base;
     uint32_t  done;
+    /* The last block's data bytes summed as they arrive: the MOS sums
+     * what it reads off tape (#FC23), not what the write left behind,
+     * which differs over ROM or I/O. */
+    uint32_t  sum_from;
+    uint8_t   data_sum;
 
     bool      pass;        /* declined: let the ROM run this call once   */
     uint32_t  served;      /* requests completed, for the heartbeat      */

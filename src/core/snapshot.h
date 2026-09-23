@@ -5,8 +5,8 @@
  * struct dumped from memory: atom_t holds pointers and padding, and a
  * snapshot has to outlive the build that wrote it.
  *
- *   header  16 bytes: "PATMSNAP", version, header length, payload
- *           length, CRC-32 of the payload
+ *   header  20 bytes: "PATMSNAP" (8), version (2), header length (2),
+ *           payload length (4), CRC-32 of the payload (4)
  *   payload the machine's state (SNAP_STATE_LEN), then the whole 64 KiB
  *           address space with ROM pages written as zeros
  *

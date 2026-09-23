@@ -120,6 +120,15 @@ static void serve_load(atom_t *m, const char *name) {
         atom_tape_decline(m);
         return;
     }
+    /* A file shorter than its header says is refused before a byte of
+     * it reaches the guest, rather than run with the rest missing. */
+    if (f_size(&s_file) < (FSIZE_t)ATM_HEADER_LEN + h.len) {
+        printf("  tape         : LOAD \"%s\" <- %s: the header says %u bytes and the "
+               "file is short; the MOS will ask for the tape\n", name, s_path, h.len);
+        f_close(&s_file);
+        atom_tape_decline(m);
+        return;
+    }
 
     uint32_t t0 = time_us_32();
     uint16_t at = atom_tape_load_begin(m, &h);
@@ -134,12 +143,21 @@ static void serve_load(atom_t *m, const char *name) {
         got += n;
     }
     f_close(&s_file);
+
+    /* The card failed part-way: what arrived stays, as it would from a
+     * tape that stopped, and the call is declined, so the MOS asks for
+     * the tape as though there were no trap (§11.2). */
+    if (got != h.len) {
+        printf("  tape         : LOAD \"%s\" <- %s: read failed after %lu of %u bytes "
+               "(FatFs %d); the MOS will ask for the tape\n", name, s_path,
+               (unsigned long)got, h.len, (int)fr);
+        atom_tape_decline(m);
+        return;
+    }
     atom_tape_load_end(m);
 
-    printf("  tape         : LOAD \"%s\" <- %s: %lu of %u bytes at #%04X, exec #%04X, "
-           "%lu us%s\n", name, s_path, (unsigned long)got, h.len, at, h.exec,
-           (unsigned long)(time_us_32() - t0),
-           got == h.len ? "" : " — SHORT FILE");
+    printf("  tape         : LOAD \"%s\" <- %s: %u bytes at #%04X, exec #%04X, %lu us\n",
+           name, s_path, h.len, at, h.exec, (unsigned long)(time_us_32() - t0));
 }
 
 /* <name>.atm, with anything FAT or a shell would trip on made '_'. */

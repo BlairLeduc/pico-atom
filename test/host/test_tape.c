@@ -300,7 +300,7 @@ static int run_case(const tcase_t *c) {
     CHECK(call(&tl, 0xFFE0u, false), "%s: the trapped OSLOAD did not return", c->name);
     CHECK(tl.tape.served == 1, "%s: the load was not trapped", c->name);
     uint16_t at = c->own_addr ? c->reload : c->load_at;
-    CHECK(memcmp(&tl.ram[at], &src.ram[c->start], c->len) == 0,
+    CHECK(at >= 0xC000u || memcmp(&tl.ram[at], &src.ram[c->start], c->len) == 0,
           "%s: the data did not land at #%04X", c->name, at);
     d = diff("load", &rl, &tl);
     CHECK(d == 0, "%s: the trapped OSLOAD left %d difference(s)", c->name, d);
@@ -345,6 +345,9 @@ int main(void) {
         { "ALMOST",    0x3000, 255,   0x3000, 0x3000, false, 0x0400 },
         { "UNALIGNED", 0x2987, 700,   0x2987, 0x2987, true,  0 },
         { "THIRTEENCHRS", 0x3000, 2,  0x3000, 0x3000, false, 0x3E00 },
+        /* Over the kernel ROM: the writes go nowhere, but the checksum
+         * is of the bytes off tape, not of what is there. */
+        { "INTOROM",   0x3000, 300,   0x3000, 0x3000, false, 0xF000 },
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         if (run_case(&cases[i])) return 1;
