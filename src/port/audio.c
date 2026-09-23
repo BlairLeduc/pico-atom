@@ -88,14 +88,17 @@ static void __not_in_flash_func(refill)(unsigned which) {
     /* This channel finished and chained to the other. If it is running
      * again already, the other half has drained too and chained back
      * here before this IRQ was serviced: the deadline was missed. The
-     * channel is live, so it is left alone; the ring wrap keeps it
-     * inside the buffer, and the next completion re-arms it. */
-    bool late = dma_channel_is_busy(ch);
-    fill_half(half);
-    if (late) {
+     * channel is live — un-re-armed, it is replaying the other half, and
+     * the ring wrap keeps it inside the buffer — so it is left alone
+     * until its next completion re-arms it. Nothing is taken off the
+     * queue either: that completion refills this half, so samples put
+     * here now would be overwritten before they played. Left queued,
+     * they are only late. */
+    if (dma_channel_is_busy(ch)) {
         s_late++;
         return;
     }
+    fill_half(half);
     /* A chain trigger reloads neither the address nor the count: set
      * both, or the next chain completes at once and storms the IRQ
      * (hardware-notes.md §5.3). */

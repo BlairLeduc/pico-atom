@@ -857,8 +857,11 @@ IRQ only copies, and the producer converts at push time. The producer and the
 IRQ are both on core 0, so the queue is SPSC between thread and interrupt
 context and needs no lock. A refill is **late** when its channel is already
 running again on entry. That means the other half drained too and chained
-back. A late refill is counted and the live channel is left alone; the ring
-wrap keeps it inside the buffer until its next completion re-arms it. Playback
+back. A late refill is counted and the live channel is left alone. Un-re-armed, it
+replays the other half, and the ring wrap keeps it inside the buffer until its
+next completion re-arms it. Nothing comes off the queue on a late refill. That
+next completion refills the half, so samples taken now would be overwritten
+before they played. Left in the queue, they are only late. Playback
 starts when the producer's push takes the queue to 768 samples.
 
 **The UART is not on core 0's path.** A heartbeat is a few hundred bytes, and

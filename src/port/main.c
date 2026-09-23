@@ -435,6 +435,11 @@ int main(void) {
         /* Blocks while the queue is full: this is the throttle (§12.2). */
         size_t n = atom_audio_drain(&g_atom, pcm, ATOM_AUDIO_BUF_LEN);
         audio_push(pcm, n);
+#else
+        /* The core makes samples regardless; discard them, or its buffer
+         * fills and every later one is counted as an overflow. */
+        int16_t discard[64];
+        while (atom_audio_drain(&g_atom, discard, 64u) > 0) {}
 #endif
 
         if (++field % (g_atom.cfg.field_hz * 5u) == 0) {
