@@ -80,6 +80,18 @@
 #define ATOM_KEY_COLS          10u
 #define ATOM_KEY_ROWS           6u
 #define ATOM_KEY_EVENT_QUEUE   64u  /* southbridge FIFO holds 31 (§6.2)   */
+#define ATOM_KEY_HELD_MAX       8u  /* keys down at once (§10.2)          */
+
+/* Replay pacing for keymatrix_field (§10.2). A press and its release
+ * can arrive in one 30 Hz poll, and the MOS cannot take keys that fast:
+ * OSRDCH (#FE94) waits for every key to be up, then six fields (#FB8A),
+ * and only then samples the matrix. So a replayed key must still be
+ * down at least seven fields after the previous release: MIN + GAP >= 7,
+ * with GAP >= 1 so the MOS sees all keys up. test_boot measured the
+ * edge — 4 + 3 types, 3 + 3 and 4 + 2 drop characters — and these
+ * leave a field of margin. Counted in fields, so it holds at 50 Hz. */
+#define ATOM_KEY_MIN_FIELDS     6u
+#define ATOM_KEY_GAP_FIELDS     2u
 
 /* ---- Tape (design.md §11) -------------------------------------------- */
 

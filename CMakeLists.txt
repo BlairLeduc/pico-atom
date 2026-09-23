@@ -15,9 +15,14 @@ set(PICO_ATOM_CORE_SOURCES
     src/core/atom.c
     src/core/bus.c
     src/core/i8255.c
+    src/core/keymap_picocalc.c
+    src/core/keymatrix.c
     src/core/m6502.c
     src/core/mc6847.c
+    src/core/romset.c
+    src/core/sha1.c
     src/core/snappool.c
+    src/core/via6522.c
 )
 
 # The MC6847 character ROM is not in the tree: §16 requires it be

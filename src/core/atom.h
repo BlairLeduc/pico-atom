@@ -15,6 +15,7 @@
 #include "i8255.h"
 #include "m6502.h"
 #include "mc6847.h"
+#include "via6522.h"
 
 /* Page descriptor flags (§7.1). */
 #define PAGE_ROM   0x01u  /* writes ignored                            */
@@ -38,7 +39,7 @@ typedef struct {
     bool text_space;      /* #0400-#3FFF */
     bool video;           /* #8000-#97FF */
     bool video_aperture;  /* #9800-#9FFF, absent on a stock machine */
-    bool via_fitted;      /* 6522 at #B800 */
+    bool via_fitted;      /* 6522 at #B800; the MOS needs it (via6522.h) */
     bool atomdos;         /* 8271 FDC at #0A00 — steals 4 bytes of page #0A */
     unsigned field_hz;    /* 50 or 60; §16 medium confidence, so configurable */
 } atom_config_t;
@@ -46,6 +47,7 @@ typedef struct {
 typedef struct atom_s {
     m6502_t  cpu;
     i8255_t  ppi;
+    via6522_t via;       /* inert unless cfg.via_fitted */
 
     /* No mc6847_t here. The guest's video state is VRAM plus the five
      * mode bits, and both are read out through atom_vram() and

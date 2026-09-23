@@ -110,7 +110,7 @@ populate fewer blocks; the populated set is configuration, not code (§7.2).
 | `#A000`–`#AFFF` | 4 KiB | Utility ROM socket |
 | `#B000`–`#B003` | 4 B | **INS8255 PPI** |
 | `#B400`–`#B403` | 4 B | Expansion / printer port |
-| `#B800`–`#B80F` | 16 B | 6522 VIA (optional) |
+| `#B800`–`#B80F` | 16 B | 6522 VIA (optional on the real machine; fitted by default here, §7.3) |
 | `#C000`–`#CFFF` | 4 KiB | Atom BASIC ROM |
 | `#D000`–`#DFFF` | 4 KiB | Floating-point ROM |
 | `#E000`–`#EFFF` | 4 KiB | AtomDOS / utility ROM |
@@ -557,6 +557,15 @@ partially and the 8255 mirrors every four bytes:
 
 The 8271 at `#0A00` sits inside RAM space, which is unusual and easy to get
 wrong: with AtomDOS enabled, four bytes of page `#0A` stop being RAM.
+
+**The VIA is fitted by default** even though it was optional on the real
+machine, because the MOS depends on it before the first prompt. It keeps the
+printer-enabled flag in the VIA's PCR and reads `#B80C` on every character it
+writes; if the CA2 bits (`& #0E`) are nonzero it waits on the printer's BUSY
+line at `#B801` bit 7. With no chip there, those reads return open bus, which
+is `#B8` in this model, and the MOS spins before it has printed `ACORN ATOM`.
+Every reference emulator fits the VIA too. Port A's BUSY input reads ready,
+since no printer is attached, so CTRL-B cannot hang the machine either.
 
 ---
 
@@ -1247,7 +1256,7 @@ class of bug in emulation.
 | 8255 port bit assignments (§2.3) | Atom service manual / theory of operation | high — cross-check anyway |
 | MC6847 mode table (§2.4) | MC6847 datasheet | high |
 | VDG mode bit order in port A bits 7–4 | Atom circuit diagram | **confirmed** — `A/G` is bit 4, `GM0`–`GM2` bits 5–7, read off the schematic. §2.3 had this right; an earlier §2.4 had `A/G` at bit 7 and has been corrected |
-| Keyboard matrix cell assignments (10×6) | Atom service manual keyboard table | **low** — transcribe; do not reconstruct |
+| Keyboard matrix cell assignments (10×6) | the kernel ROM's scan at `#FE71`, executed | **confirmed** — every cell pressed at the `>` prompt with and without SHIFT and the MOS's output read from VRAM; the table is in `keymap_picocalc.c` and `test_boot` re-checks it against the ROM |
 | `OSLOAD`/`OSSAVE` entry addresses and page-2 vectors (§11.2) | MOS disassembly | **low** |
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source | **medium** — affects §12.1 throughout |
 | `FS` low interval, ~6 % of a field (§12.1) | MC6847 datasheet, `FS` timing | **low** — `ATOM_FLYBACK_PERCENT`; software polls the edge, so the length matters less than that it exists |
@@ -1263,6 +1272,16 @@ carries rather than the renderer assuming it — 5 px in bits 5..1, rows 3..9 of
 the cell, MC6847 glyph order — is asserted against the data in
 `test/host/test_mc6847.c`, so a differently laid-out substitute fails loudly
 instead of rendering plausible-but-wrong glyphs.
+
+The keyboard matrix was settled from a primary source too, though not a
+document: the kernel ROM. Its scan at `#FE71` walks row bit 5 down to bit 0 and
+column 0 up to 9, counting `Y` down from `#3B`, so a key is
+`Y = row × 10 + 9 − col`. Pressing each of the 60 cells at the prompt, with
+and without SHIFT, and reading what the MOS wrote to VRAM gives the whole map,
+including the five cells that no key uses (the MOS decodes them as control
+codes `#08`–`#0C`) and the two arrow keys, which SHIFT reverses. The table is
+in `keymap_picocalc.c`, and `test_boot` types every entry through the real MOS
+whenever the ROMs are present.
 
 ---
 
