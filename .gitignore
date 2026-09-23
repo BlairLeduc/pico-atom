@@ -73,3 +73,6 @@ roms/*
 
 # Local run logs and scratch (tools/uart-log.sh); results worth keeping go in docs/.
 out/
+
+# graphify knowledge graph: derived, machine-local, rebuilt with /graphify.
+graphify-out/
