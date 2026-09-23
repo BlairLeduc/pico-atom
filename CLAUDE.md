@@ -41,7 +41,8 @@ real MOS bell: 387.64 Hz measured, against 387.60 Hz from the cycle count of
 the loop at `#FD18`. On a Plus 2 W on 2026-09-22 a BASIC loop rang the bell
 continuously for 10 minutes. Underruns and late refills stayed at zero, and
 the consumed sample rate measured against the microsecond timer held at
-36,620–36,626 Hz.
+36,620–36,626 Hz. By ear, the bell was heard on the speaker and read as
+~387 Hz on an uncalibrated phone app.
 
 **M6 is next** — tape phase 1 (ATM via OS traps), snapshots, the menu.
 

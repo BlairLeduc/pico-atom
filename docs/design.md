@@ -882,9 +882,11 @@ ran `10 P.$7;` / `20 G.10`, a continuous MOS bell typed in over UART1
 | I²C errors, dropped presents, dropped log lines | 0, 0, 0 |
 
 The consumed rate is the control quantity: it is the PWM wrap measured against
-an independent timer, and it did not move with the guest's load. The tone has
-not yet been checked by ear or measured acoustically; hardware notes §5.8's
-listening check covers the output stage, not this emulator's use of it.
+an independent timer, and it did not move with the guest's load. By ear, the
+MOS bell (`PRINT $7`) is audible from the PicoCalc's speaker. An uncalibrated
+phone app read it as ~387 Hz, against 387.60 Hz from the cycle count. That
+only confirms the pitch, like hardware notes §5.8's 439 Hz reading. It is not
+a calibrated measurement.
 
 ---
 
