@@ -636,6 +636,37 @@ is `#B8` in this model, and the MOS spins before it has printed `ACORN ATOM`.
 Every reference emulator fits the VIA too. Port A's BUSY input reads ready,
 since no printer is attached, so CTRL-B cannot hang the machine either.
 
+### 7.4 The 6522 VIA
+
+**The whole part, from M10** (`via6522.c`). Before M10 the ports, both timers
+and the interrupt logic were modelled, and the shift register and control
+lines were latched but did nothing. Nothing an Atom runs had needed more. The
+Atom Software Archive's 5,610 files were searched for VIA writes: none enables
+the shift register or a control-line interrupt, and only two utility ROMs write
+the PCR. The 97 files that write ACR `#E0` are all Arcade Game Designer games.
+They run T1 free as a 25 Hz frame clock (`#9C40` cycles) and poll IFR bit 6,
+which the M4 model already did. M10 completes the part anyway, so that nothing
+written for the chip meets a register that does not work:
+
+| Part | Behaviour |
+|---|---|
+| Ports | PA reads its pins and PB its output latch for output bits. With ACR bits 0 or 1, each port reads what its pins held at the last active edge of CA1 or CB1. `#B80F` reads and writes port A without touching the flags or handshaking. |
+| CA1, CB1 | Interrupt on the edge PCR bits 0 and 4 choose. CB1 is the shift clock's output while the chip makes that clock. |
+| CA2, CB2 | Input on either edge, with an independent flag that a port access leaves set. Handshake output: low on a read or write of port A (only a write, for port B), and high again on CA1 or CB1. Pulse output: one cycle low per access. Held low or high. CB2 is the shift register's data line while it shifts. |
+| T1 | One-shot or free-running, period latch + 2. With ACR bit 7 it drives PB7: low from the T1C-H write until a one-shot runs out, or a square wave when free-running. |
+| T2 | One-shot on Φ2, or counting falling edges on PB6 (ACR bit 5), flagging when the count reaches zero. |
+| Shift register | All eight modes: in or out, clocked by T2 (half-cycles of T2's low latch + 2), by Φ2 (a bit every two cycles), or by an external clock on CB1. Eight bits then flag SR, except free-running out, which recirculates without a flag. |
+
+On an Atom nothing is wired to the control lines or to port B, the user
+port, and no printer is emulated. The outside world is therefore a set of calls
+(`via6522_set_ca1()` and its kind, and `via6522_set_pb()` for the PB6 count)
+and fields to read. `test_via6522` drives the part through them, and a later
+user-port device would use the same calls. Timing is to the instruction, like
+the rest of the machine. The new state is in the snapshot (§11.5). A
+free-running shift under Φ2 is the only mode that has to be ticked
+cycle-exactly, and even then it is 16 steps a byte, out of line from the timers'
+per-instruction path.
+
 ---
 
 ## 8. Video: MC6847 → ST7789P
@@ -801,6 +832,33 @@ during active display produce visible interference; Atom programs wait for the
 `FS` flag in port C bit 7 to avoid it. The emulator models `FS` correctly, so
 well-behaved software behaves. Reproducing the *interference* is a v3 option
 (`--snow`), off by default: it is authentic, and it is also ugly and slow.
+
+### 8.7 Monochrome and the border
+
+**Built at M10**, as two settings on the menu's Display page (§13), both
+off by default.
+
+**Monochrome.** Most Atoms were sold without the colour board, and the stock
+machine shows only the VDG's luminance output. The mono palette is the
+datasheet's Y levels with no chroma. Lower voltage is brighter: 0.72 V for
+black, blue and red; 0.54 V for green, cyan, magenta and orange; 0.42 V for
+yellow and buff. They are scaled so black is black and 0.42 V is white, which
+gives three greys. So on a mono Atom, **blue and red are black**, and CG
+modes with CSS 0 show three levels, not four. Atomulator's mono palette keeps
+blue and red at mid-grey instead; §16 holds the levels until they are checked
+against the datasheet. The renderer takes the palette as a pointer, so the
+switch rebuilds the LUT once and costs nothing per pixel.
+
+**The border.** The VDG draws a border around its 256×192 active area: black
+in the alphanumeric and semigraphics modes, and green or buff (by CSS) in
+the graphics modes (`mc6847_border()`). With the setting on, the presenter
+fills the panel around the Atom rectangle with it. That is the top and
+status bands of §8.2 and the side strips, 53,248 pixels, about as many as the
+rectangle itself. So it is filled **only when its colour changes**: a mode
+change between text and graphics, or of CSS in graphics. It is not filled on
+every full redraw. With the setting off, the border is never filled, and
+the panel around the rectangle stays black from `lcd_init`, as before M10. A
+future status band will take its band back from the border.
 
 ---
 
@@ -1490,6 +1548,9 @@ lengths, CRC-32 of the payload), 96 bytes of CPU, 8255, VIA, 8271 and machine st
 written field by field, little-endian, then the whole 64 KiB address space —
 65,652 bytes in all. It is never a struct dumped from memory: `atom_t` holds
 pointers and padding, and a snapshot has to outlive the build that wrote it.
+M10 put the rest of the VIA (§7.4) into state bytes that had been reserved and
+written as zero. Each field is encoded so that zero is its reset state, so a
+file saved before M10 still loads, as a VIA with idle lines.
 
 **ROM bytes are not in it.** ROM pages go out as zeros and the SHA-1 of every ROM
 page goes in instead; a snapshot loads only into a machine whose ROMs hash the
@@ -1651,7 +1712,11 @@ controls, *Eject*, *Play*/*Stop* and *Rewind*, and lists `.uef` images beside
 the deck's state and how far through the tape it is (§11.3). M9 added a Disc
 page: left and right choose drive 0 or 1, and the images in `/atom/discs/` are
 listed with the drive each is in and a `P` if it is write-protected. The main
-page names each drive's image, and the keys-chosen note moved to the status row.
+page names each drive's image, and the keys-chosen note moved to the status row. M10
+added a Display page. It holds the screen, colour or mono, the VDG border
+on or off (§8.7), and the backlight, which moved there from the main page. A
+change shows at once, because the page itself is drawn through the renderer it
+changes.
 The table below is the full intent; machine and display settings wait
 for the milestones that give them something to set, and settings are not yet
 persisted to flash (§11.6).
@@ -1838,6 +1903,8 @@ class of bug in emulation.
 | VRAM byte wiring in alpha mode (§2.4) | the MOS and BASIC, executed | **confirmed** — bit 6 is `A/S` and `INT/EXT` (SG6), bit 7 is `INV`: the MOS's cursor is `#A0`, and `CLEAR 0` then `PLOT` writes `#40` plus one element bit per point; `test_boot` pins both |
 | SG6 colour from bits 7:6 (§2.4) | MC6847 datasheet; a reference emulator | **confirmed** — the datasheet's `C1:C0` = `D7:D6`, so yellow/red (cyan/orange with `CSS`); `CLEAR 0` + `PLOT` compared by eye against another Atom emulator on 2026-09-22 |
 | 2.4 kHz cassette reference period, port C bit 4 (§11.3) | Atom circuit diagram | **medium**: 416 cycles, 4 MHz ÷ 1664 = 2403.8 Hz, which MAME's Atom driver also uses. `ATOM_CASSETTE_REF_CYCLES`. The ROM reads a tape by its own loop timing, so only the speed of a signal-level save depends on it |
+| MC6847 luminance levels for the mono palette (§8.7) | MC6847 datasheet, composite output table | **medium**: 0.72 V for black, blue and red, 0.54 V for green, cyan, magenta and orange, 0.42 V for yellow and buff, written from memory of the table. Atomulator's mono palette disagrees for blue and red, which it draws mid-grey. `mc6847_palette_mono` |
+| 6522 shift rate under Φ2 (§7.4) | Rockwell R6522 datasheet, shift register timing | **medium**: a bit every two cycles, 16 for a byte, as b-em shifts. Nothing on the Atom uses these modes |
 | MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |
 
 The last one was settled the way this section asks. The table is XRoar's
@@ -1877,7 +1944,8 @@ Each milestone ends with something that runs and something that is measured.
 | **M6b** | Game keymaps (§10.5) | Galaxians played with the Games layout: `Left`/`Right` move, `]` fires, moving and firing at once — **done** 2026-09-23 on a Plus 2 W: Galaxians played with the layout, moving and firing at once (fire then on `Up`, moved to `]` after that run); Bouncing Babies played with a card layout its tape load chose |
 | **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to — **done** 2026-09-23 on a Plus 2 W: headroom 2.2–2.9× real time, 158–218 host cycles per guest instruction (§6.3); tier 2 ships, 1.12–1.19× for 25 KiB; tier 3 measured nothing; core 1's `sleep_us` was interrupting core 0, and fixing it was worth 1.11× |
 | **M8** | Tape phase 2 (UEF at signal level), turbo clock | a UEF image that phase 1 cannot load, loads — **done** 2026-09-23 on a Plus 2 W: Chuckie Egg's two-part UEF, 45 blocks through its own BASIC loader, loaded at 2.7–2.8× under turbo and was played (§11.3). On the host, the kernel's own `SAVE`, recorded at signal level, loads back through its own `LOAD`, and a headerless block loads through a loader phase 1 never sees |
-| **M9** | AtomDOS + 8271, 6522 VIA | an `.ssd` boots — **done** 2026-09-23 on a Plus 2 W: `*DOS`, `*CAT` off a 40-track image, `LOAD"INVADER"` read 19 sectors over tracks 35–37 and ran; `*SAVE` wrote the catalogue and two sectors and `*CAT` then listed the file; a disc changed from the menu was noticed and its catalogue read; Galaxians loaded off `games1.dsk` and was played. A track off the card takes 17–19 ms to read and 25–27 ms to write, with the guest parked; underruns and late refills stayed at zero. The VIA was fitted at M4 (§7.3); its shift register and handshake lines remain inert, as nothing on an Atom without a printer drives them |
+| **M9** | AtomDOS + 8271, 6522 VIA | an `.ssd` boots — **done** 2026-09-23 on a Plus 2 W: `*DOS`, `*CAT` off a 40-track image, `LOAD"INVADER"` read 19 sectors over tracks 35–37 and ran; `*SAVE` wrote the catalogue and two sectors and `*CAT` then listed the file; a disc changed from the menu was noticed and its catalogue read; Galaxians loaded off `games1.dsk` and was played. A track off the card takes 17–19 ms to read and 25–27 ms to write, with the guest parked; underruns and late refills stayed at zero. The VIA was fitted at M4 (§7.3); its shift register and handshake lines were completed at M10 |
+| **M10** | The whole 6522 (§7.4); monochrome and the VDG border (§8.7) | every VIA mode driven through its pins on the host, and the new state through a snapshot; the mono palette and the border colour asserted by execution; on a Plus 2 W, both settings switched from the menu and seen on the panel, and the perf workloads measured against M9 |
 
 M4 is the milestone that matters; everything before it is scaffolding and
 everything after it is refinement.

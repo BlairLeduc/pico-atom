@@ -15,12 +15,20 @@ typedef struct {
     uint16_t bands;     /* bands sent (24 for a full redraw)            */
     uint32_t pixels;    /* pixels on the wire                           */
     bool     full;      /* whole-rectangle redraw: mode change or forced */
+    bool     border;    /* the border was filled too                     */
 } display_stats_t;
 
 void display_init(const uint8_t *font);
 
+/* Colour or monochrome, and whether the VDG's border fills the panel
+ * around the Atom's rectangle (design.md §8.7). A change repaints
+ * everything at the next present. With the border off the panel around
+ * the rectangle is black, as it was before M10. */
+void display_set_look(bool mono, bool border);
+
 /* Present one snapshot. If its mode byte differs from the presented one,
- * the whole rectangle is redrawn — a mode or CSS change leaves VRAM
+ * the whole rectangle is redrawn, and the border too if its colour has
+ * changed — a mode or CSS change leaves VRAM
  * byte-identical, so a VRAM-only diff would find nothing (§8.4 step 1).
  * Otherwise only dirty band spans are sent. The snapshot and its mode
  * then become the shadow. */

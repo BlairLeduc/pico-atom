@@ -146,3 +146,10 @@ file and the line.
 **Snapshots** save and restore the whole machine from the menu, in four slots
 kept in `/atom/snaps/`. They contain no ROM bytes, and load only over the same
 ROMs.
+
+The menu's *Display* page switches the screen between colour and **mono**,
+which is how most Atoms looked without the colour board. In mono, blue and red
+are as dark as black. It also turns the **border** on or off. The border is
+the colour the video chip draws around its picture: black in text modes, and
+green or buff in the graphics modes. The backlight is on the same page.
+Neither setting is remembered across a power cycle yet.

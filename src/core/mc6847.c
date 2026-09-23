@@ -25,6 +25,26 @@ const uint16_t mc6847_palette[VDG_COLOUR_COUNT] = {
     [VDG_BLACK]   = RGB565(0x00, 0x00, 0x00),
 };
 
+/* A monochrome Atom: the VDG's luminance output alone, with no colour
+ * board to add chroma (§8.7). The datasheet's Y levels are 0.72 V for
+ * black, and for blue and red too, 0.54 V for green, cyan, magenta and
+ * orange, and 0.42 V for yellow and buff; lower is brighter. Scaled so
+ * that black is black and 0.42 V is white, that is three greys. §16
+ * holds these levels as unconfirmed. */
+#define GREY(y_mv) RGB565((720u - (y_mv)) * 255u / 300u, (720u - (y_mv)) * 255u / 300u, \
+                          (720u - (y_mv)) * 255u / 300u)
+const uint16_t mc6847_palette_mono[VDG_COLOUR_COUNT] = {
+    [VDG_GREEN]   = GREY(540u),
+    [VDG_YELLOW]  = GREY(420u),
+    [VDG_BLUE]    = GREY(720u),
+    [VDG_RED]     = GREY(720u),
+    [VDG_BUFF]    = GREY(420u),
+    [VDG_CYAN]    = GREY(540u),
+    [VDG_MAGENTA] = GREY(540u),
+    [VDG_ORANGE]  = GREY(540u),
+    [VDG_BLACK]   = GREY(720u),
+};
+
 /* CG modes: four colours, selected by CSS (§2.4). */
 static const uint8_t cg_set[2][4] = {
     { VDG_GREEN, VDG_YELLOW,  VDG_BLUE,    VDG_RED    },   /* CSS = 0 */
@@ -69,9 +89,15 @@ const mc6847_mode_info_t *mc6847_mode_info(uint8_t mode) {
     return &modes[1u + ((mode & VDG_GM_MASK) >> VDG_GM_SHIFT)];
 }
 
+vdg_colour_t mc6847_border(uint8_t mode) {
+    if (!(mode & VDG_AG)) return VDG_BLACK;
+    return (mode & VDG_CSS) ? VDG_BUFF : VDG_GREEN;
+}
+
 void mc6847_init(mc6847_t *v) {
     memset(v, 0, sizeof(*v));
     v->font = NULL;
+    v->pal = mc6847_palette;
     v->mode = 0xFFu;             /* force the first set_mode to build */
     mc6847_set_mode(v, 0);
 }
@@ -104,13 +130,13 @@ static void build_lut(mc6847_t *v) {
             /* Four pixels, two bits each, most significant pair first. */
             for (int p = 3; p >= 0; p--) {
                 unsigned idx = (b >> (p * 2)) & 3u;
-                uint16_t c = mc6847_palette[cg_set[css ? 1 : 0][idx]];
+                uint16_t c = v->pal[cg_set[css ? 1 : 0][idx]];
                 for (unsigned s = 0; s < info->x_scale; s++) e[n++] = c;
             }
         } else {
             /* Eight pixels, one bit each, most significant first. */
-            uint16_t fg = mc6847_palette[rg_fg[css ? 1 : 0]];
-            uint16_t bg = mc6847_palette[VDG_BLACK];
+            uint16_t fg = v->pal[rg_fg[css ? 1 : 0]];
+            uint16_t bg = v->pal[VDG_BLACK];
             for (int p = 7; p >= 0; p--) {
                 uint16_t c = ((b >> p) & 1u) ? fg : bg;
                 for (unsigned s = 0; s < info->x_scale; s++) e[n++] = c;
@@ -128,6 +154,14 @@ void mc6847_set_mode(mc6847_t *v, uint8_t mode) {
     build_lut(v);
 }
 
+void mc6847_set_mono(mc6847_t *v, bool mono) {
+    const uint16_t *pal = mono ? mc6847_palette_mono : mc6847_palette;
+    if (pal == v->pal) return;
+    v->pal = pal;
+    v->lut_valid = false;
+    build_lut(v);
+}
+
 /* ---- alpha and semigraphics (§2.4) ---------------------------------- */
 
 /* SG6 elements, two across and three down, each 4 px by 4 rows: bits 5
@@ -135,10 +169,10 @@ void mc6847_set_mode(mc6847_t *v, uint8_t mode) {
  * then right. The colour is C1:C0 = D7:D6 in CSS's set (MC6847 data
  * sheet), and since the Atom's D6 is what made this a graphics cell, only
  * the odd colours are reachable: yellow and red, or cyan and orange. */
-static void render_sg6_cell(uint8_t byte, unsigned row_in_cell, bool css,
-                            uint16_t *dst) {
-    uint16_t colour = mc6847_palette[(css ? 4u : 0u) | (byte >> 6)];
-    uint16_t black  = mc6847_palette[VDG_BLACK];
+static void render_sg6_cell(const mc6847_t *v, uint8_t byte, unsigned row_in_cell,
+                            bool css, uint16_t *dst) {
+    uint16_t colour = v->pal[(css ? 4u : 0u) | (byte >> 6)];
+    uint16_t black  = v->pal[VDG_BLACK];
 
     unsigned pair = row_in_cell / (MC6847_FONT_ROWS / 3u);   /* 0, 1, 2 */
     unsigned left_bit = 5u - 2u * pair;
@@ -153,8 +187,8 @@ static void render_sg6_cell(uint8_t byte, unsigned row_in_cell, bool css,
 static void render_alpha_cell(const mc6847_t *v, uint8_t byte,
                               unsigned row_in_cell, bool css, uint16_t *dst) {
     bool inverse = (byte & VDG_BYTE_INV) != 0;
-    uint16_t fg = mc6847_palette[css ? VDG_ORANGE : VDG_GREEN];
-    uint16_t bg = mc6847_palette[VDG_BLACK];
+    uint16_t fg = v->pal[css ? VDG_ORANGE : VDG_GREEN];
+    uint16_t bg = v->pal[VDG_BLACK];
     if (inverse) { uint16_t t = fg; fg = bg; bg = t; }
 
     uint8_t bits;
@@ -193,7 +227,7 @@ void mc6847_render_row(const mc6847_t *v, const uint8_t *vram,
             /* Bit 6 selects semigraphics 6; this is where the Atom's
              * chunky block graphics come from, and why plotting in
              * CLEAR 0 works at all (§2.4). */
-            if (byte & VDG_BYTE_SG6) render_sg6_cell(byte, row_in_cell, css, cell);
+            if (byte & VDG_BYTE_SG6) render_sg6_cell(v, byte, row_in_cell, css, cell);
             else                     render_alpha_cell(v, byte, row_in_cell, css, cell);
         }
         return;

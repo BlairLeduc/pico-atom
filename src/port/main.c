@@ -291,6 +291,7 @@ static void core1_main(void) {
     printf("  lcd          : spi1 configured at %lu Hz\n", (unsigned long)baud);
 
     display_init(FONT);
+    display_set_look(g_settings.mono, g_settings.border);
 #if PICO_ATOM_MEASURE_PRESENT
     display_test_pattern();
     printf("  M3 pattern   : white border on (32,64)-(287,255); corners "
