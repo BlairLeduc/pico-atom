@@ -21,13 +21,13 @@ void vdg_render_rgb(const mc6847_t *v, const uint8_t *vram, uint8_t *rgb) {
     }
 }
 
-/* ---- alpha/SG4 --------------------------------------------------------- */
+/* ---- alpha/SG6 --------------------------------------------------------- */
 
 /* VRAM byte for an ASCII character in $20..$5F. The glyph index is the
  * low six bits, which is what makes the MC6847 order (index 0 is '@')
- * come out right without a table (mc6847.h). Bit 6 is inverse. */
+ * come out right without a table (mc6847.h). Bit 7 is inverse. */
 static uint8_t screen_code(char c, bool inverse) {
-    return (uint8_t)(((uint8_t)c & 0x3Fu) | (inverse ? 0x40u : 0u));
+    return (uint8_t)(((uint8_t)c & 0x3Fu) | (inverse ? VDG_BYTE_INV : 0u));
 }
 
 static void put_text(uint8_t *vram, unsigned row, unsigned col,
@@ -50,12 +50,12 @@ static void fill_glyphs(uint8_t *vram, const mc6847_mode_info_t *info) {
     blank_page(vram);
     for (unsigned g = 0; g < 64u; g++) {
         vram[(g / 32u) * 32u + (g % 32u)]      = (uint8_t)g;
-        vram[(3u + g / 32u) * 32u + (g % 32u)] = (uint8_t)(g | 0x40u);
+        vram[(3u + g / 32u) * 32u + (g % 32u)] = (uint8_t)(g | VDG_BYTE_INV);
     }
 }
 
 /* §15.1's inverse-video text page: normal text, inverse text, the two
- * interleaved a character at a time, and SG4 blocks inline with text, as
+ * interleaved a character at a time, and SG6 blocks inline with text, as
  * a real Atom screen mixes them. */
 static void fill_text(uint8_t *vram, const mc6847_mode_info_t *info) {
     (void)info;
@@ -72,26 +72,30 @@ static void fill_text(uint8_t *vram, const mc6847_mode_info_t *info) {
     for (unsigned c = 0; alt[c]; c++)
         vram[10u * 32u + c] = screen_code(alt[c], (c & 1u) != 0);
 
-    /* A text label boxed in by SG4 cells in every colour. */
+    /* A text label boxed in by SG6 cells, alternating the two colours
+     * bit 7 can pick: a bottom bar above, a top bar below. */
     for (unsigned c = 0; c < 32u; c++) {
-        vram[12u * 32u + c] = (uint8_t)(0x80u | ((c & 7u) << 4) | 0x3u);
-        vram[14u * 32u + c] = (uint8_t)(0x80u | ((c & 7u) << 4) | 0xCu);
+        uint8_t colour = (c & 1u) ? VDG_BYTE_INV : 0u;
+        vram[12u * 32u + c] = (uint8_t)(VDG_BYTE_SG6 | colour | 0x03u);
+        vram[14u * 32u + c] = (uint8_t)(VDG_BYTE_SG6 | colour | 0x30u);
     }
-    put_text(vram, 13, 0, "SG4 ABOVE AND BELOW THIS LINE", false);
+    put_text(vram, 13, 0, "SG6 ABOVE AND BELOW THIS LINE", false);
 
     put_text(vram, 15, 0, ">", false);
     vram[15u * 32u + 1u] = screen_code(' ', true);   /* a block cursor */
 }
 
-/* Every SG4 cell: the 16 quadrant patterns across, the 8 colours down,
- * each cell separated by a blank one so a quadrant bleeding into its
- * neighbour shows. */
-static void fill_sg4(uint8_t *vram, const mc6847_mode_info_t *info) {
+/* Every SG6 cell: the 64 element patterns, 16 to a row with a blank cell
+ * between each, so an element bleeding into its neighbour shows. Rows
+ * 0-6 have bit 7 clear, rows 8-14 have it set: the two colours the
+ * Atom's wiring leaves reachable. */
+static void fill_sg6(uint8_t *vram, const mc6847_mode_info_t *info) {
     (void)info;
     blank_page(vram);
-    for (unsigned c = 0; c < 8u; c++)
-        for (unsigned q = 0; q < 16u; q++)
-            vram[(c * 2u) * 32u + q * 2u] = (uint8_t)(0x80u | (c << 4) | q);
+    for (unsigned c = 0; c < 2u; c++)
+        for (unsigned e = 0; e < 64u; e++)
+            vram[(c * 8u + (e / 16u) * 2u) * 32u + (e % 16u) * 2u] =
+                (uint8_t)(VDG_BYTE_SG6 | (c ? VDG_BYTE_INV : 0u) | e);
 }
 
 /* ---- graphics ---------------------------------------------------------- */
@@ -156,7 +160,7 @@ static void fill_graphics(uint8_t *vram, const mc6847_mode_info_t *info) {
 const vdg_scene_t vdg_scenes[] = {
     { "alpha-glyphs", 0,       true,  fill_glyphs   },
     { "alpha-text",   0,       true,  fill_text     },
-    { "alpha-sg4",    0,       false, fill_sg4      },
+    { "alpha-sg6",    0,       false, fill_sg6      },
     { "cg1",          GFX(0u), false, fill_graphics },
     { "rg1",          GFX(1u), false, fill_graphics },
     { "cg2",          GFX(2u), false, fill_graphics },

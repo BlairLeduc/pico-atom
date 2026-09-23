@@ -52,8 +52,8 @@ uint8_t mc6847_pack_mode(uint8_t port_a_nibble, bool css) {
  * 256, rows * y_scale == 192, bytes_per_row * rows == vram_bytes — are
  * asserted by test_mc6847.c rather than trusted here. */
 static const mc6847_mode_info_t modes[9] = {
-    /* index 0 is alpha/SG4; 1..8 are GM2:0 + 1 */
-    { VDG_ALPHA, "Alpha/SG4", 32,  16, 8, 12, 8,  512  },
+    /* index 0 is alpha/SG6; 1..8 are GM2:0 + 1 */
+    { VDG_ALPHA, "Alpha/SG6", 32,  16, 8, 12, 8,  512  },
     { VDG_CG,    "CG1",       16,  64, 4,  3, 16, 1024 },
     { VDG_RG,    "RG1",       16,  64, 2,  3, 16, 1024 },
     { VDG_CG,    "CG2",       32,  64, 2,  3, 8,  2048 },
@@ -87,7 +87,7 @@ static void build_lut(mc6847_t *v) {
     bool css = (v->mode & VDG_CSS) != 0;
 
     if (info->kind == VDG_ALPHA) {
-        /* Alpha and SG4 are generated per character cell, not through a
+        /* Alpha and SG6 are generated per character cell, not through a
          * byte LUT, because a cell's appearance depends on the row
          * within it as well as on the byte. */
         v->lut_px = 0;
@@ -130,27 +130,29 @@ void mc6847_set_mode(mc6847_t *v, uint8_t mode) {
 
 /* ---- alpha and semigraphics (§2.4) ---------------------------------- */
 
-/* SG4 quadrants: bit 3 top-left, bit 2 top-right, bit 1 bottom-left,
- * bit 0 bottom-right. Each quadrant is half the cell in each direction. */
-static void render_sg4_cell(uint8_t byte, unsigned row_in_cell,
+/* SG6 elements, two across and three down, each 4 px by 4 rows: bits 5
+ * and 4 are the top pair, 3 and 2 the middle, 1 and 0 the bottom, left
+ * then right. The colour is C1:C0 = D7:D6 in CSS's set (MC6847 data
+ * sheet), and since the Atom's D6 is what made this a graphics cell, only
+ * the odd colours are reachable: yellow and red, or cyan and orange. */
+static void render_sg6_cell(uint8_t byte, unsigned row_in_cell, bool css,
                             uint16_t *dst) {
-    uint16_t colour = mc6847_palette[(byte >> 4) & 7u];
+    uint16_t colour = mc6847_palette[(css ? 4u : 0u) | (byte >> 6)];
     uint16_t black  = mc6847_palette[VDG_BLACK];
 
-    bool lower = row_in_cell >= (MC6847_FONT_ROWS / 2u);
-    unsigned left_bit  = lower ? 1u : 3u;
-    unsigned right_bit = lower ? 0u : 2u;
+    unsigned pair = row_in_cell / (MC6847_FONT_ROWS / 3u);   /* 0, 1, 2 */
+    unsigned left_bit = 5u - 2u * pair;
 
-    uint16_t l = ((byte >> left_bit)  & 1u) ? colour : black;
-    uint16_t r = ((byte >> right_bit) & 1u) ? colour : black;
+    uint16_t l = ((byte >> left_bit) & 1u) ? colour : black;
+    uint16_t r = ((byte >> (left_bit - 1u)) & 1u) ? colour : black;
 
-    for (unsigned x = 0; x < 4u; x++) dst[x]     = l;
-    for (unsigned x = 4; x < 8u; x++) dst[x]     = r;
+    for (unsigned x = 0; x < 4u; x++) dst[x] = l;
+    for (unsigned x = 4; x < 8u; x++) dst[x] = r;
 }
 
 static void render_alpha_cell(const mc6847_t *v, uint8_t byte,
                               unsigned row_in_cell, bool css, uint16_t *dst) {
-    bool inverse = (byte & 0x40u) != 0;
+    bool inverse = (byte & VDG_BYTE_INV) != 0;
     uint16_t fg = mc6847_palette[css ? VDG_ORANGE : VDG_GREEN];
     uint16_t bg = mc6847_palette[VDG_BLACK];
     if (inverse) { uint16_t t = fg; fg = bg; bg = t; }
@@ -189,11 +191,11 @@ void mc6847_render_row(const mc6847_t *v, const uint8_t *vram,
         for (unsigned c = 0; c < info->bytes_per_row; c++) {
             uint8_t byte = p[c];
             uint16_t *cell = dst + c * 8u;
-            /* Bit 7 selects semigraphics; this is where the Atom's chunky
-             * block graphics come from, and why plotting in CLEAR 0
-             * works at all (§2.4). */
-            if (byte & 0x80u) render_sg4_cell(byte, row_in_cell, cell);
-            else              render_alpha_cell(v, byte, row_in_cell, css, cell);
+            /* Bit 6 selects semigraphics 6; this is where the Atom's
+             * chunky block graphics come from, and why plotting in
+             * CLEAR 0 works at all (§2.4). */
+            if (byte & VDG_BYTE_SG6) render_sg6_cell(byte, row_in_cell, css, cell);
+            else                     render_alpha_cell(v, byte, row_in_cell, css, cell);
         }
         return;
     }

@@ -179,7 +179,7 @@ static void measure_present(void) {
     /* CG1: 64 rows generated, 192 sent — the vertical-reuse path. */
     measure_full("full-cg1", cg1);
 
-    /* Alpha: a page of every glyph, some inverse, some SG4. */
+    /* Alpha: a page of every glyph, some inverse, some SG6. */
     for (unsigned i = 0; i < 512; i++) s_scene[i] = (uint8_t)(i & 0xFFu);
     measure_full("full-alpha", alpha);
     measure_partial("alpha-line", alpha, 3u * 32u, 32u);

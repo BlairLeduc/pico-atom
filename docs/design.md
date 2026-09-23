@@ -163,7 +163,7 @@ Atom BASIC's `CLEAR n` maps onto these:
 
 | `A/G` | `GM2:0` | VDG mode | Resolution | Colours | VRAM | Atom |
 |:--:|:--:|---|---|---:|---:|---|
-| 0 | — | Alpha / SG4 | 32×16 chars | 2 or 8 | 512 B | `CLEAR 0` |
+| 0 | — | Alpha / SG6 | 32×16 chars, 64×48 blocks | 2 + 4 | 512 B | `CLEAR 0` |
 | 1 | 000 | CG1 | 64×64 | 4 | 1024 B | `CLEAR 1a` |
 | 1 | 001 | RG1 | 128×64 | 2 | 1024 B | `CLEAR 1b` |
 | 1 | 010 | CG2 | 128×64 | 4 | 2048 B | `CLEAR 2a` |
@@ -178,14 +178,23 @@ Every mode presents as **256×192** on screen; the VDG stretches horizontally
 the same, so the host display geometry is a single fixed 256×192 rectangle
 regardless of guest mode (§8.2).
 
-In alpha mode the Atom wires VRAM data bits 7 and 6 to the VDG's `A/S` and `INV`
-pins, so per character byte:
+In alpha mode the Atom wires VRAM data bit 6 to the VDG's `A/S` **and**
+`INT/EXT` pins and bit 7 to `INV`, so per character byte:
 
-- bit 7 = 0 → alphanumeric; bit 6 = 1 → inverse video; bits 5–0 select one of 64
-  glyphs from the VDG's internal 5×7-in-8×12 character ROM.
-- bit 7 = 1 → **semigraphics 4**: bits 3–0 are the four quadrant on/off flags,
-  bits 6–4 the colour. This is where the Atom's chunky block graphics come from,
-  and it is why plotting in `CLEAR 0` works at all.
+- bit 6 = 0 → alphanumeric: bits 5–0 select one of 64 glyphs from the VDG's
+  internal 5×7-in-8×12 character ROM, and bit 7 = 1 draws it in inverse video.
+  The MOS draws its cursor by setting bit 7 of the cell under it, and shows
+  lower case as inverse capitals.
+- bit 6 = 1 → **semigraphics 6**, because `INT/EXT` is high whenever `A/S` is:
+  bits 5–0 are six elements, two across and three down (bits 5 and 4 the top
+  pair, 1 and 0 the bottom), and the colour is `C1:C0` = bits 7:6 in `CSS`'s
+  set. Bit 6 is always 1 here, so only yellow and red (or cyan and orange) are
+  reachable. This is where the Atom's chunky block graphics come from:
+  `CLEAR 0` is 64×48, and `PLOT` sets one element bit per point.
+
+An earlier version of this section had bits 7 and 6 the other way round, with
+bit 7 selecting SG4. That rendered the cursor as an empty graphics cell, which
+is how it was caught on hardware; §16 records how it was settled.
 
 Colour sets: alpha `CSS`=0 green-on-black, `CSS`=1 orange-on-black. RG modes
 black + green or black + buff. CG modes green/yellow/blue/red or
@@ -636,8 +645,8 @@ Vertical stretch is free: the ×V column above is a repeat count, and a repeated
 row re-sends the **same line buffer** to the next window rows without
 regenerating it. CG1 therefore generates 64 rows and transmits 192.
 
-Alpha/SG4 mode takes a different generator — per character cell, select glyph
-row from the character ROM or synthesise the SG4 quadrant pattern, then expand
+Alpha/SG6 mode takes a different generator — per character cell, select glyph
+row from the character ROM or synthesise the SG6 element pattern, then expand
 through the two-colour path with the cell's foreground and background. 32 cells
 per row, 12 rows per cell, 16 cell rows.
 
@@ -1195,7 +1204,7 @@ link-time fact rather than a hope (hardware notes §2.3).
 | **Klaus Dormann `6502_functional_test`** | must run to completion. Non-negotiable; it is the difference between an emulator and a plausible one. |
 | **Bruce Clark decimal mode test** | must pass, including NMOS flag behaviour. |
 | Cycle-count table | every opcode's cycle count and page-cross penalty asserted against the published table. |
-| MC6847 golden images | render fixed VRAM contents in each of the nine modes, both colour sets, compare to committed PPMs. Includes an SG4 pattern and an inverse-video text page. |
+| MC6847 golden images | render fixed VRAM contents in each of the nine modes, both colour sets, compare to committed PPMs. Includes every SG6 pattern and an inverse-video text page. |
 | 8255 | port C nibble separation, BSR writes, mode-nibble-vs-column-nibble independence. |
 | Keymap | every PicoCalc code maps to exactly one Atom cell; no binding uses a chord the southbridge cannot deliver (§10.3); the table is a bijection where it claims to be. |
 | Tape | ATM round trip; CUTS encode → decode round trip at the bit level. |
@@ -1262,6 +1271,8 @@ class of bug in emulation.
 | `FS` low interval, ~6 % of a field (§12.1) | MC6847 datasheet, `FS` timing | **low** — `ATOM_FLYBACK_PERCENT`; software polls the edge, so the length matters less than that it exists |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
 | 8271 base address `#0A00` (§7.3) | AtomDOS documentation | medium |
+| VRAM byte wiring in alpha mode (§2.4) | the MOS and BASIC, executed | **confirmed** — bit 6 is `A/S` and `INT/EXT` (SG6), bit 7 is `INV`: the MOS's cursor is `#A0`, and `CLEAR 0` then `PLOT` writes `#40` plus one element bit per point; `test_boot` pins both |
+| SG6 colour from bits 7:6 (§2.4) | MC6847 datasheet; a real Atom or reference emulator | **medium** — follows the datasheet's `C1:C0` = `D7:D6`; not yet seen against a real machine |
 | MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |
 
 The last one was settled the way this section asks. The table is XRoar's
@@ -1329,7 +1340,7 @@ everything after it is refinement.
 
 - Acorn Atom Technical Manual and circuit diagram — 8255 wiring, keyboard
   matrix, VDG mode bit order.
-- Motorola **MC6847** datasheet — mode table, SG4 encoding, character ROM,
+- Motorola **MC6847** datasheet — mode table, SG6 encoding, character ROM,
   field timing.
 - MOS/BASIC ROM disassemblies — entry points, page-2 indirection vectors.
 - Klaus Dormann, *6502 functional tests*; Bruce Clark, *Decimal mode in the

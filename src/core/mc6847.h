@@ -111,6 +111,18 @@ static inline uint8_t mc6847_glyph_ascii(uint8_t index) {
     return (uint8_t)(0x20u + ((index + 0x20u) & 0x3Fu));
 }
 
+/* ---- how the Atom wires a VRAM byte, in alpha mode (§2.4) ------------ */
+
+/* D6 drives both A/S and INT/EXT, so a byte with bit 6 set is a
+ * semigraphics-6 cell: six elements in bits 5..0, two wide and three
+ * high, colour from D7:D6 as C1:C0. D7 drives INV, which inverts an
+ * alphanumeric cell and is otherwise only a colour bit. Settled by
+ * executing the ROMs, not read off a table (§16): the MOS draws its
+ * cursor by setting bit 7 of a space, and BASIC's CLEAR 0 fills the
+ * screen with #40 and PLOTs one element bit per point, 64 x 48. */
+#define VDG_BYTE_INV   0x80u
+#define VDG_BYTE_SG6   0x40u
+
 /* ---- the VDG ---------------------------------------------------------- */
 
 typedef struct {

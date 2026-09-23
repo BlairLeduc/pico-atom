@@ -18,6 +18,8 @@
 
 #include "atom.h"
 #include "keymatrix.h"
+#include "mc6847.h"
+#include "mc6847_font.h"
 #include "romset.h"
 #include "test_util.h"
 
@@ -180,7 +182,52 @@ int main(void) {
           m.cpu.undoc_op, m.cpu.undoc_pc);
     booted = m;
 
+    /* ---- the VRAM byte's wiring, as the ROMs use it (mc6847.h) ------ *
+     * The MOS draws its cursor by setting bit 7 of the cell, so bit 7
+     * must be INV, and the cursor must render lit: this is the check that
+     * would have caught it being drawn as an empty graphics cell. */
+    CHECK(vram()[2 * 32 + 1] == (VDG_BYTE_INV | 0x20u), "cursor byte 0x%02X",
+          vram()[2 * 32 + 1]);
+#if PICO_ATOM_HAVE_FONT
+    {
+        static mc6847_t vdg;
+        uint16_t row[ATOM_SCREEN_W];
+        mc6847_init(&vdg);
+        mc6847_set_font(&vdg, font_6847);
+        mc6847_set_mode(&vdg, atom_vdg_mode(&m));
+        mc6847_render_row(&vdg, vram(), 2 * 12 + 5, row);   /* mid-cell */
+        CHECK(row[8] == mc6847_palette[VDG_GREEN] && row[15] == mc6847_palette[VDG_GREEN],
+              "the cursor cell should render as a solid block");
+    }
+#endif
+
+    /* BASIC's CLEAR 0 is 64 x 48 semigraphics 6: #40 is an empty cell,
+     * and PLOT sets one element bit per point, top-left bit 5 to
+     * bottom-right bit 0, with y counting up from the bottom. */
+    {
+        static const struct { const char *plot; unsigned cell; uint8_t byte; } pts[] = {
+            { "PLOT 13,0,47\n",  0,        0x60 },
+            { "PLOT 13,1,47\n",  0,        0x50 },
+            { "PLOT 13,0,46\n",  0,        0x48 },
+            { "PLOT 13,1,46\n",  0,        0x44 },
+            { "PLOT 13,0,45\n",  0,        0x42 },
+            { "PLOT 13,1,45\n",  0,        0x41 },
+            { "PLOT 13,0,44\n",  32,       0x60 },
+            { "PLOT 13,63,0\n",  15 * 32 + 31, 0x41 },
+        };
+        for (size_t i = 0; i < sizeof pts / sizeof pts[0]; i++) {
+            restore();
+            type("CLEAR 0\n");
+            CHECK(vram()[5 * 32 + 5] == VDG_BYTE_SG6, "CLEAR 0 fills with #40, got 0x%02X",
+                  vram()[5 * 32 + 5]);
+            type(pts[i].plot);
+            CHECK(vram()[pts[i].cell] == pts[i].byte, "%.12s: cell %u is 0x%02X, want 0x%02X",
+                  pts[i].plot, pts[i].cell, vram()[pts[i].cell], pts[i].byte);
+        }
+    }
+
     /* ---- M4's line: the prompt accepts PRINT 2+2 ---------------------- */
+    restore();
     type("PRINT 2+2\n");
     CHECK(strcmp(row_text(2), ">PRINT 2+2") == 0, "typed: '%s'", row_text(2));
     /* Right-justified in the default field of eight (@=8), and Atom

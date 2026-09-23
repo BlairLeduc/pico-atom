@@ -111,7 +111,7 @@ static uint8_t glyph(char c, bool inverse) {
     if (a >= 'a' && a <= 'z') a = (uint8_t)(a - 32);
     uint8_t g = (a >= 0x40u && a < 0x60u) ? (uint8_t)(a - 0x40u)
               : (a >= 0x20u && a < 0x40u) ? a : (uint8_t)' ';
-    return inverse ? (uint8_t)(g | 0x40u) : g;
+    return inverse ? (uint8_t)(g | VDG_BYTE_INV) : g;
 }
 
 static void put(uint8_t *vram, int row, int col, const char *s, bool inverse) {

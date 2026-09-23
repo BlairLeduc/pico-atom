@@ -169,33 +169,54 @@ int main(void) {
               "CG1 display row 3 should be source row 1");
     }
 
-    /* ---- SG4: four quadrants and a colour in the top nibble ---------- */
+    /* ---- SG6: six elements, colour from bits 7 and 6 ---------------- */
     {
         mc6847_init(&g_vdg);
-        mc6847_set_mode(&g_vdg, mode_of(false, 0, false));  /* alpha/SG4 */
+        mc6847_set_mode(&g_vdg, mode_of(false, 0, false));  /* alpha/SG6 */
         memset(g_vram, 0, sizeof(g_vram));
 
-        /* bit 7 set -> semigraphics; colour 3 (red); top-left quadrant. */
-        g_vram[0] = (uint8_t)(0x80u | (3u << 4) | 0x08u);
+        /* Bit 6 -> semigraphics; bit 7 clear -> C1:C0 = 01, yellow;
+         * top-left element only. */
+        g_vram[0] = (uint8_t)(VDG_BYTE_SG6 | 0x20u);
 
-        mc6847_render_row(&g_vdg, g_vram, 0, g_row);       /* upper half */
-        CHECK(g_row[0] == mc6847_palette[VDG_RED], "SG4 top-left should be lit");
-        CHECK(g_row[3] == mc6847_palette[VDG_RED], "SG4 top-left spans four pixels");
-        CHECK(g_row[4] == mc6847_palette[VDG_BLACK], "SG4 top-right should be dark");
+        mc6847_render_row(&g_vdg, g_vram, 0, g_row);
+        CHECK(g_row[0] == mc6847_palette[VDG_YELLOW], "SG6 top-left should be lit");
+        CHECK(g_row[3] == mc6847_palette[VDG_YELLOW], "SG6 element spans four pixels");
+        CHECK(g_row[4] == mc6847_palette[VDG_BLACK], "SG6 top-right should be dark");
+        mc6847_render_row(&g_vdg, g_vram, 3, g_row);
+        CHECK(g_row[0] == mc6847_palette[VDG_YELLOW], "SG6 element spans four rows");
+        mc6847_render_row(&g_vdg, g_vram, 4, g_row);
+        CHECK(g_row[0] == mc6847_palette[VDG_BLACK], "SG6 middle-left should be dark");
 
-        mc6847_render_row(&g_vdg, g_vram, 6, g_row);       /* lower half */
-        CHECK(g_row[0] == mc6847_palette[VDG_BLACK], "SG4 bottom-left should be dark");
-
-        /* All four quadrants are reachable and independent. */
-        const unsigned quad_bit[4] = { 3, 2, 1, 0 };
-        const unsigned quad_y[4]   = { 0, 0, 6, 6 };
-        const unsigned quad_x[4]   = { 0, 4, 0, 4 };
-        for (unsigned q = 0; q < 4u; q++) {
-            g_vram[0] = (uint8_t)(0x80u | (1u << 4) | (1u << quad_bit[q]));
-            mc6847_render_row(&g_vdg, g_vram, quad_y[q], g_row);
-            CHECK(g_row[quad_x[q]] == mc6847_palette[VDG_YELLOW],
-                  "SG4 quadrant %u should light at (%u,%u)", q, quad_x[q], quad_y[q]);
+        /* All six elements are reachable and independent, in the order
+         * BASIC's PLOT sets them (test_boot pins that against the ROM). */
+        const unsigned el_x[6] = { 4, 0, 4, 0, 4, 0 };      /* bit 0..5 */
+        const unsigned el_y[6] = { 8, 8, 4, 4, 0, 0 };
+        for (unsigned e = 0; e < 6u; e++) {
+            g_vram[0] = (uint8_t)(VDG_BYTE_SG6 | (1u << e));
+            for (unsigned y = 0; y < 12u; y += 4u) {
+                mc6847_render_row(&g_vdg, g_vram, y, g_row);
+                for (unsigned x = 0; x < 8u; x += 4u) {
+                    bool want = (x == el_x[e] && y == el_y[e]);
+                    CHECK((g_row[x] == mc6847_palette[VDG_YELLOW]) == want,
+                          "SG6 bit %u at (%u,%u) should be %s", e, x, y,
+                          want ? "lit" : "dark");
+                }
+            }
         }
+
+        /* Bit 7 is C1: red, and cyan/orange under CSS. It is not an
+         * inverse in a graphics cell. */
+        g_vram[0] = (uint8_t)(VDG_BYTE_INV | VDG_BYTE_SG6 | 0x20u);
+        mc6847_render_row(&g_vdg, g_vram, 0, g_row);
+        CHECK(g_row[0] == mc6847_palette[VDG_RED], "bit 7 set: red");
+        CHECK(g_row[4] == mc6847_palette[VDG_BLACK], "bit 7 does not invert SG6");
+        mc6847_set_mode(&g_vdg, mode_of(false, 0, true));
+        mc6847_render_row(&g_vdg, g_vram, 0, g_row);
+        CHECK(g_row[0] == mc6847_palette[VDG_ORANGE], "bit 7 set, CSS: orange");
+        g_vram[0] = (uint8_t)(VDG_BYTE_SG6 | 0x20u);
+        mc6847_render_row(&g_vdg, g_vram, 0, g_row);
+        CHECK(g_row[0] == mc6847_palette[VDG_CYAN], "bit 7 clear, CSS: cyan");
     }
 
     /* ---- alpha: glyph lookup, inverse video, and the missing font ---- */
@@ -240,8 +261,8 @@ int main(void) {
         mc6847_render_row(&g_vdg, g_vram, 4, g_row);
         CHECK(g_row[0] == mc6847_palette[VDG_BLACK], "an empty glyph row is background");
 
-        /* Bit 6 inverts. */
-        g_vram[0] = (uint8_t)(5u | 0x40u);
+        /* Bit 7 inverts; it is how the MOS draws its cursor. */
+        g_vram[0] = (uint8_t)(5u | VDG_BYTE_INV);
         mc6847_render_row(&g_vdg, g_vram, 3, g_row);
         CHECK(g_row[0] == mc6847_palette[VDG_BLACK], "inverse video should swap fg and bg");
         CHECK(g_row[1] == mc6847_palette[VDG_GREEN], "inverse video should swap fg and bg");
