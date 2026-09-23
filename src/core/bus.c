@@ -7,6 +7,7 @@
 
 #include "bus.h"
 
+#include "hot.h"
 #include "i8255.h"
 #include "via6522.h"
 
@@ -17,7 +18,7 @@
 
 #define FDC_PAGE     0x0Au
 
-uint8_t bus_read_slow(atom_t *m, uint16_t a) {
+uint8_t ATOM_HOT1(bus_read_slow)(atom_t *m, uint16_t a) {
     /* Page #0A, AtomDOS enabled: 4 bytes of FDC, 252 bytes of ordinary
      * RAM. This page has no fast path precisely so that this split can
      * happen — see the note in atom_init (§7.1). */
@@ -63,7 +64,7 @@ uint8_t bus_read_slow(atom_t *m, uint16_t a) {
     return m->open_bus;
 }
 
-void bus_write_slow(atom_t *m, uint16_t a, uint8_t v) {
+void ATOM_HOT1(bus_write_slow)(atom_t *m, uint16_t a, uint8_t v) {
     if ((a >> 8) == FDC_PAGE && m->cfg.atomdos) {
         if (IS_FDC(a)) {
             /* M9: fdc_write(m, a & 3, v). */

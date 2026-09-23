@@ -2,6 +2,8 @@
 
 #include "via6522.h"
 
+#include "hot.h"
+
 void via6522_reset(via6522_t *v) {
     /* A reset clears every register except the timers, the latches and
      * the shift register, which come up undefined; zero stands in. */
@@ -14,7 +16,7 @@ static uint8_t port_in(uint8_t out, uint8_t ddr, uint8_t pins) {
     return (uint8_t)((out & ddr) | (pins & (uint8_t)~ddr));
 }
 
-uint8_t via6522_read(via6522_t *v, uint8_t reg) {
+uint8_t ATOM_HOT1(via6522_read)(via6522_t *v, uint8_t reg) {
     switch (reg & 15u) {
     case VIA_ORB:    return port_in(v->orb, v->ddrb, v->in_b);
     case VIA_ORA:
@@ -39,7 +41,7 @@ uint8_t via6522_read(via6522_t *v, uint8_t reg) {
     }
 }
 
-void via6522_write(via6522_t *v, uint8_t reg, uint8_t val) {
+void ATOM_HOT1(via6522_write)(via6522_t *v, uint8_t reg, uint8_t val) {
     switch (reg & 15u) {
     case VIA_ORB:    v->orb = val; break;
     case VIA_ORA:
@@ -83,7 +85,7 @@ void via6522_write(via6522_t *v, uint8_t reg, uint8_t val) {
     }
 }
 
-void via6522_tick(via6522_t *v, uint32_t cycles) {
+void ATOM_HOT1(via6522_tick)(via6522_t *v, uint32_t cycles) {
     v->t1 -= (int32_t)cycles;
     while (v->t1 < 0) {
         if (v->t1_armed) v->ifr |= VIA_INT_T1;

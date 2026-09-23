@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M6b are done** (`docs/design.md` §17).
+**Implementation status: M0–M7 are done** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -66,7 +66,18 @@ layout when that tape loads. `test_keymap` checks the overlay and the parser;
 `test_boot` has a BASIC loop read ports B and C while keys are held under a
 layout. On a Plus 2 W on 2026-09-23 Galaxians was played with the layout,
 moving and firing at once, and Bouncing Babies with a card file chosen by its
-tape load. Next is M7, the perf pass.
+tape load.
+
+M7 is done: the perf pass. The heartbeat's `perf` line reports how much of
+core 0 the guest takes, the headroom (guest cycles per microsecond inside
+`atom_run_field`) and host cycles per guest instruction. `tools/perf-run.sh`
+types four workloads at the guest and `tools/perf-summary.sh` reduces the
+logs. Measured on a Plus 2 W on 2026-09-23 (design.md §6.3): 158–218 host
+cycles per instruction, 35–46 % of core 0, headroom 2.2–2.9×. That is 3–4×
+the old estimate. Hot code moves to SRAM in tiers (`src/core/hot.h`), and
+tier 2 ships: 1.12–1.19× for 25 KiB. Core 1's `sleep_us` was taking an
+alarm IRQ on core 0 every 20 µs; replacing it was worth 1.11× on its own
+(hardware-notes.md §9.7). Next is M8, tape at signal level.
 
 What does not exist: tape at signal level (M8), discs and the 8271 (M9),
 the status band, settings persisted to flash (§11.6).
@@ -142,6 +153,7 @@ test's decimal section plus exhaustive valid-BCD checks in
 | Path | Holds |
 |---|---|
 | `src/core/config.h` | every fixed capacity; §5's budget lives or dies here |
+| `src/core/hot.h` | `ATOM_HOT1`/`ATOM_HOT2`: which functions go to SRAM at `PICO_ATOM_RAM_TIER`, with no SDK include |
 | `src/core/m6502.*` | the interpreter — switch dispatch, explicit cycle accounting |
 | `src/core/bus.*` | `bus_read`/`bus_write` inline fast path, slow path in the `.c` |
 | `src/core/i8255.*` | the PPI; generic Intel part, Atom wiring as accessors |
@@ -179,6 +191,7 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `tools/mkfont.py` | character ROM -> `mc6847_font.h`, and `--dump` to proof it |
 | `tools/vdg-ppm.c` | renders the scenes to PPM; `vdg-ppm test/golden` regenerates the goldens |
 | `tools/uart-log.sh`, `uart-type.sh` | capture UART1 to a file; type at the guest over it |
+| `tools/perf-run.sh`, `perf-summary.sh` | M7's measurement: one boot per workload, then one line per workload from the heartbeats |
 
 **Device hooks that do not exist yet are marked in place**, as `/* M2: ... */`
 and `/* M9: ... */` comments at the point in `src/core/bus.c` where the call
@@ -223,8 +236,8 @@ a plausible-looking change silently breaks:
   test today. The core building clean on both toolchains is the mechanism that
   keeps SDK dependencies from leaking down, so run the host build too, not just
   the firmware one. `src/port/` is the only place SDK headers belong.
-- **The SPI wire is the bottleneck, not the 6502.** A 1 MHz Atom costs an
-  estimated 8–17% of one core; a full-screen redraw is ~12.3 ms against a
+- **The SPI wire is the bottleneck, not the 6502.** A 1 MHz Atom costs a
+  measured 35–46% of core 0, about 2× headroom (§6.3); a full-screen redraw is ~12.3 ms against a
   16.7 ms field. Optimisation effort belongs on pixels transmitted, not on the
   interpreter.
 - **There is no decoded framebuffer, by design.** The MC6847 image is a pure
@@ -243,7 +256,8 @@ a plausible-looking change silently breaks:
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
   in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
-  at M6b `.bss` is ~144 KiB of the 520 KiB budget.
+  at M7 `.bss` is ~144 KiB and `.data` ~27 KiB (the SRAM-resident
+  interpreter) of the 520 KiB budget.
 - **Copy a machine with `atom_copy`, never `=`.** The page table points into
   `ram[]`, so a struct assignment leaves the copy reading and writing the
   original's memory.
@@ -282,6 +296,12 @@ time. They apply to every driver in `src/port/`:
   counter cannot substitute for the other.
 - Prefer `float` over `double`; a stray `2.0` literal promotes a whole
   expression and RP2040 has no FPU at all.
+- **Core 1 never calls `sleep_us`/`sleep_ms` in its live loop.** They set an
+  alarm whose IRQ runs on core 0, in the middle of the guest
+  (hardware-notes.md §9.7); use `busy_wait_us_32`.
+- **Build each `PICO_ATOM_RAM_TIER` in its own build directory**, and check
+  the image with `arm-none-eabi-nm`: a reconfigure in the same second as the
+  last compile leaves stale objects (hardware-notes.md §9.8).
 
 ## Two things to be careful about
 

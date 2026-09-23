@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "hardware/clocks.h"
 #include "hardware/sync.h"
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
@@ -23,6 +24,7 @@
 #include "audio.h"
 #include "board.h"
 #include "display.h"
+#include "hot.h"
 #include "kbd.h"
 #include "keymapio.h"
 #include "keymatrix.h"
@@ -340,8 +342,11 @@ static void core1_main(void) {
         }
 
         /* A hardware-timer wait between iterations rather than spinning
-         * on shared state (design.md §4.2). */
-        if (i < 0) sleep_us(20);
+         * on shared state (design.md §4.2). A busy wait, not sleep_us:
+         * sleep_us sets an alarm in the default pool, whose IRQ belongs
+         * to core 0, so every iteration here interrupted the guest
+         * (hardware-notes.md §9.7). */
+        if (i < 0) busy_wait_us_32(20);
     }
 }
 
@@ -360,6 +365,15 @@ static void uart_keys(void) {
 
     uint8_t c = (uint8_t)ch;
     if (c == '\r') c = '\n';
+    if (c == 0x1Bu) {
+        /* ESC, so a run can stop one BASIC program and type the next. */
+        uint8_t esc;
+        if (keymap_picocalc_key_named("esc", &esc)) {
+            keymatrix_event(&g_keys, KEY_EV_PRESSED, esc);
+            keymatrix_event(&g_keys, KEY_EV_RELEASED, esc);
+        }
+        return;
+    }
     if (c >= 1u && c <= 26u && c != '\n') {
         /* Control characters arrive as CTRL + letter. */
         keymatrix_event(&g_keys, KEY_EV_PRESSED, PICOCALC_KEY_CTRL);
@@ -452,7 +466,8 @@ int main(void) {
 #endif
 
     atom_reset(&g_atom);   /* the vectors arrived with the kernel */
-    printf("  guest        : started at #%04X\n", g_atom.cpu.pc);
+    printf("  guest        : started at #%04X; hot code in SRAM to tier %u "
+           "(hot.h)\n", g_atom.cpu.pc, (unsigned)PICO_ATOM_RAM_TIER);
 
     uint32_t field = 0;
 #if PICO_ATOM_AUDIO
@@ -464,6 +479,9 @@ int main(void) {
     absolute_time_t next = get_absolute_time();
 #endif
     uint64_t hb_us = time_us_64(), hb_cycles = g_atom.cpu.cycles;
+    uint64_t hb_insns = g_atom.instructions;
+    uint32_t run_us = 0;   /* inside atom_run_field since the heartbeat */
+    const uint32_t clk_mhz = clock_get_hz(clk_sys) / 1000000u;
     for (;;) {
 #if !PICO_ATOM_AUDIO
         /* Absolute, not incremental, so a late field does not accumulate
@@ -494,7 +512,9 @@ int main(void) {
 #endif
         }
 
+        uint32_t t0 = time_us_32();
         atom_run_field(&g_atom);
+        run_us += time_us_32() - t0;
 
         int i = pool_claim();
         if (i >= 0) {
@@ -548,6 +568,27 @@ int main(void) {
                    (unsigned long)g_c1.key_events,
                    (unsigned long)(kbd_overflows() + g_keys.dropped),
                    (unsigned long)g_atom.tape.served);
+            /* Where core 0's time goes (§12.3, design.md §6.3). The
+             * guest is paced, so rt above reads 1.000 whatever the code
+             * costs; the cost is the time spent inside the guest.
+             * Headroom is guest cycles per microsecond of it — how many
+             * times real time the guest would run unpaced. */
+            uint64_t insns = g_atom.instructions - hb_insns;
+            uint32_t busy1000 = (uint32_t)((uint64_t)run_us * 1000u / (now - hb_us + 1u));
+            uint32_t head100 = (uint32_t)(guest * 100u / (run_us + 1u));
+            uint32_t hpi10 = (uint32_t)((uint64_t)run_us * clk_mhz * 10u / (insns + 1u));
+            uint32_t gpi100 = (uint32_t)(guest * 100u / (insns + 1u));
+            log_printf("  perf         : tier %u, guest %lu.%lu%% of wall, headroom "
+                   "%lu.%02lux, %lu.%lu host cycles/insn, %lu.%02lu guest cycles/insn, "
+                   "%llu insns\n",
+                   (unsigned)PICO_ATOM_RAM_TIER,
+                   (unsigned long)(busy1000 / 10u), (unsigned long)(busy1000 % 10u),
+                   (unsigned long)(head100 / 100u), (unsigned long)(head100 % 100u),
+                   (unsigned long)(hpi10 / 10u), (unsigned long)(hpi10 % 10u),
+                   (unsigned long)(gpi100 / 100u), (unsigned long)(gpi100 % 100u),
+                   (unsigned long long)insns);
+            hb_insns = g_atom.instructions;
+            run_us = 0;
 #if PICO_ATOM_AUDIO
             /* The consumed-sample rate against the microsecond timer is
              * the control quantity: it is the PWM wrap, measured, and it

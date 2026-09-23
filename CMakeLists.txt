@@ -126,12 +126,18 @@ else()
     option(PICO_ATOM_AUDIO "Audio output, and pacing on the PCM queue" ON)
     option(PICO_ATOM_UART_KEYS "Type characters received on UART1 at the guest" ON)
 
+    # How much of the core's hot path runs from SRAM (src/core/hot.h).
+    # Each tier was measured on the board; design.md §6.3 has the table
+    # and says why this one ships.
+    set(PICO_ATOM_RAM_TIER 2 CACHE STRING "Hot-code SRAM tier, 0-2 (src/core/hot.h)")
+
     # clk_peri does not follow clk_sys by default; the SPI baud and the
     # audio carrier are re-applied in code as well (hardware-notes §3).
     target_compile_definitions(pico-atom PRIVATE
         PICO_ATOM_HAVE_FONT=${PICO_ATOM_HAVE_FONT}
         PICO_ATOM_AUDIO=$<BOOL:${PICO_ATOM_AUDIO}>
         PICO_ATOM_UART_KEYS=$<BOOL:${PICO_ATOM_UART_KEYS}>
+        PICO_ATOM_RAM_TIER=${PICO_ATOM_RAM_TIER}
         PICO_CLOCK_ADJUST_PERI_CLOCK_WITH_SYS_CLOCK=1
         # UART1 at 115200 8-N-1, TX GP4 / RX GP5 (hardware-notes §2.7).
         PICO_DEFAULT_UART=1

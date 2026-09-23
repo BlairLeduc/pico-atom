@@ -18,6 +18,7 @@
 
 #include "atom.h"
 #include "bus.h"
+#include "hot.h"
 
 /* Base cycles per opcode, before page-cross and branch penalties.
  * Zero marks an undocumented opcode (§6.1: v1 traps and logs them). */
@@ -64,7 +65,7 @@ void m6502_set_nmi(m6502_t *c, bool level) {
     c->nmi_line = level;
 }
 
-void m6502_set_irq(m6502_t *c, uint8_t source, bool asserted) {
+void ATOM_HOT1(m6502_set_irq)(m6502_t *c, uint8_t source, bool asserted) {
     if (asserted) c->irq_lines |= source;
     else          c->irq_lines = (uint8_t)(c->irq_lines & ~source);
 }
@@ -78,7 +79,10 @@ static inline uint8_t fetch8(atom_t *m, m6502_t *c) {
     return RD(c->pc++);
 }
 
-static inline uint16_t fetch16(atom_t *m, m6502_t *c) {
+/* GCC keeps this one out of line, so it moves with the interpreter;
+ * left behind, every absolute operand calls into flash through a veneer.
+ * That measured nothing (§6.3), but the SRAM code then stays whole. */
+static inline uint16_t ATOM_HOT2(fetch16)(atom_t *m, m6502_t *c) {
     uint16_t lo = fetch8(m, c);
     uint16_t hi = fetch8(m, c);
     return (uint16_t)(lo | (hi << 8));
@@ -116,7 +120,7 @@ static inline uint16_t read16_zp(atom_t *m, uint8_t zp) {
 /* ADC. In decimal mode the NMOS part sets Z from the binary result and N
  * and V from the intermediate value after the low-nibble fixup but before
  * the high-nibble one — the behaviour Bruce Clark's test checks (§6.1). */
-static void op_adc(m6502_t *c, uint8_t v) {
+static void ATOM_HOT1(op_adc)(m6502_t *c, uint8_t v) {
     unsigned cin = (c->p & M6502_C) ? 1u : 0u;
     unsigned bin = (unsigned)c->a + v + cin;
 
@@ -143,7 +147,7 @@ static void op_adc(m6502_t *c, uint8_t v) {
 
 /* SBC. All four flags come from the binary operation on the NMOS part,
  * decimal mode or not; only the result is BCD-adjusted. */
-static void op_sbc(m6502_t *c, uint8_t v) {
+static void ATOM_HOT1(op_sbc)(m6502_t *c, uint8_t v) {
     unsigned cin = (c->p & M6502_C) ? 1u : 0u;
     unsigned bin = (unsigned)c->a - v - (1u - cin);
 
@@ -202,7 +206,7 @@ static inline uint8_t op_ror(m6502_t *c, uint8_t v) {
 
 /* BRK pushes P with B set; a hardware IRQ or NMI pushes it clear. That
  * distinction is the only way an interrupt handler can tell them apart. */
-static uint32_t enter_interrupt(atom_t *m, m6502_t *c, uint16_t vector, bool from_brk) {
+static uint32_t ATOM_HOT1(enter_interrupt)(atom_t *m, m6502_t *c, uint16_t vector, bool from_brk) {
     push8(m, c, (uint8_t)(c->pc >> 8));
     push8(m, c, (uint8_t)(c->pc & 0xFFu));
     push8(m, c, (uint8_t)(c->p | M6502_U | (from_brk ? M6502_B : 0u)));
@@ -228,7 +232,7 @@ void m6502_reset(m6502_t *c, atom_t *m) {
 
 /* ---- the interpreter ------------------------------------------------- */
 
-uint32_t m6502_step(atom_t *m) {
+uint32_t ATOM_HOT2(m6502_step)(atom_t *m) {
     m6502_t *c = &m->cpu;
 
     if (__builtin_expect(c->reset_pending, 0)) {

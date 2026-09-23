@@ -456,25 +456,58 @@ long-run timing from drifting.
 
 ### 6.3 Budget
 
-Estimate, to be replaced with a measurement (hardware notes §9.1):
+**Measured at M7** on a Plus 2 W, 2026-09-23, in the mode that ships: paced
+on the PCM queue, core 1 presenting, 150 MHz. The heartbeat's `perf` line
+reports it (§12.3); `tools/perf-run.sh` types four workloads at the guest,
+one boot each, and `tools/perf-summary.sh` reduces the logs.
 
-| | |
-|---|---:|
-| Guest cycles per second at 1 MHz | 1,000,000 |
-| Mean guest cycles per instruction | ~3.2 |
-| Guest instructions per second | ~313,000 |
-| Host cycles available per guest instruction at 150 MHz | ~480 |
-| Expected host cycles per guest instruction, SRAM-resident | 40–80 |
-| **Expected core 0 load from the 6502** | **~8–17 %** |
+| Workload | Guest cycles / insn | Host cycles / insn | Core 0 in the guest | Headroom |
+|---|---:|---:|---:|---:|
+| idle at the `>` prompt | 3.14 | 217 | 46 % | 2.17× |
+| BASIC compute loop | 3.40 | 176 | 35 % | 2.89× |
+| `PRINT` loop, scrolling | 3.49 | 218 | 42 % | 2.40× |
+| bell loop (`PRINT $7`) | 2.50 | 158 | 42 % | 2.37× |
 
-Even at four times that, the 6502 is not the constraint. This is what pays for
-cycle-accurate tape at signal level (§11.3) and for a turbo mode.
+Headroom is guest cycles per microsecond spent inside `atom_run_field`: how
+many times real time the guest would run unpaced. It counts everything that
+lands on core 0 while the guest runs, audio IRQs and bus contention with
+core 1 included, because that is what the shipped machine pays.
 
-The interpreter, the bus dispatch and the 8255 handlers all go behind
-`__not_in_flash_func`. Per hardware notes §9.2, this is worth ~1.7× on large
-branchy code — and an instruction interpreter is the canonical large branchy
-workload. The same section's warning applies: **re-measure the whole profile
-after every move**, because each relayout changes what is left in flash.
+**The estimate this replaces was 40–80 host cycles per instruction and
+8–17 % of a core; the truth is 158–218 and 35–46 %.** The 6502 is still not
+the constraint at 1 MHz, but the margin is about 2×, not 6–12×. That bounds
+a turbo mode (§11.3, M8) at roughly 2× before pacing fails, unless the
+interpreter itself gets cheaper. The code is about 100 Thumb instructions
+per guest instruction — `atom_run`'s loop, the VIA tick and IRQ line, the
+dispatch, the opcode — so the cost is the work, not instruction fetch.
+
+**Hot code in SRAM**, measured tier by tier per hardware notes §9.2
+(`src/core/hot.h`; `PICO_ATOM_RAM_TIER` in `CMakeLists.txt`). Host cycles
+per instruction, each tier built in its own directory and every symbol
+checked to have moved from `0x1…` to `0x2…`:
+
+| Tier | What moved | SRAM | compute | idle | scroll | bell |
+|---|---|---:|---:|---:|---:|---:|
+| 0 | nothing | — | 209.5 | 242.4 | 245.0 | 161.0 |
+| 1 | the callees: VIA tick and IRQ line, bus slow path, 8255, beeper, `op_adc`/`op_sbc` | 4.4 KiB | 189.0 (1.11×) | 233.6 (1.04×) | 231.5 (1.06×) | 167.8 (0.96×) |
+| 2 | `m6502_step`, `atom_run`, `fetch16` | 20.6 KiB | 176.3 (1.07×) | 217.2 (1.08×) | 218.2 (1.06×) | 158.1 (1.06×) |
+| 3 | the 256-byte cycle table | 0.26 KiB | 176.3 (1.00×) | 217.2 (1.00×) | 218.0 (1.00×) | 158.1 (1.00×) |
+
+**Tier 2 ships: 1.12–1.19× for 25 KiB.** Tier 3 bought nothing and was
+dropped. The gain is a third of hardware notes §9.2's 1.7×: `m6502_step` is
+20 KiB after `-O3` inlines the bus into every opcode, but the part a real
+program runs evidently fits the 16 KiB XIP cache. The bell's tier-1
+regression is §9.2's relayout effect, and tier 2 recovered it. Tier 0
+repeated across two sittings to within 0.3 %; heartbeats within a run spread
+±1–2 %. The control, the PWM's consumed sample rate, read 36,620 Hz in every
+row, with no underruns and no late refills.
+
+**The larger win was not placement.** Core 1's idle wait was
+`sleep_us(20)`, and `sleep_us` sets an alarm in the SDK's default pool, whose
+IRQ is core 0's. Every iteration of core 1's loop interrupted the guest:
+replacing it with `busy_wait_us_32` took compute from 197 to 176 host cycles
+per instruction and idle from 245 to 218 at the same tier — 1.11×, and the
+run-to-run spread fell from ±4 to ±0.1 (hardware notes §9.7).
 
 ### 6.4 Interrupts and reset
 
@@ -1378,8 +1411,9 @@ in the status band:
 
 | Counter | Why |
 |---|---|
-| Real-time ratio (guest s / wall s) | the headline number |
-| Host cycles per guest instruction | §6.3's estimate, verified |
+| Real-time ratio (guest s / wall s) | the headline number; paced, so it reads 1.000 whatever the code costs |
+| Core 0 in the guest, headroom | what the code costs: the share of wall time inside `atom_run_field`, and guest cycles per microsecond of it (§6.3) |
+| Host cycles per guest instruction | §6.3's figure; `atom_t.instructions` counts the guest's side |
 | Present ms, dirty bands, dirty pixels | §8.4's budget, verified |
 | Fields presented / fields simulated | is the 30 Hz decimation engaging? |
 | **PCM underrun samples** | producer starvation |
@@ -1454,6 +1488,7 @@ pico-atom/
 ├── src/
 │   ├── core/                   # portable C11, no SDK, no allocator
 │   │   ├── config.h            # every fixed capacity, in one place
+│   │   ├── hot.h               # which functions go to SRAM, by measured tier (§6.3)
 │   │   ├── m6502.c/.h
 │   │   ├── bus.c/.h
 │   │   ├── atom.c/.h
@@ -1495,6 +1530,8 @@ pico-atom/
 └── tools/
     ├── mkfont.py               # MC6847 character ROM → header
     ├── vdg-ppm.c               # render the scenes; regenerates test/golden/
+    ├── perf-run.sh             # §6.3's measurement: workloads typed at the guest
+    ├── perf-summary.sh         # the heartbeats, one line per workload
     ├── atm.py                  # inspect/build ATM files
     └── trace-diff.py           # compare a trace against a reference emulator
 ```
@@ -1625,7 +1662,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M5** | Audio | integrator verified against a known frequency; underrun and late-refill counters both zero over 10 minutes — **done** 2026-09-22 on a Plus 2 W (§9.4) |
 | **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs — **done** 2026-09-22 on a Plus 2 W: Galaxians, extracted from a `games1.dsk` image to `.atm`, loaded off the card by `LOAD "GALAXI"` (4,864 bytes in 5 ms) and was played; `SAVE`/`LOAD` round-tripped through the card; snapshots saved and restored from the menu; a tape chosen in the menu loaded by `LOAD ""` |
 | **M6b** | Game keymaps (§10.5) | Galaxians played with the Games layout: `Left`/`Right` move, `]` fires, moving and firing at once — **done** 2026-09-23 on a Plus 2 W: Galaxians played with the layout, moving and firing at once (fire then on `Up`, moved to `]` after that run); Bouncing Babies played with a card layout its tape load chose |
-| **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to |
+| **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to — **done** 2026-09-23 on a Plus 2 W: headroom 2.2–2.9× real time, 158–218 host cycles per guest instruction (§6.3); tier 2 ships, 1.12–1.19× for 25 KiB; tier 3 measured nothing; core 1's `sleep_us` was interrupting core 0, and fixing it was worth 1.11× |
 | **M8** | Tape phase 2 (UEF at signal level), turbo clock | a UEF image that phase 1 cannot load, loads |
 | **M9** | AtomDOS + 8271, 6522 VIA | an `.ssd` boots |
 
