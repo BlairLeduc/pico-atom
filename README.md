@@ -98,11 +98,11 @@ in the menu before playing. Further layouts are text files in
 `/atom/keymaps/`, one binding per line:
 
 ```
-# Games: move on the arrows, fire on ]
-name  = GAMES
-left  = UPDOWN
-right = CTRL
-]     = REPT
+# Bouncing Babies: SHIFT moves left, REPT moves right
+name  = BABIES
+left  = SHIFT
+right = REPT
+tapes = BABIES
 ```
 
 A key on the left is a PicoCalc key: `left`, `right`, `up`, `down`, `space`,
@@ -110,9 +110,11 @@ A key on the left is a PicoCalc key: `left`, `right`, `up`, `down`, `space`,
 not. A target on the right is an Atom key by the name on its keycap (`A`–`Z`,
 `0`–`9`, the punctuation, `SPACE`, `RETURN`, `UPDOWN`, `LEFTRIGHT`, `COPY`,
 `LOCK`, `DELETE`, `ESCAPE`) or one of the lines `CTRL`, `SHIFT` and `REPT`.
-An optional `tapes = NAME, NAME` line names programs whose loading selects the
-layout. A file that does
-not parse is left out, and the menu names the file and the line.
+The optional `tapes` line names up to four programs whose loading selects the
+layout. A line starting with `#` is a comment, except `# = ...`, which binds
+the `#` key. A file's `name` must differ from every other layout's, built-in
+ones included. A file that does not parse is left out, and the menu names the
+file and the line.
 
 **Snapshots** save and restore the whole machine from the menu, in four slots
 kept in `/atom/snaps/`. They contain no ROM bytes, and load only over the same

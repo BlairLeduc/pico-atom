@@ -243,14 +243,16 @@ static void __attribute__((noreturn)) no_roms(const roms_report_t *r) {
     }
 }
 
-/* A tape a layout names chooses that layout (design.md §10.5). Any other
- * load leaves the choice alone: a game's loader may fetch its next part
- * under another name. Core 1, with core 0 parked. */
+/* Loading a tape named on a layout's tapes line selects that layout
+ * (design.md §10.5). Loading any other tape leaves the choice alone: a
+ * game's loader may fetch its next part under another name. Core 1, with
+ * core 0 parked. */
 static void keys_for_tape(const char *name) {
     const keylayout_t *l = keymapio_for_tape(name);
-    if (!l || l == g_settings.layout) return;
-    g_settings.layout = l;
+    if (!l) return;
     memcpy(g_settings.keys_tape, name, sizeof g_settings.keys_tape);
+    if (l == g_settings.layout) return;
+    g_settings.layout = l;
     printf("  keymaps      : loading %s chose \"%s\"\n", name, l->name);
 }
 

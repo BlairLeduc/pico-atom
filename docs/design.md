@@ -1033,24 +1033,26 @@ the standard map. Further layouts are text files in `/atom/keymaps/` on the card
 read when the menu opens, one binding per line:
 
 ```
-# Games: move on the arrows, fire on ]
-name  = GAMES
+# Galaxians: move on the arrows, fire on ]
+name  = GALAXIANS
 left  = UPDOWN
 right = CTRL
 ]     = REPT
 tapes = GALAXI
 ```
 
-That is the built-in Games as a file, plus a `tapes` line the built-in does
-not have.
+That is the built-in Games as a file, under its own name (a card layout may
+not reuse a built-in's), plus a `tapes` line the built-in does not have. A
+line whose first character is `#` is a comment, unless it binds the `#` key
+itself (`# = SPACE`).
 
 The optional `tapes` line names the ATM header names the layout goes with,
 compared ignoring case, since the file is typed by hand. Loading one of those
 tapes (§11.2) selects the layout, and the menu shows that it did
 (`KEYS CHOSEN BY GALAXI`). Only the user's files carry a `tapes` line; a
-built-in layout names no game, because which titles a layout suits is the
-user's knowledge, not the firmware's. The user can always override the choice in the menu. Loading a tape no layout names
-leaves the choice alone, because a game's loader may fetch its next part under
+built-in layout names no game, because the user knows which titles a layout
+suits and the firmware does not. The user can always override the choice in
+the menu. Loading a tape that no layout names leaves the choice alone, because a game's loader may fetch its next part under
 another name. So an ordinary program never has a layout forced on it, but it
 may inherit one the user or an earlier tape chose. The parser (`keylayout.c`,
 in the core, tested on the host) rejects a line it does not understand, and

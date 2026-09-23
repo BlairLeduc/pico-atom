@@ -484,7 +484,7 @@ int main(void) {
         static keylayout_t l;
         unsigned line = 99;
 
-        /* §10.5's example, less its tapes line, is the built-in Games. */
+        /* The built-in Games, written as a file (§10.5). */
         const char *ex = "# Games: move on the arrows, fire on ]\n"
                          "name  = GAMES\n"
                          "left  = UPDOWN\n"
@@ -507,6 +507,14 @@ int main(void) {
               "the tapes it names select it, ignoring case");
         CHECK(!keylayout_for_tape(&l, "INVAD") && !keylayout_for_tape(&l, ""),
               "nothing else does");
+
+        /* '#' is a comment, unless it is the key being bound. */
+        const char *hash = "# a comment = not a binding\n#=SPACE\n  # indented comment\n";
+        CHECK(keylayout_parse(&l, "hash", hash, strlen(hash), &line) == KL_OK && l.n == 1,
+              "# binds once, line %u, %u binding(s)", line, l.n);
+        CHECK(l.bind[0].code == keymap_picocalc_canonical('#') && l.bind[0].row == 0 &&
+                  l.bind[0].col == 9,
+              "# = SPACE binds the # key to SPACE");
 
         /* CRLF, blank lines, no final newline, the file's own name. */
         const char *crlf = "\r\n  A = SPACE\r\n\r\n\tSPACE=z\r\n= = shift\r\n; = :";

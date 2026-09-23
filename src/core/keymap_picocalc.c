@@ -241,8 +241,8 @@ bool keymap_picocalc_key_named(const char *name, uint8_t *code) {
 
 typedef struct { const char *name; uint8_t row, col, flags; } atom_target_t;
 
-/* Every key the Atom has but BREAK, which is the reset line and not a
- * game's to have, by the name on its keycap. */
+/* Every Atom key except BREAK, by the name on its keycap. BREAK is the
+ * reset line, and not a game's to have. */
 static const atom_target_t atom_targets[] = {
     { "SPACE", AK_SPACE, 0 },     { "RETURN", AK_RETURN, 0 },
     { "UPDOWN", AK_UPDOWN, 0 },   { "LEFTRIGHT", AK_LTRT, 0 },

@@ -48,7 +48,13 @@ static keylayout_status_t parse_tapes(keylayout_t *out, char *v) {
 
 static keylayout_status_t parse_line(keylayout_t *out, char *line) {
     char *s = trim(line);
-    if (!*s || *s == '#') return KL_OK;
+    if (!*s) return KL_OK;
+    /* '#' starts a comment, except where it is the key being bound. */
+    if (*s == '#') {
+        const char *p = s + 1;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p != '=') return KL_OK;
+    }
 
     /* The first '=' after the key, so "= = CTRL" binds the '=' key. */
     char *eq = strchr(s + 1, '=');
