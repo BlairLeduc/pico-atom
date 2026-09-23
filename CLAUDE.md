@@ -22,12 +22,16 @@ four corners, colour order and orientation were checked by eye on the panel;
 present times are measured and recorded in design.md §8.4 (full redraw
 11.5 ms, wire-bound); the southbridge answers with zero I²C errors.
 
-**M4 is next** — the Atom boots: ROMs from SD, the display live, the keyboard
-mapped. Two things block it that code cannot settle: the keyboard matrix
-(§16, low confidence — transcribe it from a primary source) and the user's
-ROM files on SD.
+**M4 is in progress** — the Atom boots: ROMs from SD, the display live, the
+keyboard mapped. On the host it is done: `test_boot` boots the real MOS, types
+`PRINT 2+2` through the southbridge event path and checks every keymap entry
+against the kernel. The keyboard matrix is settled — read off the kernel ROM by
+execution (§16). The 6522 VIA exists and is fitted by default, because the
+MOS hangs before its first prompt without it. On the device, the SD driver,
+FatFs, the ROM loader and the keyboard poll exist and the card mounts; what is
+left is the board run with the ROMs on the card.
 
-What does not exist: keyboard, audio, SD, tape, the status band.
+What does not exist: audio, tape, the menu, the status band.
 
 ## The two documents
 
@@ -96,12 +100,19 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/mc6847.*` | mode decode, palette, expansion LUT, row generation |
 | `src/core/atom.*` | `atom_t`, the page table, config, the run loop, §4.1's API |
 | `src/core/snappool.*` | §4.2's three-buffer handoff; state machine only, the port holds the lock |
+| `src/core/via6522.*` | the VIA; fitted by default because the MOS reads its PCR on every character |
+| `src/core/keymatrix.*` | held-key set, paced replay of southbridge events into the matrix (§10.2) |
+| `src/core/keymap_picocalc.c` | PicoCalc code -> Atom cell; the cells are the kernel ROM's, by execution |
+| `src/core/sha1.*`, `romset.*` | identify ROM images by hash; the slot table from §11.1 |
 | `src/port/board.*` | clocks and board identification |
 | `src/port/southbridge.*` | i2c1 register layer; refuses to read `RST` (`0x08`), which resets the MCU |
 | `src/port/lcd.*` | panel init, windows, fills, polled-DMA ping-pong blit |
 | `src/port/display.*` | the §8.4 presenter; owns the renderer, its LUT, the shadow and line buffers |
-| `src/port/main.c` | core 0's field loop, core 1's bring-up, M3 measurement and live present |
-| `test/host/` | CTest binaries, one per area, plus `test_util.h` |
+| `src/port/sd.*`, `diskio.c` | spi0 SD driver and FatFs's disk layer; FatFs itself is copied from the SDK at configure time |
+| `src/port/roms.*` | loads `/atom/roms/` into the machine before the guest starts; the no-ROMs page |
+| `src/port/kbd.*` | core 1 drains the southbridge FIFO into an SPSC ring for core 0 |
+| `src/port/main.c` | core 0's field loop, core 1's bring-up and live present; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT` |
+| `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot` runs the real MOS when `roms/` holds the images |
 | `test/host/vdg_scenes.*` | the VRAM behind the golden images, shared by the test and `vdg-ppm` |
 | `test/golden/` | §15.1's reference PPMs, all nine modes, both colour sets |
 | `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` |

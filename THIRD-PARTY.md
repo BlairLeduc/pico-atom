@@ -43,6 +43,23 @@ GitHub detects no licence file in that repository at that revision. The
 southbridge reply layout in `src/port/southbridge.c` was likewise checked
 against the same repository's keyboard firmware, but no code was taken from it.
 
+## FatFs — ChaN
+
+The firmware links FatFs R0.15 (with patch 1) for the SD card. It is **not in
+the tree**: CMake copies `ff.c`, `ff.h`, `ffunicode.c` and `diskio.h` out of
+the Pico SDK's `lib/tinyusb/lib/fatfs/source/` into the build directory at
+configure time. The one FatFs file in the repository is
+`src/port/fatfs/ffconf.h`, which started as the SDK's copy and records in its
+header which values were changed.
+
+> FatFs — Generic FAT Filesystem Module
+> Copyright (C) 2022, ChaN, all right reserved.
+> <http://elm-chan.org/fsw/ff/>
+
+FatFs's licence is a one-clause BSD-style licence: redistributions of source
+must keep its copyright notice, condition and disclaimer, which `ffconf.h`
+does. Binary redistribution carries no condition.
+
 ## Klaus Dormann's 6502 functional tests
 
 Not in the tree. `tools/fetch-test-suites.sh` downloads the assembled binary
