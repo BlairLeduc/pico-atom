@@ -2,6 +2,8 @@
 
 #include "i8255.h"
 
+#include "hot.h"
+
 void i8255_reset(i8255_t *p) {
     /* A reset puts all three ports in input mode and clears the latches,
      * which is the part's documented power-on state. */
@@ -11,7 +13,7 @@ void i8255_reset(i8255_t *p) {
     p->in_a  = p->in_b  = p->in_c  = 0xFFu;
 }
 
-uint8_t i8255_read(const i8255_t *p, uint8_t reg) {
+uint8_t ATOM_HOT1(i8255_read)(const i8255_t *p, uint8_t reg) {
     switch (reg & 3u) {
     case 0:
         return (p->control & I8255_CTRL_A_INPUT) ? p->in_a : p->out_a;
@@ -32,7 +34,7 @@ uint8_t i8255_read(const i8255_t *p, uint8_t reg) {
     }
 }
 
-void i8255_write(i8255_t *p, uint8_t reg, uint8_t v) {
+void ATOM_HOT1(i8255_write)(i8255_t *p, uint8_t reg, uint8_t v) {
     switch (reg & 3u) {
     case 0: p->out_a = v; break;
     case 1: p->out_b = v; break;

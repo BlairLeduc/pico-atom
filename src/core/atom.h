@@ -85,6 +85,10 @@ typedef struct atom_s {
 
     /* Cycle debt carried between field-sized slices (§12.1). */
     int32_t  budget;
+
+    /* Instructions executed, for §12.3's host cycles per guest
+     * instruction. A counter, not machine state: snapshots leave it. */
+    uint64_t instructions;
 } atom_t;
 
 void atom_config_default(atom_config_t *cfg);

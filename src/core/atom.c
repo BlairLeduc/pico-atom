@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "bus.h"
+#include "hot.h"
 
 void atom_config_default(atom_config_t *cfg) {
     /* A fully expanded machine by default (§7.2). */
@@ -144,8 +145,8 @@ void atom_map_ram(atom_t *m, uint16_t addr, uint32_t len) {
     map_rw(m, first, last, 0);
 }
 
-uint32_t atom_run(atom_t *m, uint32_t cycles) {
-    uint32_t done = 0;
+uint32_t ATOM_HOT2(atom_run)(atom_t *m, uint32_t cycles) {
+    uint32_t done = 0, n = 0;
     /* Whole instructions until at least `cycles` have elapsed; the caller
      * carries the overshoot forward as debt (§6.2, §12.1). */
     while (done < cycles) {
@@ -158,6 +159,7 @@ uint32_t atom_run(atom_t *m, uint32_t cycles) {
             m->cpu.cycles += c;
         } else {
             c = m6502_step(m);
+            n++;
         }
         done += c;
         if (m->cfg.via_fitted) {
@@ -168,6 +170,7 @@ uint32_t atom_run(atom_t *m, uint32_t cycles) {
     /* Close off every sample that ended inside this run, so a drain
      * after it sees them all (§9.3). Once per call, not per step. */
     beeper_advance(&m->beeper, m->cpu.cycles);
+    m->instructions += n;
     return done;
 }
 
@@ -203,7 +206,7 @@ uint32_t atom_run_field(atom_t *m) {
 
 /* Rebuild port B and port C's input nibble from machine state. Port B's
  * row sense and the CTRL/SHIFT/REPT lines are all active low (§2.3). */
-void atom_refresh_ppi_inputs(atom_t *m) {
+void ATOM_HOT1(atom_refresh_ppi_inputs)(atom_t *m) {
     uint8_t col = i8255_kbd_column(&m->ppi);
 
     /* Columns 0-9 exist; anything above selects nothing and senses no
@@ -258,7 +261,7 @@ bool atom_speaker(const atom_t *m) {
  * instruction; the store itself lands on its last cycle. The offset is
  * the same for every edge a given loop makes, so periods, and therefore
  * pitch, are exact — only the phase is a few cycles early. */
-void atom_speaker_written(atom_t *m) {
+void ATOM_HOT1(atom_speaker_written)(atom_t *m) {
     beeper_set_level(&m->beeper, m->cpu.cycles, atom_speaker(m));
 }
 

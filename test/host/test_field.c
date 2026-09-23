@@ -88,6 +88,22 @@ int main(void) {
               m->ram[0x70]);
     }
 
+    /* ---- instructions are counted, for §12.3's host cycles each ------ *
+     * #2000  NOP ; NOP ; JMP #2000   seven cycles, three instructions */
+    {
+        atom_t *m = machine();
+        static const uint8_t loop[] = { 0xEA, 0xEA, 0x4C, 0x00, 0x20 };
+        for (unsigned i = 0; i < sizeof(loop); i++)
+            bus_write(m, (uint16_t)(0x2000u + i), loop[i]);
+        m->cpu.pc = 0x2000;
+        m->instructions = 0;
+        uint32_t ran = atom_run(m, 7000u);
+        CHECK(ran == 7000u, "the loop should end on a boundary, ran %u", (unsigned)ran);
+        CHECK(m->instructions == 3000u,
+              "7,000 cycles of the loop are 3,000 instructions, counted %llu",
+              (unsigned long long)m->instructions);
+    }
+
     /* ---- the flyback interval is the §12.1 figure -------------------- */
     {
         atom_t *m = machine();

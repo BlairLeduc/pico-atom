@@ -1174,6 +1174,48 @@ If you need to reduce frame time:
    (§3). At a requested 75 MHz SPI rate, 300 MHz has favorable divider arithmetic
    compared with 200/250 MHz, but it remains an RP2350 overclock.
 
+### 9.7 `sleep_us` on core 1 interrupts core 0
+
+`sleep_us`, `sleep_until` and `best_effort_wfe_or_timeout` set an alarm in
+the SDK's **default alarm pool**, and that pool's IRQ belongs to the core
+that initialised it — core 0, in `runtime_init`. A core 1 loop that sleeps
+for 20 µs between iterations (§9.5's pattern) therefore takes an interrupt
+**on core 0** every iteration, tens of thousands a second, in the middle of
+whatever core 0 is doing.
+
+In the Atom emulator, on a Plus 2 W, switching core 1's wait to
+`busy_wait_us_32(20)`, which polls the timer and sets no alarm, cut core 0's
+cost per emulated instruction by 1.11×. Run-to-run spread fell from ±4 to
+±0.1 cycles per instruction. It is still a hardware-timer wait rather than
+spinning on shared state, which is what §9.5 asked for.
+
+So measure core 0 with core 1 idle as well as busy. If core 0's timing
+wanders while core 1 has nothing to do, look for sleeps on core 1. Use
+`busy_wait_*` there, or give core 1 its own alarm pool.
+
+### 9.8 SRAM placement, measured on an interpreter
+
+§9.2's tiers, applied to a 6502 interpreter (the Atom emulator's M7), gave
+**1.12–1.19× for 25 KB**, not 1.7×. The same method, on a different kind
+of code, gave a third of the gain:
+
+- `-O3` inlined the bus into every opcode and made the interpreter 20 KB.
+  But a real program uses a few dozen opcodes, and that part fits the
+  16 KB cache.
+- Moving the small callees first (4.4 KB) was worth 1.04–1.11×, and it
+  regressed one workload 4 % (§9.2's relayout effect). The interpreter on
+  top was worth another 1.06–1.08× on every workload, and it recovered
+  the regression.
+- A 256-byte const table moved to SRAM measured nothing.
+
+Two build traps cost a pass each. **Build each tier in its own build
+directory.** Make judges freshness by mtime, and a reconfigure that lands in
+the same second as the last compile leaves stale objects: an image with half
+its tier. **Check every symbol's address in each image**, not just the
+first build's. Whatever an SRAM function calls in flash goes through a
+long-branch veneer (`__name_veneer` in `nm`), so the veneer list is the
+quick check that a tier is whole.
+
 ---
 
 ## 10. Bring-up order and trap checklist

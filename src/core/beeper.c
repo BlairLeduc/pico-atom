@@ -4,6 +4,8 @@
 
 #include <string.h>
 
+#include "hot.h"
+
 /* The DC blocker's pole, Q15: 0.995, a corner near 29 Hz at 36.6 kHz —
  * below anything the PicoCalc's speaker reproduces. */
 #define BEEPER_HP_R 32604
@@ -54,7 +56,7 @@ void beeper_init(beeper_t *b, uint64_t now, bool level, uint32_t cpu_hz,
     b->dc_block = true;
 }
 
-static void emit(beeper_t *b, uint32_t high) {
+static void ATOM_HOT1(emit)(beeper_t *b, uint32_t high) {
     int32_t x = (int32_t)(((uint64_t)high * b->scale + 0x80000000u) >> 32);
     int32_t y = x;
     if (b->dc_block) {
@@ -72,7 +74,7 @@ static void emit(beeper_t *b, uint32_t high) {
     else b->overflow++;
 }
 
-void beeper_advance(beeper_t *b, uint64_t now) {
+void ATOM_HOT1(beeper_advance)(beeper_t *b, uint64_t now) {
     /* num is zero only before beeper_init, which would never leave the
      * loop below. */
     if (b->num == 0 || now <= b->start) return;
@@ -106,7 +108,7 @@ void beeper_advance(beeper_t *b, uint64_t now) {
     }
 }
 
-void beeper_set_level(beeper_t *b, uint64_t now, bool level) {
+void ATOM_HOT1(beeper_set_level)(beeper_t *b, uint64_t now, bool level) {
     if (level == b->level) return;
     beeper_advance(b, now);
     b->level = level;
