@@ -50,8 +50,8 @@ void atm_header_decode(const uint8_t raw[ATM_HEADER_LEN], atm_header_t *h) {
 
 void atm_header_encode(const atm_header_t *h, uint8_t raw[ATM_HEADER_LEN]) {
     memset(raw, 0, ATOM_ATM_NAME_LEN);
-    size_t n = strnlen(h->name, ATOM_ATM_NAME_LEN);
-    memcpy(raw, h->name, n);
+    /* Bounded by hand: strnlen is POSIX, not C11. */
+    for (size_t i = 0; i < ATOM_ATM_NAME_LEN && h->name[i]; i++) raw[i] = (uint8_t)h->name[i];
     raw[16] = (uint8_t)h->load; raw[17] = (uint8_t)(h->load >> 8);
     raw[18] = (uint8_t)h->exec; raw[19] = (uint8_t)(h->exec >> 8);
     raw[20] = (uint8_t)h->len;  raw[21] = (uint8_t)(h->len >> 8);

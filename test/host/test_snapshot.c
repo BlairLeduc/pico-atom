@@ -71,7 +71,7 @@ static guest_t g, h;
 int main(void) {
     /* The CRC is zlib's. */
     CHECK(snapshot_crc32(0, (const uint8_t *)"123456789", 9) == 0xCBF43926u,
-          "CRC-32 of 123456789 is %08X", snapshot_crc32(0, (const uint8_t *)"123456789", 9));
+          "CRC-32 of 123456789 is %08X", (unsigned)snapshot_crc32(0, (const uint8_t *)"123456789", 9));
 
     const char *dir;
     if (!guest_find_roms(&dir)) {
