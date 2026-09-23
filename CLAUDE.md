@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M3 are done** (`docs/design.md` §17).
+**Implementation status: M0–M4 are done** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -22,12 +22,19 @@ four corners, colour order and orientation were checked by eye on the panel;
 present times are measured and recorded in design.md §8.4 (full redraw
 11.5 ms, wire-bound); the southbridge answers with zero I²C errors.
 
-**M4 is next** — the Atom boots: ROMs from SD, the display live, the keyboard
-mapped. Two things block it that code cannot settle: the keyboard matrix
-(§16, low confidence — transcribe it from a primary source) and the user's
-ROM files on SD.
+M4 is done: the Atom boots on the board. Verified on a Plus 2 W on
+2026-09-22: ROMs load off SD with matching SHA-1s, `PRINT 2+2` typed on the
+PicoCalc keyboard answers on the panel, the cursor shows, and `CLEAR 0` +
+`PLOT` draws an SG6 element. On the host, `test_boot` runs the real MOS
+through the southbridge event path. The keyboard matrix and the VRAM byte
+wiring (bit 7 `INV`, bit 6 SG6) were both settled by executing the ROMs
+(§16). The 6522 VIA exists and is fitted by default, because the MOS hangs
+before its first prompt without it. After `CLEAR 0` the cursor is
+invisible over graphics cells; that follows from the wiring, not a bug.
 
-What does not exist: keyboard, audio, SD, tape, the status band.
+**M5 is next** — audio.
+
+What does not exist: audio, tape, the menu, the status band.
 
 ## The two documents
 
@@ -96,12 +103,19 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/mc6847.*` | mode decode, palette, expansion LUT, row generation |
 | `src/core/atom.*` | `atom_t`, the page table, config, the run loop, §4.1's API |
 | `src/core/snappool.*` | §4.2's three-buffer handoff; state machine only, the port holds the lock |
+| `src/core/via6522.*` | the VIA; fitted by default because the MOS reads its PCR on every character |
+| `src/core/keymatrix.*` | held-key set, paced replay of southbridge events into the matrix (§10.2) |
+| `src/core/keymap_picocalc.c` | PicoCalc code -> Atom cell; the cells are the kernel ROM's, by execution |
+| `src/core/sha1.*`, `romset.*` | identify ROM images by hash; the slot table from §11.1 |
 | `src/port/board.*` | clocks and board identification |
 | `src/port/southbridge.*` | i2c1 register layer; refuses to read `RST` (`0x08`), which resets the MCU |
 | `src/port/lcd.*` | panel init, windows, fills, polled-DMA ping-pong blit |
 | `src/port/display.*` | the §8.4 presenter; owns the renderer, its LUT, the shadow and line buffers |
-| `src/port/main.c` | core 0's field loop, core 1's bring-up, M3 measurement and live present |
-| `test/host/` | CTest binaries, one per area, plus `test_util.h` |
+| `src/port/sd.*`, `diskio.c` | spi0 SD driver and FatFs's disk layer; FatFs itself is copied from the SDK at configure time |
+| `src/port/roms.*` | loads `/atom/roms/` into the machine before the guest starts; the no-ROMs page |
+| `src/port/kbd.*` | core 1 drains the southbridge FIFO into an SPSC ring for core 0 |
+| `src/port/main.c` | core 0's field loop, core 1's bring-up and live present; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT` |
+| `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot` runs the real MOS when `roms/` holds the images |
 | `test/host/vdg_scenes.*` | the VRAM behind the golden images, shared by the test and `vdg-ppm` |
 | `test/golden/` | §15.1's reference PPMs, all nine modes, both colour sets |
 | `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` |
@@ -235,9 +249,11 @@ time. They apply to every driver in `src/port/`:
   `THIRD-PARTY.md` if you ever regenerate it, since `mkfont.py` emits its own
   banner and would drop it. Three things about the layout:
 
-  - A glyph is **5 px wide in bits 5..1**, not bit 7 leftmost. The renderer
-    shifts it left by `MC6847_FONT_LSHIFT`, leaving the three spacing columns
-    at the right of the 8-wide cell. Bits 7, 6 and 0 are unused.
+  - A glyph is **5 px wide in bits 5..1**, and the byte is drawn as it
+    stands, bit 7 leftmost: the glyph lands in columns 2..6, with two spacing
+    columns on the left and one on the right. Bits 7, 6 and 0 are unused. Do
+    not shift it — that puts every character against the left edge of its
+    cell, which is how the shift was found and removed.
   - The 7 glyph rows sit at **rows 3..9** of the 12-row cell.
   - Glyph order is the **MC6847's own, not ASCII**: index 0–31 are `$40`–`$5F`
     (`@A`–`Z[\]^_`), index 32–63 are `$20`–`$3F` (space onwards). Use

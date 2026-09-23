@@ -110,7 +110,7 @@ populate fewer blocks; the populated set is configuration, not code (§7.2).
 | `#A000`–`#AFFF` | 4 KiB | Utility ROM socket |
 | `#B000`–`#B003` | 4 B | **INS8255 PPI** |
 | `#B400`–`#B403` | 4 B | Expansion / printer port |
-| `#B800`–`#B80F` | 16 B | 6522 VIA (optional) |
+| `#B800`–`#B80F` | 16 B | 6522 VIA (optional on the real machine; fitted by default here, §7.3) |
 | `#C000`–`#CFFF` | 4 KiB | Atom BASIC ROM |
 | `#D000`–`#DFFF` | 4 KiB | Floating-point ROM |
 | `#E000`–`#EFFF` | 4 KiB | AtomDOS / utility ROM |
@@ -163,7 +163,7 @@ Atom BASIC's `CLEAR n` maps onto these:
 
 | `A/G` | `GM2:0` | VDG mode | Resolution | Colours | VRAM | Atom |
 |:--:|:--:|---|---|---:|---:|---|
-| 0 | — | Alpha / SG4 | 32×16 chars | 2 or 8 | 512 B | `CLEAR 0` |
+| 0 | — | Alpha / SG6 | 32×16 chars, 64×48 blocks | 2 + 4 | 512 B | `CLEAR 0` |
 | 1 | 000 | CG1 | 64×64 | 4 | 1024 B | `CLEAR 1a` |
 | 1 | 001 | RG1 | 128×64 | 2 | 1024 B | `CLEAR 1b` |
 | 1 | 010 | CG2 | 128×64 | 4 | 2048 B | `CLEAR 2a` |
@@ -178,14 +178,25 @@ Every mode presents as **256×192** on screen; the VDG stretches horizontally
 the same, so the host display geometry is a single fixed 256×192 rectangle
 regardless of guest mode (§8.2).
 
-In alpha mode the Atom wires VRAM data bits 7 and 6 to the VDG's `A/S` and `INV`
-pins, so per character byte:
+In alpha mode the Atom wires VRAM data bit 6 to the VDG's `A/S` **and**
+`INT/EXT` pins and bit 7 to `INV`, so per character byte:
 
-- bit 7 = 0 → alphanumeric; bit 6 = 1 → inverse video; bits 5–0 select one of 64
-  glyphs from the VDG's internal 5×7-in-8×12 character ROM.
-- bit 7 = 1 → **semigraphics 4**: bits 3–0 are the four quadrant on/off flags,
-  bits 6–4 the colour. This is where the Atom's chunky block graphics come from,
-  and it is why plotting in `CLEAR 0` works at all.
+- bit 6 = 0 → alphanumeric: bits 5–0 select one of 64 glyphs from the VDG's
+  internal 5×7-in-8×12 character ROM, and bit 7 = 1 draws it in inverse video.
+  The MOS draws its cursor by setting bit 7 of the cell under it, and shows
+  lower case as inverse capitals. Over a graphics cell the same bit is only colour, so
+  after `CLEAR 0` fills the screen with `#40` the cursor (`#C0`, no elements
+  lit) is invisible; it reappears on text.
+- bit 6 = 1 → **semigraphics 6**, because `INT/EXT` is high whenever `A/S` is:
+  bits 5–0 are six elements, two across and three down (bits 5 and 4 the top
+  pair, 1 and 0 the bottom), and the colour is `C1:C0` = bits 7:6 in `CSS`'s
+  set. Bit 6 is always 1 here, so only yellow and red (or cyan and orange) are
+  reachable. This is where the Atom's chunky block graphics come from:
+  `CLEAR 0` is 64×48, and `PLOT` sets one element bit per point.
+
+An earlier version of this section had bits 7 and 6 the other way round, with
+bit 7 selecting SG4. That rendered the cursor as an empty graphics cell, which
+is how it was caught on hardware; §16 records how it was settled.
 
 Colour sets: alpha `CSS`=0 green-on-black, `CSS`=1 orange-on-black. RG modes
 black + green or black + buff. CG modes green/yellow/blue/red or
@@ -558,6 +569,15 @@ partially and the 8255 mirrors every four bytes:
 The 8271 at `#0A00` sits inside RAM space, which is unusual and easy to get
 wrong: with AtomDOS enabled, four bytes of page `#0A` stop being RAM.
 
+**The VIA is fitted by default** even though it was optional on the real
+machine, because the MOS depends on it before the first prompt. It keeps the
+printer-enabled flag in the VIA's PCR and reads `#B80C` on every character it
+writes; if the CA2 bits (`& #0E`) are nonzero it waits on the printer's BUSY
+line at `#B801` bit 7. With no chip there, those reads return open bus, which
+is `#B8` in this model, and the MOS spins before it has printed `ACORN ATOM`.
+Every reference emulator fits the VIA too. Port A's BUSY input reads ready,
+since no printer is attached, so CTRL-B cannot hang the machine either.
+
 ---
 
 ## 8. Video: MC6847 → ST7789P
@@ -627,8 +647,8 @@ Vertical stretch is free: the ×V column above is a repeat count, and a repeated
 row re-sends the **same line buffer** to the next window rows without
 regenerating it. CG1 therefore generates 64 rows and transmits 192.
 
-Alpha/SG4 mode takes a different generator — per character cell, select glyph
-row from the character ROM or synthesise the SG4 quadrant pattern, then expand
+Alpha/SG6 mode takes a different generator — per character cell, select glyph
+row from the character ROM or synthesise the SG6 element pattern, then expand
 through the two-colour path with the cell's foreground and background. 32 cells
 per row, 12 rows per cell, 16 cell rows.
 
@@ -1186,7 +1206,7 @@ link-time fact rather than a hope (hardware notes §2.3).
 | **Klaus Dormann `6502_functional_test`** | must run to completion. Non-negotiable; it is the difference between an emulator and a plausible one. |
 | **Bruce Clark decimal mode test** | must pass, including NMOS flag behaviour. |
 | Cycle-count table | every opcode's cycle count and page-cross penalty asserted against the published table. |
-| MC6847 golden images | render fixed VRAM contents in each of the nine modes, both colour sets, compare to committed PPMs. Includes an SG4 pattern and an inverse-video text page. |
+| MC6847 golden images | render fixed VRAM contents in each of the nine modes, both colour sets, compare to committed PPMs. Includes every SG6 pattern and an inverse-video text page. |
 | 8255 | port C nibble separation, BSR writes, mode-nibble-vs-column-nibble independence. |
 | Keymap | every PicoCalc code maps to exactly one Atom cell; no binding uses a chord the southbridge cannot deliver (§10.3); the table is a bijection where it claims to be. |
 | Tape | ATM round trip; CUTS encode → decode round trip at the bit level. |
@@ -1247,12 +1267,14 @@ class of bug in emulation.
 | 8255 port bit assignments (§2.3) | Atom service manual / theory of operation | high — cross-check anyway |
 | MC6847 mode table (§2.4) | MC6847 datasheet | high |
 | VDG mode bit order in port A bits 7–4 | Atom circuit diagram | **confirmed** — `A/G` is bit 4, `GM0`–`GM2` bits 5–7, read off the schematic. §2.3 had this right; an earlier §2.4 had `A/G` at bit 7 and has been corrected |
-| Keyboard matrix cell assignments (10×6) | Atom service manual keyboard table | **low** — transcribe; do not reconstruct |
+| Keyboard matrix cell assignments (10×6) | the kernel ROM's scan at `#FE71`, executed | **confirmed** — every cell pressed at the `>` prompt with and without SHIFT and the MOS's output read from VRAM; the table is in `keymap_picocalc.c` and `test_boot` re-checks it against the ROM |
 | `OSLOAD`/`OSSAVE` entry addresses and page-2 vectors (§11.2) | MOS disassembly | **low** |
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source | **medium** — affects §12.1 throughout |
 | `FS` low interval, ~6 % of a field (§12.1) | MC6847 datasheet, `FS` timing | **low** — `ATOM_FLYBACK_PERCENT`; software polls the edge, so the length matters less than that it exists |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
 | 8271 base address `#0A00` (§7.3) | AtomDOS documentation | medium |
+| VRAM byte wiring in alpha mode (§2.4) | the MOS and BASIC, executed | **confirmed** — bit 6 is `A/S` and `INT/EXT` (SG6), bit 7 is `INV`: the MOS's cursor is `#A0`, and `CLEAR 0` then `PLOT` writes `#40` plus one element bit per point; `test_boot` pins both |
+| SG6 colour from bits 7:6 (§2.4) | MC6847 datasheet; a reference emulator | **confirmed** — the datasheet's `C1:C0` = `D7:D6`, so yellow/red (cyan/orange with `CSS`); `CLEAR 0` + `PLOT` compared by eye against another Atom emulator on 2026-09-22 |
 | MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |
 
 The last one was settled the way this section asks. The table is XRoar's
@@ -1263,6 +1285,16 @@ carries rather than the renderer assuming it — 5 px in bits 5..1, rows 3..9 of
 the cell, MC6847 glyph order — is asserted against the data in
 `test/host/test_mc6847.c`, so a differently laid-out substitute fails loudly
 instead of rendering plausible-but-wrong glyphs.
+
+The keyboard matrix was settled from a primary source too, though not a
+document: the kernel ROM. Its scan at `#FE71` walks row bit 5 down to bit 0 and
+column 0 up to 9, counting `Y` down from `#3B`, so a key is
+`Y = row × 10 + 9 − col`. Pressing each of the 60 cells at the prompt, with
+and without SHIFT, and reading what the MOS wrote to VRAM gives the whole map,
+including the five cells that no key uses (the MOS decodes them as control
+codes `#08`–`#0C`) and the two arrow keys, which SHIFT reverses. The table is
+in `keymap_picocalc.c`, and `test_boot` types every entry through the real MOS
+whenever the ROMs are present.
 
 ---
 
@@ -1276,7 +1308,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M1** | 6502 core, host only | Dormann and Clark tests pass; cycle table asserted |
 | **M2** | Bus, 8255, VDG row generation, host only | golden images match for all nine modes |
 | **M3** | Board bring-up: clocks, I²C, LCD, test pattern; the real core 0 slice loop, split at flyback (§12.1) | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate; a guest loop polling `FS` observes the low state and escapes |
-| **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` |
+| **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` — **done** 2026-09-22 on a Plus 2 W: typed on the PicoCalc keyboard, answer read off the panel; `CLEAR 0` + `PLOT` draws an SG6 element of the right size |
 | **M5** | Audio | integrator verified against a known frequency; underrun and late-refill counters both zero over 10 minutes |
 | **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs |
 | **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to |
@@ -1310,7 +1342,7 @@ everything after it is refinement.
 
 - Acorn Atom Technical Manual and circuit diagram — 8255 wiring, keyboard
   matrix, VDG mode bit order.
-- Motorola **MC6847** datasheet — mode table, SG4 encoding, character ROM,
+- Motorola **MC6847** datasheet — mode table, SG6 encoding, character ROM,
   field timing.
 - MOS/BASIC ROM disassemblies — entry points, page-2 indirection vectors.
 - Klaus Dormann, *6502 functional tests*; Bruce Clark, *Decimal mode in the

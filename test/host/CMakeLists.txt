@@ -10,6 +10,8 @@ set(PICO_ATOM_HOST_TESTS
     test_mc6847
     test_field
     test_present
+    test_keymap
+    test_via6522
 )
 
 foreach(t ${PICO_ATOM_HOST_TESTS})
@@ -65,3 +67,22 @@ if (Python3_FOUND)
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/test_mkfont.py
                      ${CMAKE_SOURCE_DIR}/tools/mkfont.py)
 endif()
+
+# M4: the real MOS boots and the keyboard types (§17). Needs the user's
+# ROM images, found by SHA-1 in PICO_ATOM_ROMS or the roms/ staging
+# directory; without them it reports as skipped.
+add_executable(test_boot test_boot.c)
+target_link_libraries(test_boot PRIVATE pico_atom_core)
+target_include_directories(test_boot PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(test_boot PRIVATE ${PICO_ATOM_WARNINGS})
+target_compile_definitions(test_boot PRIVATE
+    PICO_ATOM_DEFAULT_ROMS="${CMAKE_SOURCE_DIR}/roms"
+)
+add_test(NAME test_boot COMMAND test_boot)
+set_tests_properties(test_boot PROPERTIES SKIP_RETURN_CODE 77)
+
+# test_keymap checks romset's SHA-1 table against README.md's list, which
+# is the documented source of those digests (design.md §11.1).
+target_compile_definitions(test_keymap PRIVATE
+    PICO_ATOM_README="${CMAKE_SOURCE_DIR}/README.md"
+)

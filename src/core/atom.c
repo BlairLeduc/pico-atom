@@ -12,7 +12,7 @@ void atom_config_default(atom_config_t *cfg) {
     cfg->text_space     = true;
     cfg->video          = true;
     cfg->video_aperture = false;   /* absent on a stock machine */
-    cfg->via_fitted     = false;
+    cfg->via_fitted     = true;    /* the MOS hangs without it (via6522.h) */
     cfg->atomdos        = false;
     cfg->field_hz       = ATOM_FIELD_HZ_DEFAULT;
 }
@@ -82,6 +82,12 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
     i8255_reset(&m->ppi);
     atom_refresh_ppi_inputs(m);
 
+    /* Port A is the printer port; bit 7 is BUSY, which the MOS polls
+     * before every byte it prints. No printer is attached, so the line
+     * reads ready and CTRL-B cannot hang the machine. */
+    via6522_reset(&m->via);
+    m->via.in_a = 0x7Fu;
+
     m6502_init(&m->cpu);
     m->budget = 0;
     atom_reset(m);
@@ -128,7 +134,12 @@ uint32_t atom_run(atom_t *m, uint32_t cycles) {
     /* Whole instructions until at least `cycles` have elapsed; the caller
      * carries the overshoot forward as debt (§6.2, §12.1). */
     while (done < cycles) {
-        done += m6502_step(m);
+        uint32_t c = m6502_step(m);
+        done += c;
+        if (m->cfg.via_fitted) {
+            via6522_tick(&m->via, c);
+            m6502_set_irq(&m->cpu, M6502_IRQ_VIA, via6522_irq(&m->via));
+        }
     }
     return done;
 }

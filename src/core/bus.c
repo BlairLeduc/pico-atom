@@ -8,6 +8,7 @@
 #include "bus.h"
 
 #include "i8255.h"
+#include "via6522.h"
 
 #define IS_8255(a)   (((a) & 0xFC00u) == 0xB000u)
 #define IS_EXPAN(a)  (((a) & 0xFC00u) == 0xB400u)
@@ -42,8 +43,12 @@ uint8_t bus_read_slow(atom_t *m, uint16_t a) {
             return v;
         }
         if (IS_VIA(a) && m->cfg.via_fitted) {
-            /* M9: via6522_read(&m->via, a & 15). */
-            return m->open_bus;
+            /* Reading T1C-L or T2C-L clears a flag, so the IRQ line can
+             * drop on a read. */
+            uint8_t v = via6522_read(&m->via, (uint8_t)(a & 15u));
+            m6502_set_irq(&m->cpu, M6502_IRQ_VIA, via6522_irq(&m->via));
+            m->open_bus = v;
+            return v;
         }
         if (IS_EXPAN(a)) {
             /* M6+: expansion / printer port. */
@@ -89,7 +94,8 @@ void bus_write_slow(atom_t *m, uint16_t a, uint8_t v) {
             return;
         }
         if (IS_VIA(a) && m->cfg.via_fitted) {
-            /* M9: via6522_write(&m->via, a & 15, v). */
+            via6522_write(&m->via, (uint8_t)(a & 15u), v);
+            m6502_set_irq(&m->cpu, M6502_IRQ_VIA, via6522_irq(&m->via));
             return;
         }
         return;

@@ -76,10 +76,12 @@ extern const uint16_t mc6847_palette[VDG_COLOUR_COUNT];
 
 /* The ROM is a flat array: glyph g row r is font[g * 12 + r].
  *
- * A glyph is 5 pixels wide and sits in *bits 5..1* of its byte, which is
- * how the part's own ROM is laid out — not bit 7 leftmost. The renderer
- * shifts it into the 8-wide cell, leaving the three spacing columns on
- * the right. Bits 7, 6 and 0 are unused by the data.
+ * A glyph is 5 pixels wide and sits in *bits 5..1* of its byte, and the
+ * byte is drawn as it stands, bit 7 leftmost, so the glyph lands in
+ * columns 2..6 of the 8-wide cell: two spacing columns on the left and
+ * one on the right. Bits 7, 6 and 0 are unused by the data. (An earlier
+ * renderer shifted the glyph hard left; on the panel that put every
+ * character against the left edge of its cell.)
  *
  * Vertically the 7 glyph rows occupy rows 3..9 of the 12-row cell; that
  * is carried by the data itself and needs no handling here.
@@ -93,7 +95,7 @@ extern const uint16_t mc6847_palette[VDG_COLOUR_COUNT];
  * supplies the index directly in bits 5..0, so nothing translates. */
 #define MC6847_FONT_GLYPH_W  5u
 #define MC6847_FONT_LEFT_BIT 5u
-#define MC6847_FONT_LSHIFT   (7u - MC6847_FONT_LEFT_BIT)
+#define MC6847_FONT_GLYPH_X  (7u - MC6847_FONT_LEFT_BIT)   /* 2: first ink column */
 
 /* Glyph 0 is '@' and glyph 32 is the space, so a page of zeroed VRAM
  * shows '@' throughout. That is correct and is not to be "fixed": the
@@ -110,6 +112,18 @@ extern const uint16_t mc6847_palette[VDG_COLOUR_COUNT];
 static inline uint8_t mc6847_glyph_ascii(uint8_t index) {
     return (uint8_t)(0x20u + ((index + 0x20u) & 0x3Fu));
 }
+
+/* ---- how the Atom wires a VRAM byte, in alpha mode (§2.4) ------------ */
+
+/* D6 drives both A/S and INT/EXT, so a byte with bit 6 set is a
+ * semigraphics-6 cell: six elements in bits 5..0, two wide and three
+ * high, colour from D7:D6 as C1:C0. D7 drives INV, which inverts an
+ * alphanumeric cell and is otherwise only a colour bit. Settled by
+ * executing the ROMs, not read off a table (§16): the MOS draws its
+ * cursor by setting bit 7 of a space, and BASIC's CLEAR 0 fills the
+ * screen with #40 and PLOTs one element bit per point, 64 x 48. */
+#define VDG_BYTE_INV   0x80u
+#define VDG_BYTE_SG6   0x40u
 
 /* ---- the VDG ---------------------------------------------------------- */
 
