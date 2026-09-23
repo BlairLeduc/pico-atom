@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M3 are done** (`docs/design.md` §17).
+**Implementation status: M0–M4 are done** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -22,14 +22,17 @@ four corners, colour order and orientation were checked by eye on the panel;
 present times are measured and recorded in design.md §8.4 (full redraw
 11.5 ms, wire-bound); the southbridge answers with zero I²C errors.
 
-**M4 is in progress** — the Atom boots: ROMs from SD, the display live, the
-keyboard mapped. On the host it is done: `test_boot` boots the real MOS, types
-`PRINT 2+2` through the southbridge event path and checks every keymap entry
-against the kernel. The keyboard matrix is settled — read off the kernel ROM by
-execution (§16). The 6522 VIA exists and is fitted by default, because the
-MOS hangs before its first prompt without it. On the device, the SD driver,
-FatFs, the ROM loader and the keyboard poll exist and the card mounts; what is
-left is the board run with the ROMs on the card.
+M4 is done: the Atom boots on the board. Verified on a Plus 2 W on
+2026-09-22: ROMs load off SD with matching SHA-1s, `PRINT 2+2` typed on the
+PicoCalc keyboard answers on the panel, the cursor shows, and `CLEAR 0` +
+`PLOT` draws an SG6 element. On the host, `test_boot` runs the real MOS
+through the southbridge event path. The keyboard matrix and the VRAM byte
+wiring (bit 7 `INV`, bit 6 SG6) were both settled by executing the ROMs
+(§16). The 6522 VIA exists and is fitted by default, because the MOS hangs
+before its first prompt without it. After `CLEAR 0` the cursor is
+invisible over graphics cells; that follows from the wiring, not a bug.
+
+**M5 is next** — audio.
 
 What does not exist: audio, tape, the menu, the status band.
 

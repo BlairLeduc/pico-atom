@@ -184,7 +184,9 @@ In alpha mode the Atom wires VRAM data bit 6 to the VDG's `A/S` **and**
 - bit 6 = 0 → alphanumeric: bits 5–0 select one of 64 glyphs from the VDG's
   internal 5×7-in-8×12 character ROM, and bit 7 = 1 draws it in inverse video.
   The MOS draws its cursor by setting bit 7 of the cell under it, and shows
-  lower case as inverse capitals.
+  lower case as inverse capitals. Over a graphics cell the same bit is only colour, so
+  after `CLEAR 0` fills the screen with `#40` the cursor (`#C0`, no elements
+  lit) is invisible; it reappears on text.
 - bit 6 = 1 → **semigraphics 6**, because `INT/EXT` is high whenever `A/S` is:
   bits 5–0 are six elements, two across and three down (bits 5 and 4 the top
   pair, 1 and 0 the bottom), and the colour is `C1:C0` = bits 7:6 in `CSS`'s
@@ -1306,7 +1308,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M1** | 6502 core, host only | Dormann and Clark tests pass; cycle table asserted |
 | **M2** | Bus, 8255, VDG row generation, host only | golden images match for all nine modes |
 | **M3** | Board bring-up: clocks, I²C, LCD, test pattern; the real core 0 slice loop, split at flyback (§12.1) | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate; a guest loop polling `FS` observes the low state and escapes |
-| **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` |
+| **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` — **done** 2026-09-22 on a Plus 2 W: typed on the PicoCalc keyboard, answer read off the panel; `CLEAR 0` + `PLOT` draws an SG6 element of the right size |
 | **M5** | Audio | integrator verified against a known frequency; underrun and late-refill counters both zero over 10 minutes |
 | **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs |
 | **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to |
