@@ -73,3 +73,14 @@ roms/*
 
 # Local run logs and scratch (tools/uart-log.sh); results worth keeping go in docs/.
 out/
+
+# graphify: keep the graph, its report, the community labels, the manifest
+# and the semantic cache (the LLM extraction, costly to redo). The rest is
+# machine-local or regenerated: interpreter/root paths, the HTML view
+# (`graphify export html`), the AST cache and the per-run cost log.
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/graph.html
+graphify-out/cost.json
+graphify-out/cache/ast/
+graphify-out/cache/stat-index.json
