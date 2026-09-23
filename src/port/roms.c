@@ -8,12 +8,12 @@
 #include "ff.h"
 
 #include "config.h"
-#include "mc6847.h"
 #include "sd.h"
+#include "storage.h"
+#include "textpage.h"
 
 #define ROM_DIR "/atom/roms/"
 
-static FATFS   s_fs;
 static FIL     s_file;
 static uint8_t s_image[2 * ROM_IMAGE_SIZE];   /* room for abasic.ic20 */
 
@@ -44,7 +44,7 @@ static rom_state_t load_slot(atom_t *m, int slot, const uint8_t *data) {
 bool roms_load(atom_t *m, roms_report_t *r) {
     memset(r, 0, sizeof(*r));
 
-    r->mount_error = (int)f_mount(&s_fs, "", 1);
+    r->mount_error = storage_mount();
     r->card = (r->mount_error == FR_OK);
     if (!r->card) return false;
 
@@ -71,7 +71,7 @@ bool roms_load(atom_t *m, roms_report_t *r) {
         }
     }
 
-    f_unmount("");
+    storage_unmount();
 
     for (int s = 0; s < ROM_SLOT_COUNT; s++) {
         bool in = (r->slot[s] == ROM_LOADED || r->slot[s] == ROM_UNRECOGNISED);
@@ -112,21 +112,12 @@ void roms_log(const roms_report_t *r) {
 
 /* ---- the explanatory page --------------------------------------------- */
 
-/* ASCII to the MC6847's glyph order (CLAUDE.md), upper case only. */
-static uint8_t glyph(char c, bool inverse) {
-    uint8_t a = (uint8_t)c;
-    if (a >= 'a' && a <= 'z') a = (uint8_t)(a - 32);
-    uint8_t g = (a >= 0x40u && a < 0x60u) ? (uint8_t)(a - 0x40u)
-              : (a >= 0x20u && a < 0x40u) ? a : (uint8_t)' ';
-    return inverse ? (uint8_t)(g | VDG_BYTE_INV) : g;
-}
-
 static void put(uint8_t *vram, int row, int col, const char *s, bool inverse) {
-    for (; *s && col < 32; s++, col++) vram[row * 32 + col] = glyph(*s, inverse);
+    textpage_put(vram, row, col, s, inverse);
 }
 
 void roms_explain(const roms_report_t *r, uint8_t *vram) {
-    memset(vram, glyph(' ', false), 512);
+    textpage_clear(vram);
     put(vram, 0, 0, "        PICO-ATOM: NO ROMS      ", true);
 
     if (!r->card) {

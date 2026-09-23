@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M5 are done** (`docs/design.md` §17).
+**Implementation status: M0–M6 are done** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -44,10 +44,25 @@ the consumed sample rate measured against the microsecond timer held at
 36,620–36,621 Hz. By ear, the bell was heard on the speaker and read as
 ~387 Hz on an uncalibrated phone app.
 
-**M6 is next** — tape phase 1 (ATM via OS traps), snapshots, the menu.
+M6 is done: tape phase 1, snapshots and the menu. The trap is on the MOS's
+own OSLOAD/OSSAVE handlers, `#F96E` and `#FAE5`, read off the kernel ROM
+(§11.2, §16). The CPU stalls there, like a 6502 with RDY low, while the
+port serves the request. The trap then leaves page zero, the registers and
+port C as the ROM would, and `test_tape` holds that to the ROM's own routines
+run over a captured byte stream. Snapshots
+(`snapshot.c`, §11.5) carry no ROM bytes, only their hash, and load in two
+passes so a bad file changes nothing; `test_snapshot` restores mid-program
+and requires the same state 150 fields on. On a Plus 2 W on 2026-09-22
+Galaxians loaded off the card as `.atm` and was played, `SAVE`/`LOAD`
+round-tripped, snapshots saved and restored from the menu, and a tape
+chosen in the menu loaded by `LOAD ""`. REPT is `Tab` (§10.3), not an Alt
+chord: a key pressed with Alt down comes from the Alt layer.
 
-What does not exist: tape, snapshots, the menu, the status band, volume
-control from the UI.
+**M6b is next** — game keymaps, chosen in the menu (design.md §10.5; designed,
+not built). Then M7, the perf pass.
+
+What does not exist: tape at signal level (M8), discs and the 8271 (M9),
+the status band, settings persisted to flash (§11.6).
 
 ## The two documents
 
@@ -127,6 +142,8 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/atom.*` | `atom_t`, the page table, config, the run loop, §4.1's API |
 | `src/core/beeper.*` | PC2 → PCM: box filter at the rational sample period, DC blocker (§9.3) |
 | `src/core/snappool.*` | §4.2's three-buffer handoff; state machine only, the port holds the lock |
+| `src/core/tape.*` | §11.2's OSLOAD/OSSAVE trap, the stall, ATM headers, and the ROM's page-zero leavings |
+| `src/core/snapshot.*` | §11.5's format: explicit fields, CRC, ROM hash, two-pass load |
 | `src/core/via6522.*` | the VIA; fitted by default because the MOS reads its PCR on every character |
 | `src/core/keymatrix.*` | held-key set, paced replay of southbridge events into the matrix (§10.2) |
 | `src/core/keymap_picocalc.c` | PicoCalc code -> Atom cell; the cells are the kernel ROM's, by execution |
@@ -140,8 +157,13 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/port/kbd.*` | core 1 drains the southbridge FIFO into an SPSC ring for core 0 |
 | `src/port/audio.*` | PWM slice, chained ping-pong DMA, PCM queue; the throttle (§9.4, §12.2) |
 | `src/port/log.*` | core 0's UART lines, formatted into a ring that core 1 drains |
-| `src/port/main.c` | core 0's field loop, core 1's bring-up and live present; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
-| `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot` runs the real MOS when `roms/` holds the images, and measures its bell |
+| `src/port/storage.*` | mount and unmount the card, once per piece of card work |
+| `src/port/tapeio.*` | serves a stalled tape call from `/atom/tapes/`; the tape list and the inserted tape |
+| `src/port/snapio.*` | snapshot slots in `/atom/snaps/`: temp file, publish, recovery on load |
+| `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer |
+| `src/port/main.c` | core 0's field loop, core 1's bring-up and live present; the park/handoff that gives core 1 the machine for tape calls and the menu; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
+| `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot`, `test_tape` and `test_snapshot` run the real MOS when `roms/` holds the images |
+| `test/host/guest.*` | the real machine on the host for those tests: ROMs found by SHA-1, keys typed through keymatrix |
 | `test/host/vdg_scenes.*` | the VRAM behind the golden images, shared by the test and `vdg-ppm` |
 | `test/golden/` | §15.1's reference PPMs, all nine modes, both colour sets |
 | `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` |
@@ -212,7 +234,10 @@ a plausible-looking change silently breaks:
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
   in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
-  at M5 `.bss` is ~130 KiB of the 520 KiB budget.
+  at M6 `.bss` is ~141 KiB of the 520 KiB budget.
+- **Copy a machine with `atom_copy`, never `=`.** The page table points into
+  `ram[]`, so a struct assignment leaves the copy reading and writing the
+  original's memory.
 - **`page_t` is exactly two pointers**, with `atom_t.page_flags[]` alongside it.
   Adding a third field pads the descriptor to twelve bytes and puts the page
   table 1 KiB over §5's line for it; the flags are slow-path only, so they do
@@ -251,11 +276,11 @@ time. They apply to every driver in `src/port/`:
 
 ## Two things to be careful about
 
-- **`docs/design.md` §16 is a list of unverified constants.** The keyboard
-  matrix cells and the MOS `OSLOAD`/`OSSAVE` vectors are marked low confidence
-  and were written from secondary knowledge. Transcribe them from primary
-  sources before they become `#define`s; do not treat the document as
-  authoritative for them.
+- **`docs/design.md` §16 is a list of unverified constants.** Rows marked
+  low or medium were written from secondary knowledge. Transcribe them from
+  primary sources before they become `#define`s; do not treat the document
+  as authoritative for them. The keyboard matrix and the `OSLOAD`/`OSSAVE`
+  entry points were settled that way, by executing the kernel ROM.
 - **The port A mode bits are settled: `A/G` is bit 4**, `GM0`–`GM2` are bits
   5–7, read off the Atom circuit diagram. §2.3 had this right and §2.4 had it
   backwards; §2.4 has been corrected and §16's row now records the answer. The

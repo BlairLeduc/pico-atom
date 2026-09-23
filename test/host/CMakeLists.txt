@@ -72,19 +72,28 @@ if (Python3_FOUND)
                      ${CMAKE_SOURCE_DIR}/tools/mkfont.py)
 endif()
 
-# M4: the real MOS boots and the keyboard types (§17). Needs the user's
-# ROM images, found by SHA-1 in PICO_ATOM_ROMS or the roms/ staging
-# directory; without them it reports as skipped.
-add_executable(test_boot test_boot.c)
-target_link_libraries(test_boot PRIVATE pico_atom_core)
-target_include_directories(test_boot PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_options(test_boot PRIVATE ${PICO_ATOM_WARNINGS})
-target_compile_definitions(test_boot PRIVATE
+# The real MOS on the host: a machine built from the user's ROM images,
+# found by SHA-1 in PICO_ATOM_ROMS or the roms/ staging directory. Tests
+# that need it report as skipped without them.
+add_library(guest STATIC guest.c)
+target_link_libraries(guest PUBLIC pico_atom_core)
+target_include_directories(guest PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(guest PRIVATE ${PICO_ATOM_WARNINGS})
+target_compile_definitions(guest PRIVATE
     PICO_ATOM_DEFAULT_ROMS="${CMAKE_SOURCE_DIR}/roms"
 )
+
+# M4: the real MOS boots and the keyboard types (§17). M6: the tape
+# traps leave the machine as the ROM's own routines do (§11.2), and a
+# restored snapshot runs on to the same state as the original (§11.5).
+foreach(t test_boot test_tape test_snapshot)
+    add_executable(${t} ${t}.c)
+    target_link_libraries(${t} PRIVATE guest)
+    target_compile_options(${t} PRIVATE ${PICO_ATOM_WARNINGS})
+    add_test(NAME ${t} COMMAND ${t})
+    set_tests_properties(${t} PROPERTIES SKIP_RETURN_CODE 77)
+endforeach()
 target_link_libraries(test_boot PRIVATE m)
-add_test(NAME test_boot COMMAND test_boot)
-set_tests_properties(test_boot PROPERTIES SKIP_RETURN_CODE 77)
 
 # test_keymap checks romset's SHA-1 table against README.md's list, which
 # is the documented source of those digests (design.md §11.1).

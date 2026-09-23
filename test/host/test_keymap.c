@@ -249,12 +249,20 @@ int main(void) {
         keymatrix_field(&k, &m);
         CHECK(k.n == 0 && !cell_down(4, 0), "Alt+Q should do nothing");
 
-        /* Alt+R is the REPT line, active low on port C bit 6. */
+        /* Tab is the REPT line, active low on port C bit 6, and a key
+         * pressed while it is held still reaches its own cell. */
         fresh();
-        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_ALT);
-        keymatrix_event(&k, KEY_EV_PRESSED, 'R');
+        keymatrix_event(&k, KEY_EV_PRESSED, 0x09u);
+        keymatrix_event(&k, KEY_EV_PRESSED, 'q');
         keymatrix_field(&k, &m);
-        CHECK(m.key_rept && (m.ppi.in_c & I8255_IN_C_REPT) == 0, "Alt+R is REPT");
+        CHECK(m.key_rept && (m.ppi.in_c & I8255_IN_C_REPT) == 0, "Tab is REPT");
+        CHECK(cell_down(4, 0), "Q held with REPT reaches its cell");
+
+        /* Shift+Tab arrives as Home, and is REPT too. */
+        fresh();
+        keymatrix_event(&k, KEY_EV_PRESSED, 0xD2u);
+        keymatrix_field(&k, &m);
+        CHECK(m.key_rept, "Shift+Tab (Home) is REPT");
 
         /* Alt+K is BREAK, the reset line. */
         fresh();
@@ -275,15 +283,45 @@ int main(void) {
         CHECK(!any && !m.key_shift && !m.key_rept, "Alt+M reached the matrix");
     }
 
-    /* ---- the queue is bounded, and says when it overflows ------------ */
+    /* ---- the queue is bounded, and never loses a release ------------- */
     {
+        /* Auto-repeat of a key already down is absorbed at once. */
         fresh();
         for (unsigned i = 0; i < ATOM_KEY_EVENT_QUEUE + 5u; i++) {
             keymatrix_event(&k, KEY_EV_PRESSED, 'x');
         }
-        CHECK(k.dropped == 5, "dropped %u, want 5", (unsigned)k.dropped);
-        for (int f = 0; f < 4; f++) keymatrix_field(&k, &m);
-        CHECK(k.q_len == 0 && k.n == 1, "repeats of a held key drain at once");
+        CHECK(k.q_len == 1 && k.dropped == 0, "repeats: q_len %u, dropped %u",
+              k.q_len, (unsigned)k.dropped);
+        keymatrix_event(&k, KEY_EV_RELEASED, 'x');
+
+        /* A burst far faster than the replay: presses are refused once
+         * the queue is short of room, but every key that went down comes
+         * back up, so nothing is left held. */
+        fresh();
+        static const char burst[] = "the quick brown fox jumps over the lazy dog 0123456789";
+        for (int rep = 0; rep < 3; rep++) {
+            for (const char *c = burst; *c; c++) {
+                keymatrix_event(&k, KEY_EV_PRESSED, (uint8_t)*c);
+                keymatrix_event(&k, KEY_EV_RELEASED, (uint8_t)*c);
+            }
+        }
+        CHECK(k.dropped > 0, "the burst should have overflowed");
+        CHECK(k.q_len + k.n_open <= ATOM_KEY_EVENT_QUEUE, "a release has no room");
+        for (int f = 0; f < 2000 && (k.q_len || k.n); f++) keymatrix_field(&k, &m);
+        CHECK(k.q_len == 0 && k.n == 0 && k.n_open == 0, "stuck keys: %u held, %u open",
+              k.n, k.n_open);
+
+        /* The same, with Shift and Alt in the burst: a modifier's release
+         * is kept like any other. */
+        fresh();
+        for (int i = 0; i < 100; i++) {
+            keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_ALT);
+            keymatrix_event(&k, KEY_EV_PRESSED, 'a');
+            keymatrix_event(&k, KEY_EV_RELEASED, 'a');
+            keymatrix_event(&k, KEY_EV_RELEASED, PICOCALC_KEY_ALT);
+        }
+        for (int f = 0; f < 2000 && (k.q_len || k.n); f++) keymatrix_field(&k, &m);
+        CHECK(!k.alt && k.n == 0 && k.n_open == 0, "Alt left down after a burst");
     }
 
     TEST_DONE();

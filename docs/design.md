@@ -944,7 +944,7 @@ chosen because the Atom has no Alt key, so nothing is stolen from the guest:
 | Atom key | PicoCalc binding | Why |
 |---|---|---|
 | `COPY` | `Alt`+`C` | no PicoCalc equivalent |
-| `REPT` | `Alt`+`R` | separate 8255 line, port C bit 6 |
+| `REPT` | `Tab` (and `Shift`+`Tab`, which arrives as `Home`) | separate 8255 line, port C bit 6. A modifier on the Atom — held while another key is held — so it cannot be an `Alt` chord: a key pressed with `Alt` down is taken from the `Alt` layer |
 | `BREAK` (reset) | `Alt`+`K` | destructive; must not be a single keypress |
 | `LOCK` | `Alt`+`L` | |
 | `@` `[` `\` `]` `^` | direct where present, `Alt` layer otherwise | confirm against the installed keymap |
@@ -971,6 +971,97 @@ debounced across fields. If a specific title feels wrong, the lever is polling
 every field (60 Hz) at the cost of 4–5 ms of core 1 per field, and §8.4's budget
 says whether that is affordable.
 
+### 10.5 Game keymaps
+
+**Not yet built.** The standard map (§10.3) is right for typing and wrong for
+play. Atom games do not read characters. They scan the matrix and the
+standalone lines directly, and many were laid out for the Atom's own keyboard,
+where the keys a game used sat under one hand. Galaxians says so on its title
+page: `CTRL` to move right, "the adjacent cursor control" (the `↑↓` key,
+row 0 column 2) to move left, and `REPT` to fire. At least one other title
+from the same disc uses the same scheme. Through the standard map that is
+`Down` for left, `Ctrl` for right and `Tab` for fire. The keys are scattered
+across the PicoCalc and do not match the directions they stand for.
+
+**A game keymap is an overlay on the standard map, chosen in the menu.** It
+rebinds a handful of PicoCalc keys to **Atom targets**, and every key it does
+not mention keeps its standard binding, so `RUN`, `LOAD ""` and the game's own
+prompts still type. A target is one of:
+
+- a matrix cell, named by the Atom key (`A`–`Z`, `0`–`9`, `SPACE`, `RETURN`,
+  `UPDOWN`, `LEFTRIGHT`, `COPY`, …), asserted **without** SHIFT, because a game
+  scanning the matrix sees the cell, not a character; or
+- one of the standalone lines: `CTRL`, `SHIFT` or `REPT`.
+
+The first built-in layout is **Cursor games**, for Galaxians and titles like
+it:
+
+| PicoCalc | Atom | Galaxians' meaning |
+|---|---|---|
+| `Left` | `UPDOWN` cell | move left |
+| `Right` | `CTRL` line | move right |
+| `Up` | `REPT` line | fire |
+
+The directions sit on the direction keys, and fire is on the same cluster,
+under one thumb. That is the property the Atom's own layout had.
+
+**Mechanism.** `keymap_t` gains the `KM_CTRL` flag §10.3 sketched but the code never needed, which asserts the CTRL line
+(OR-ed with the host's own `Ctrl`) in the same way `KM_SHIFT` asserts SHIFT, and
+`lookup()` in `keymatrix.c` consults the active overlay before the Alt layer
+and the plain table. The binding is still chosen once, at press time, so a
+key's release always undoes what its press did. The overlay is only ever swapped
+while core 0 is parked in the menu, and core 0 starts its held-key set afresh
+on the way back (§13), so no key can be held across a change of layout and there
+is no cross-core race. Capacities — layouts and bindings per layout — are fixed
+in `config.h` (§5).
+
+**Where layouts come from.** Built-in layouts are data in `src/core/`, alongside
+the standard map. Further layouts are text files in `/atom/keymaps/` on the card,
+read when the menu opens, one binding per line:
+
+```
+# Cursor games: Galaxians and friends
+name  = CURSOR GAMES
+left  = UPDOWN
+right = CTRL
+up    = REPT
+tapes = GALAXI
+```
+
+The optional `tapes` line names the ATM header names the layout goes with.
+Loading one of those tapes (§11.2) selects the layout, and the menu shows that
+it did. The user can always override the choice in the menu, and an ordinary
+program never has a layout forced on it. The parser rejects a line it does not
+understand and names the file and line on the menu's status row, rather than
+guessing.
+
+**In the menu** the item is `KEYS < STANDARD >`, and left/right cycles through
+the built-in layouts, then the card's. The choice is part of the settings, and
+is persisted when §11.6 exists. It is not part of a snapshot (§11.5): a snapshot
+is guest state, and a layout is a fact about the host's keyboard.
+
+**Things to confirm on the device before the layout table is final:**
+
+- **Rollover.** The MCU must report `Left` or `Right` held while `Up` is
+  pressed, and the reverse. Moving and firing at once is the whole point. The
+  events are per key (§10.2), but the matrix under the MCU has not been checked
+  for ghosting on the arrow cluster.
+- **Key repeat.** A held arrow sends further presses every ~100 ms (hardware
+  notes §6.2). The held set already absorbs them (§10.2), so this should need
+  nothing, but it is worth watching on the first run.
+- **Pacing.** Replay pacing (`ATOM_KEY_MIN_FIELDS` + `ATOM_KEY_GAP_FIELDS`,
+  eight fields) was tuned for the MOS's typing loop (`config.h`). A held
+  direction is unaffected. A quick tap of fire becomes at least six fields of
+  `REPT`, and a second tap waits two more. If a game feels sluggish, the lever is
+  per-layout pacing, measured against the game rather than guessed.
+
+**Tests.** `test_keymap` checks the overlay without a ROM. `Left` under Cursor
+games must drive cell (0,2) with SHIFT up, `Right` must drive the CTRL line,
+`Up` must drive REPT, and an unmentioned key must keep its standard cell. The
+held-set tests must also pass with an overlay active. `test_boot` checks it
+through the real MOS, with a BASIC loop that reads port B and port C (`?#B001`,
+`?#B002`) while the test holds each key.
+
 ---
 
 ## 11. Storage, tape and disc
@@ -983,6 +1074,7 @@ says whether that is affordable.
   tapes/      *.atm  *.uef  *.tap
   discs/      *.ssd  *.dsk
   snaps/      *.psnap
+  keymaps/    *.map        game keymaps (§10.5)
   pico-atom.cfg
 ```
 
@@ -1019,16 +1111,69 @@ write latency can exceed both the field and the audio deadline.
 
 ### 11.2 Tape, phase 1: OS-level trapping
 
-Fast and simple: watch for `PC` entering the MOS `OSLOAD` / `OSSAVE` entry
-points, service the request from a `.atm` file on SD, set up the registers and
-`RTS`. ATM is the natural container — 16-byte name, load address, execution
-address, length, then data — and it is how most Atom software is archived.
+Fast and simple: stop the CPU when it enters the MOS's load or save routine,
+serve the request from a `.atm` file on SD, leave the machine as the routine
+would have, and `RTS`. ATM is the natural container — a 16-byte name, then load
+address, execution address and length, little-endian, then the data — and it is
+how most Atom software is archived.
 
-The cost is that it only works with a stock MOS, and the entry addresses must be
-confirmed against a MOS disassembly rather than remembered (§16). Intercepting
-at the **page-2 indirection vectors** rather than the ROM entry points is the
-more robust variant and is preferred if the vector table proves to cover the
-calls we need.
+**The entry points, read off the kernel ROM.** `OSLOAD` (`#FFE0`) is
+`JMP (#020C)` and `OSSAVE` (`#FFDD`) is `JMP (#020E)`, and reset copies a table
+from `#FF9A` that points those vectors at `#F96E` and `#FAE5`. Both handlers
+take `X` pointing at a parameter block in page zero and begin by copying ten
+bytes of it to `#C9`–`#D2` (`#F84F`): the name's address, then for a load the
+address and a flag byte whose bit 7 set means "at this address, not the file's";
+for a save the reload, execution, start and end addresses. A name is at most 13
+characters and a CR, or the MOS's `NAME` error.
+
+**The trap is on the handlers, not the `#FFxx` entries.** That is the page-2
+variant for free: anything that repoints `#020C` or `#020E` — AtomDOS, a utility
+ROM, a game's own loader — never reaches `#F96E`, so it is never trapped. The
+trap also checks the first eight bytes of each handler against the stock
+kernel's and stands aside for a MOS that differs, because what it reproduces is
+that kernel's page-zero contract.
+
+**The CPU stalls; it does not return early.** At a trapped boundary the 6502
+behaves as if RDY were held low: guest time passes, the VIA ticks, audio keeps
+its cadence, no instruction runs. `atom_run` keeps its contract (§4.1) and the
+port serves the request whenever it gets to it — on the device, core 0 parks at
+the field boundary and core 1 does the card work (§4.2, §11.1). A request no
+file answers to is **declined**, and the ROM routine then runs as though there
+were no trap: it prints `PLAY TAPE` and waits on the cassette input, and the
+user escapes as on the real machine. BREAK cancels an outstanding request.
+
+**What the trap leaves behind is the ROM's, byte for byte.** `*RUN` jumps
+through `#D6` after the load returns; BASIC re-enters at `#CD9B`; a game's
+loader may look at anything. So the trap writes what the named-file path
+(`#F97A`) or the record loop (`#FAF8`) leaves: the parameter block with its
+advanced pointers, the last block's header in `#D4`–`#DB`, the checksum in
+`#DC`, the mode bits in `#DD`, the name in `#ED`, port C, and `A`, `X` and `Y`.
+Two things about the Atom's own block format are needed for that and are easy
+to get wrong. The checksum covers the framing — `****`, the name and CR, and the
+header — as well as the data, and the load adds the checksum byte to itself, so
+`#DC` ends at twice the sum. The flags byte is built by rotating into `#D2`,
+which starts as the high byte of the end address: bit 7 "another block
+follows", bit 6 "this block has data", bit 5 "not the first block" — because
+the loop re-enters past its `CLC` with the carry still set — and bits 4–0
+whatever was rotated out of the old value. Those five bits mean nothing but are
+recorded, summed and left in `#DB`, so they are reproduced, taking the file to
+have been saved from where it loads, which is all an ATM header can say.
+
+`test_tape` holds all of this to the ROM itself. It runs the kernel's own
+`OSSAVE` and `OSLOAD` with the byte-level cassette routines (`#FC7C`, `#FBEE`),
+the leader-tone wait (`#FB8E`) and the `PLAY TAPE` keypress hooked, captures the
+bytes the ROM would have recorded, reads them back, and requires the trapped
+calls to leave the same machine — every byte below `#A000`, the registers, the
+flags, the stack and port C — across block boundaries and both address modes.
+Only the bit-level scratch at `#C0`–`#C5` and `#EC` is exempt, because the trap
+has no bits to put there.
+
+On the card the files live in `/atom/tapes/`. A load finds its file by the name
+in the ATM header, compared byte for byte as the MOS compares names, and failing
+that by the file name without `.atm`, ignoring case. A save writes
+`<name>.atm`, or rewrites whichever file already answers to that name, through
+a temporary file. The ROM's nameless format — `SAVE ""`, one headerless block —
+is not reproduced: an empty name is an ordinary file with an empty name.
 
 ### 11.3 Tape, phase 2: signal level
 
@@ -1052,10 +1197,35 @@ path to a useful emulator.
 
 ### 11.5 Snapshots
 
-Whole-machine state — 64 KiB guest image, CPU, 8255, VDG mode, tape position —
-is ~72 KiB. Written to `/atom/snaps/` from the menu, via a temporary file and an
-explicit publish step, because a filesystem rename alone is not proof of
-power-loss atomicity (hardware notes §7.1).
+Whole-machine state, in `snapshot.c`: a 20-byte header (magic, version,
+lengths, CRC-32 of the payload), 96 bytes of CPU, 8255, VIA and machine state
+written field by field, little-endian, then the whole 64 KiB address space —
+65,652 bytes in all. It is never a struct dumped from memory: `atom_t` holds
+pointers and padding, and a snapshot has to outlive the build that wrote it.
+
+**ROM bytes are not in it.** ROM pages go out as zeros and the SHA-1 of every ROM
+page goes in instead; a snapshot loads only into a machine whose ROMs hash the
+same, and only into the same memory map and field rate. Acorn's images are the
+user's to supply (§1), and a program resumed over different ROMs is §16's worst
+kind of bug.
+
+**Loading is two passes.** The first reads the whole file and checks the header,
+the CRC, the configuration and the ROMs without touching the machine; only then
+does the second pass change anything, so a torn, foreign or newer file leaves
+the running machine exactly as it was. Keys come back up and the loudspeaker
+restarts from the restored clock.
+
+On the card they are `/atom/snaps/slot1.psnap` to `slot4.psnap`, saved and
+loaded from the menu (§13). A save writes `slotN.new`, closes it, removes the old
+file and renames the new one into place. A rename alone is not proof of
+power-loss atomicity (hardware notes §7.1), so the recovery policy is on the
+load side: a `.psnap` that is missing or fails its check gives way to a whole
+`.new`, which is what an interrupted publish leaves.
+
+`test_snapshot` holds it to execution: a machine saved part-way through a
+program, restored into a machine that has been doing something else and run
+for 150 fields, must arrive at the same RAM, CPU, VIA and 8255 state as the
+original run on. It also checks each refusal leaves the machine untouched.
 
 ### 11.6 Internal flash
 
@@ -1177,9 +1347,23 @@ The emulator is invisible in normal use: boot goes straight to the Atom's `>`
 prompt. `Alt`+`M` opens an overlay menu, which **pauses the guest** and stops
 audio, making it the safe boundary for SD and flash work (§11).
 
+**As built at M6.** Core 0 parks at a field boundary and hands the machine to
+core 1 (the handoff in `main.c`, the same one a tape call uses), feeding the PCM
+queue silence so audio neither underruns nor loses its pacing. Core 1 runs the
+menu with the card mounted and the keyboard its own: it drains the southbridge
+FIFO and consumes the events itself, and core 0 starts its held-key set afresh
+on the way back. The menu is a 32×16 text page presented through the ordinary
+renderer in place of the Atom's screen. It offers Resume, snapshot save, load
+and delete over four slots (§11.5), a tape list whose choice is what an empty
+name loads (§11.2), Reset, volume and backlight. `Esc` or `Alt`+`M` closes it.
+The table below is the full intent; disc, machine and display settings wait
+for the milestones that give them something to set, and settings are not yet
+persisted to flash (§11.6).
+
 | Menu | Does |
 |---|---|
 | Tape | attach/detach an image, rewind, play, record, position |
+| Keys | the game keymap in force: standard, a built-in layout, or one from the card (§10.5) |
 | Disc | attach/detach drive 0/1 (phase 3) |
 | Snapshot | save, load, delete |
 | Machine | RAM population, ROM set, VIA/AtomDOS present, guest clock (1/2/4 MHz) |
@@ -1342,7 +1526,7 @@ class of bug in emulation.
 | MC6847 mode table (§2.4) | MC6847 datasheet | high |
 | VDG mode bit order in port A bits 7–4 | Atom circuit diagram | **confirmed** — `A/G` is bit 4, `GM0`–`GM2` bits 5–7, read off the schematic. §2.3 had this right; an earlier §2.4 had `A/G` at bit 7 and has been corrected |
 | Keyboard matrix cell assignments (10×6) | the kernel ROM's scan at `#FE71`, executed | **confirmed** — every cell pressed at the `>` prompt with and without SHIFT and the MOS's output read from VRAM; the table is in `keymap_picocalc.c` and `test_boot` re-checks it against the ROM |
-| `OSLOAD`/`OSSAVE` entry addresses and page-2 vectors (§11.2) | MOS disassembly | **low** |
+| `OSLOAD`/`OSSAVE` entry addresses and page-2 vectors (§11.2) | the kernel ROM, disassembled and executed | **confirmed** — `#FFE0` is `JMP (#020C)`, `#FFDD` is `JMP (#020E)`, and reset points them at `#F96E` and `#FAE5`; `test_tape` runs both routines and holds the trap to what they leave |
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source | **medium** — affects §12.1 throughout |
 | `FS` low interval, ~6 % of a field (§12.1) | MC6847 datasheet, `FS` timing | **low** — `ATOM_FLYBACK_PERCENT`; software polls the edge, so the length matters less than that it exists |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
@@ -1384,7 +1568,8 @@ Each milestone ends with something that runs and something that is measured.
 | **M3** | Board bring-up: clocks, I²C, LCD, test pattern; the real core 0 slice loop, split at flyback (§12.1) | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate; a guest loop polling `FS` observes the low state and escapes |
 | **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` — **done** 2026-09-22 on a Plus 2 W: typed on the PicoCalc keyboard, answer read off the panel; `CLEAR 0` + `PLOT` draws an SG6 element of the right size |
 | **M5** | Audio | integrator verified against a known frequency; underrun and late-refill counters both zero over 10 minutes — **done** 2026-09-22 on a Plus 2 W (§9.4) |
-| **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs |
+| **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs — **done** 2026-09-22 on a Plus 2 W: Galaxians, extracted from a `games1.dsk` image to `.atm`, loaded off the card by `LOAD "GALAXI"` (4,864 bytes in 5 ms) and was played; `SAVE`/`LOAD` round-tripped through the card; snapshots saved and restored from the menu; a tape chosen in the menu loaded by `LOAD ""` |
+| **M6b** | Game keymaps (§10.5) | Galaxians played with the Cursor games layout: `Left`/`Right` move, `Up` fires, moving and firing at once |
 | **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to |
 | **M8** | Tape phase 2 (UEF at signal level), turbo clock | a UEF image that phase 1 cannot load, loads |
 | **M9** | AtomDOS + 8271, 6522 VIA | an `.ssd` boots |

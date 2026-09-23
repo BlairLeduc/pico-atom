@@ -11,56 +11,20 @@
  * the way the device will pace them.
  */
 
-#include <dirent.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "atom.h"
-#include "keymatrix.h"
+#include "guest.h"
 #include "mc6847.h"
 #if PICO_ATOM_HAVE_FONT
 #include "mc6847_font.h"
 #endif
-#include "romset.h"
 #include "test_util.h"
 
-static uint8_t images[ROM_SLOT_COUNT][ROM_IMAGE_SIZE];
-static bool    have[ROM_SLOT_COUNT];
-
-static void consider(const uint8_t *data, size_t len) {
-    for (size_t off = 0; off + ROM_IMAGE_SIZE <= len; off += ROM_IMAGE_SIZE) {
-        rom_slot_t s = romset_identify(data + off, ROM_IMAGE_SIZE);
-        if (s == ROM_UNKNOWN) continue;
-        memcpy(images[s], data + off, ROM_IMAGE_SIZE);
-        have[s] = true;
-    }
-}
-
-static void scan_roms(const char *dir) {
-    DIR *d = opendir(dir);
-    if (!d) return;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        char path[1024];
-        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
-        FILE *f = fopen(path, "rb");
-        if (!f) continue;
-        static uint8_t buf[2 * ROM_IMAGE_SIZE + 1];
-        size_t n = fread(buf, 1, sizeof buf, f);
-        fclose(f);
-        /* 4 KiB images, or an 8 KiB abasic.ic20 (§11.1). */
-        if (n == ROM_IMAGE_SIZE || n == 2 * ROM_IMAGE_SIZE) consider(buf, n);
-    }
-    closedir(d);
-}
-
-/* ---- the machine ---------------------------------------------------- */
-
-static atom_t      m;
-static keymatrix_t k;
-static atom_t      booted;      /* the machine at its first prompt */
+static guest_t g;
+static atom_t  booted;      /* the machine at its first prompt */
 
 /* Every field's audio, drained the way the port drains it (§12.2), and
  * kept from the last reset of audio_n so the bell can be measured. */
@@ -68,134 +32,47 @@ static atom_t      booted;      /* the machine at its first prompt */
 static int16_t audio[AUDIO_MAX];
 static size_t  audio_n;
 
-static void field(void) {
-    keymatrix_field(&k, &m);
-    atom_run_field(&m);
+static void capture(atom_t *m) {
     int16_t tmp[ATOM_AUDIO_BUF_LEN];
-    size_t n = atom_audio_drain(&m, tmp, ATOM_AUDIO_BUF_LEN);
+    size_t n = atom_audio_drain(m, tmp, ATOM_AUDIO_BUF_LEN);
     if (audio_n + n <= AUDIO_MAX) {
         memcpy(audio + audio_n, tmp, n * sizeof(tmp[0]));
         audio_n += n;
     }
 }
 
-static void fields(int n) {
-    for (int i = 0; i < n; i++) field();
-}
-
-static void boot(void) {
-    atom_config_t cfg;
-    atom_config_default(&cfg);
-    atom_init(&m, &cfg);
-    keymatrix_init(&k);
-    for (int s = 0; s < ROM_SLOT_COUNT; s++) {
-        /* AtomDOS wants the 8271 (M9), so its ROM waits for it. */
-        if (have[s] && s != ROM_DOS) {
-            atom_load_rom(&m, romset_slots[s].addr, images[s], ROM_IMAGE_SIZE);
-        }
-    }
-    atom_reset(&m);
-    fields(120);
-}
-
 static void restore(void) {
-    m = booted;
-    keymatrix_init(&k);
+    atom_copy(&g.m, &booted);
+    keymatrix_init(&g.k);
 }
 
-/* The screen byte the MOS writes for an ASCII character: the MC6847's
- * glyph order puts #40-#5F first, and lower case is inverse (§2.4). */
-static uint8_t screen_code(char c) {
-    uint8_t a = (uint8_t)c;
-    if (a < 0x40u) return a;
-    if (a < 0x60u) return (uint8_t)(a - 0x40u);
-    return (uint8_t)(a + 0x20u);
-}
-
-static const uint8_t *vram(void) { return atom_vram(&m); }
-
-/* The text on one alpha row, as ASCII, with inverse and graphics as '#'. */
-static const char *row_text(int row) {
-    static char s[33];
-    for (int c = 0; c < 32; c++) {
-        uint8_t v = vram()[row * 32 + c];
-        if (v == 0xA0u) v = 0x20u;    /* the cursor, an inverse space */
-        uint8_t g = v & 0x3Fu;
-        s[c] = (v & 0xC0u) ? '#' : (char)(g < 32 ? '@' + g : g);
-    }
-    s[32] = 0;
-    for (int c = 31; c >= 0 && s[c] == ' '; c--) s[c] = 0;
-    return s;
-}
-
-/* Run until every queued event has been replayed and every key is up,
- * then long enough for the MOS to act on the last one. */
-static void settle(void) {
-    for (int i = 0; i < 1000 && (k.q_len > 0 || k.n > 0); i++) field();
-    fields(10);
-}
-
-/* A key as the MCU sends it: press and release in one poll, the worst
- * case, then the rest of the 30 Hz poll interval before the next. */
-static void tap(uint8_t code) {
-    keymatrix_event(&k, KEY_EV_PRESSED, code);
-    keymatrix_event(&k, KEY_EV_RELEASED, code);
-    fields(2);
-}
-
-/* With a host modifier held around it. */
-static void chord(uint8_t mod, uint8_t code) {
-    keymatrix_event(&k, KEY_EV_PRESSED, mod);
-    tap(code);
-    keymatrix_event(&k, KEY_EV_RELEASED, mod);
-    settle();
-}
-
-/* Type a string as a PicoCalc user would: shifted characters arrive with
- * Shift held, and the release comes back unshifted when Shift is let go
- * first (hardware-notes.md §6.2), which keymatrix must see through. */
-static void type(const char *s) {
-    for (; *s; s++) {
-        uint8_t c = (uint8_t)*s;
-        bool shifted = strchr("!\"#$%&'()=<+*>?", c) != NULL;
-        if (c >= 'A' && c <= 'Z') c = (uint8_t)(c + 32);   /* unshifted = capitals */
-        if (c == '\n') c = 0x0Au;
-        if (!shifted) { tap(c); continue; }
-        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_SHIFT_L);
-        keymatrix_event(&k, KEY_EV_PRESSED, c);
-        keymatrix_event(&k, KEY_EV_RELEASED, PICOCALC_KEY_SHIFT_L);
-        keymatrix_event(&k, KEY_EV_RELEASED, keymap_picocalc_canonical(c));
-        fields(2);
-    }
-    settle();
-}
-
-static int cursor(void) {
-    int at = -1, count = 0;
-    for (int i = 0; i < 512; i++) {
-        if (vram()[i] & 0x80u) { at = i; count++; }
-    }
-    return count == 1 ? at : -1;
-}
+static void fields(int n)                  { guest_fields(&g, n); }
+static void settle(void)                   { guest_settle(&g); }
+static void tap(uint8_t code)              { guest_tap(&g, code); }
+static void chord(uint8_t mod, uint8_t c)  { guest_chord(&g, mod, c); }
+static void type(const char *s)            { guest_type(&g, s); }
+static uint8_t screen_code(char c)         { return guest_screen_code(c); }
+static const char *row_text(int row)       { return guest_row(&g.m, row); }
+static int cursor(void)                    { return guest_cursor(&g.m); }
+static const uint8_t *vram(void)           { return atom_vram(&g.m); }
 
 int main(void) {
-    const char *dir = getenv("PICO_ATOM_ROMS");
-    scan_roms(dir ? dir : PICO_ATOM_DEFAULT_ROMS);
-    if (!have[ROM_KERNEL] || !have[ROM_BASIC]) {
-        printf("skipped: no kernel and BASIC images in %s\n",
-               dir ? dir : PICO_ATOM_DEFAULT_ROMS);
+    const char *dir;
+    if (!guest_find_roms(&dir)) {
+        printf("skipped: no kernel and BASIC images in %s\n", dir);
         return TEST_SKIP_CODE;
     }
+    g.on_field = capture;
 
     /* ---- it boots to a prompt ----------------------------------------- */
-    boot();
+    guest_boot(&g);
     CHECK(strcmp(row_text(0), "ACORN ATOM") == 0, "banner: '%s'", row_text(0));
     CHECK(strcmp(row_text(2), ">") == 0, "prompt: '%s'", row_text(2));
     CHECK(cursor() == 2 * 32 + 1, "cursor after the prompt, at %d", cursor());
-    CHECK(atom_vdg_mode(&m) == 0, "alpha mode, got 0x%02X", atom_vdg_mode(&m));
-    CHECK(m.cpu.undoc_count == 0, "undocumented opcode 0x%02X at #%04X",
-          m.cpu.undoc_op, m.cpu.undoc_pc);
-    booted = m;
+    CHECK(atom_vdg_mode(&g.m) == 0, "alpha mode, got 0x%02X", atom_vdg_mode(&g.m));
+    CHECK(g.m.cpu.undoc_count == 0, "undocumented opcode 0x%02X at #%04X",
+          g.m.cpu.undoc_op, g.m.cpu.undoc_pc);
+    atom_copy(&booted, &g.m);
 
     /* ---- the VRAM byte's wiring, as the ROMs use it (mc6847.h) ------ *
      * The MOS draws its cursor by setting bit 7 of the cell, so bit 7
@@ -209,7 +86,7 @@ int main(void) {
         uint16_t row[ATOM_SCREEN_W];
         mc6847_init(&vdg);
         mc6847_set_font(&vdg, font_6847);
-        mc6847_set_mode(&vdg, atom_vdg_mode(&m));
+        mc6847_set_mode(&vdg, atom_vdg_mode(&g.m));
         mc6847_render_row(&vdg, vram(), 2 * 12 + 5, row);   /* mid-cell */
         CHECK(row[8] == mc6847_palette[VDG_GREEN] && row[15] == mc6847_palette[VDG_GREEN],
               "the cursor cell should render as a solid block");
@@ -313,23 +190,21 @@ int main(void) {
         chord(PICOCALC_KEY_ALT, 'C');
         chord(PICOCALC_KEY_ALT, 'C');
         CHECK(cursor() == 2, "COPY advances: cursor at %d", cursor());
-        CHECK(m.ram[0x100] == 'A' && m.ram[0x101] == 'C',
-              "COPY into the line buffer: %02X %02X", m.ram[0x100], m.ram[0x101]);
+        CHECK(g.m.ram[0x100] == 'A' && g.m.ram[0x101] == 'C',
+              "COPY into the line buffer: %02X %02X", g.m.ram[0x100], g.m.ram[0x101]);
 
         /* CTRL: CTRL-L is form feed, which clears the screen. */
         restore();
         chord(PICOCALC_KEY_CTRL, 'l');
         CHECK(strcmp(row_text(0), "ACORN ATOM") != 0, "CTRL-L left: '%s'", row_text(0));
 
-        /* REPT, held with a key, repeats it. */
+        /* REPT (Tab), held with a key, repeats it. */
         restore();
-        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_ALT);
-        keymatrix_event(&k, KEY_EV_PRESSED, 'R');
-        keymatrix_event(&k, KEY_EV_RELEASED, PICOCALC_KEY_ALT);
-        keymatrix_event(&k, KEY_EV_PRESSED, 'a');
+        keymatrix_event(&g.k, KEY_EV_PRESSED, 0x09u);
+        keymatrix_event(&g.k, KEY_EV_PRESSED, 'a');
         fields(60);
-        keymatrix_event(&k, KEY_EV_RELEASED, 'a');
-        keymatrix_event(&k, KEY_EV_RELEASED, 'R');
+        keymatrix_event(&g.k, KEY_EV_RELEASED, 'a');
+        keymatrix_event(&g.k, KEY_EV_RELEASED, 0x09u);
         fields(10);
         CHECK(strncmp(row_text(2), ">AAAA", 5) == 0, "REPT: '%s'", row_text(2));
 
@@ -352,7 +227,7 @@ int main(void) {
         /* The menu chord reaches the UI, not the guest. */
         restore();
         chord(PICOCALC_KEY_ALT, 'M');
-        CHECK(k.menu_request, "Alt+M should request the menu");
+        CHECK(g.k.menu_request, "Alt+M should request the menu");
         CHECK(strcmp(row_text(2), ">") == 0, "Alt+M reached the guest: '%s'", row_text(2));
     }
 

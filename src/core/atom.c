@@ -14,6 +14,7 @@ void atom_config_default(atom_config_t *cfg) {
     cfg->video_aperture = false;   /* absent on a stock machine */
     cfg->via_fitted     = true;    /* the MOS hangs without it (via6522.h) */
     cfg->atomdos        = false;
+    cfg->tape_traps     = true;
     cfg->field_hz       = ATOM_FIELD_HZ_DEFAULT;
 }
 
@@ -97,8 +98,19 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
 }
 
 void atom_reset(atom_t *m) {
+    m->tape.op = TAPE_NONE;
+    m->tape.pass = false;
     m->cpu.reset_pending = false;
     m6502_reset(&m->cpu, m);
+}
+
+void atom_copy(atom_t *dst, const atom_t *src) {
+    if (dst == src) return;
+    memcpy(dst, src, sizeof(*dst));
+    for (unsigned p = 0; p < ATOM_PAGE_COUNT; p++) {
+        if (src->page[p].read)  dst->page[p].read  = dst->ram + (src->page[p].read  - src->ram);
+        if (src->page[p].write) dst->page[p].write = dst->ram + (src->page[p].write - src->ram);
+    }
 }
 
 bool atom_load_rom(atom_t *m, uint16_t addr, const uint8_t *data, size_t len) {
@@ -137,7 +149,16 @@ uint32_t atom_run(atom_t *m, uint32_t cycles) {
     /* Whole instructions until at least `cycles` have elapsed; the caller
      * carries the overshoot forward as debt (§6.2, §12.1). */
     while (done < cycles) {
-        uint32_t c = m6502_step(m);
+        uint32_t c;
+        if (__builtin_expect(m->cpu.pc == TAPE_OSLOAD_PC ||
+                             m->cpu.pc == TAPE_OSSAVE_PC, 0) && tape_trap(m)) {
+            /* Stalled on a tape request, like a 6502 with RDY low: the
+             * rest of the slice passes with no instruction run (§11.2). */
+            c = cycles - done;
+            m->cpu.cycles += c;
+        } else {
+            c = m6502_step(m);
+        }
         done += c;
         if (m->cfg.via_fitted) {
             via6522_tick(&m->via, c);

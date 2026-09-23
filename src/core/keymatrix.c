@@ -8,14 +8,43 @@ void keymatrix_init(keymatrix_t *k) {
     memset(k, 0, sizeof(*k));
 }
 
-void keymatrix_event(keymatrix_t *k, uint8_t state, uint8_t code) {
-    if (k->q_len >= ATOM_KEY_EVENT_QUEUE) {
-        k->dropped++;
-        return;
-    }
+static void enqueue(keymatrix_t *k, uint8_t state, uint8_t code) {
     unsigned tail = (k->q_head + k->q_len) % ATOM_KEY_EVENT_QUEUE;
     k->queue[tail] = (keymatrix_event_t){ state, code };
     k->q_len++;
+}
+
+/* Held-state identity is the physical key, not the code (§10.2). */
+static int find_open(const keymatrix_t *k, uint8_t canon) {
+    for (int i = 0; i < k->n_open; i++) {
+        if (k->open[i] == canon) return i;
+    }
+    return -1;
+}
+
+void keymatrix_event(keymatrix_t *k, uint8_t state, uint8_t code) {
+    uint8_t canon = keymap_picocalc_canonical(code);
+    int o = find_open(k, canon);
+
+    if (state == KEY_EV_RELEASED) {
+        /* A release for a press that was refused, or that came before
+         * keymatrix_init, has nothing to undo. */
+        if (o < 0) return;
+        k->open[o] = k->open[--k->n_open];
+        enqueue(k, state, code);   /* its slot was kept (below) */
+        return;
+    }
+    if (state != KEY_EV_PRESSED && state != KEY_EV_HELD) return;
+    if (o >= 0) return;            /* already down: auto-repeat, or held */
+
+    /* Room for this press, its release, and every release still owed:
+     * q_len + n_open never exceeds the queue. */
+    if (k->q_len + k->n_open + 2u > ATOM_KEY_EVENT_QUEUE) {
+        k->dropped++;
+        return;
+    }
+    k->open[k->n_open++] = canon;
+    enqueue(k, state, code);
 }
 
 static int find_held(const keymatrix_t *k, uint8_t canon) {
