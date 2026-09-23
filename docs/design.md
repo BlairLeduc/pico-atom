@@ -1274,7 +1274,7 @@ class of bug in emulation.
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
 | 8271 base address `#0A00` (§7.3) | AtomDOS documentation | medium |
 | VRAM byte wiring in alpha mode (§2.4) | the MOS and BASIC, executed | **confirmed** — bit 6 is `A/S` and `INT/EXT` (SG6), bit 7 is `INV`: the MOS's cursor is `#A0`, and `CLEAR 0` then `PLOT` writes `#40` plus one element bit per point; `test_boot` pins both |
-| SG6 colour from bits 7:6 (§2.4) | MC6847 datasheet; a real Atom or reference emulator | **medium** — follows the datasheet's `C1:C0` = `D7:D6`; not yet seen against a real machine |
+| SG6 colour from bits 7:6 (§2.4) | MC6847 datasheet; a reference emulator | **confirmed** — the datasheet's `C1:C0` = `D7:D6`, so yellow/red (cyan/orange with `CSS`); `CLEAR 0` + `PLOT` compared by eye against another Atom emulator on 2026-09-22 |
 | MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |
 
 The last one was settled the way this section asks. The table is XRoar's
