@@ -103,19 +103,26 @@ int main(void) {
         CHECK(m->page[0x0A].write == NULL,
               "if page #0A kept a fast write the FDC would never be reached");
 
-        /* The four FDC bytes are not RAM ... */
+        /* The eight FDC bytes are not RAM. #0A04 is the data register:
+         * the DOS's NMI handler moves every byte through it (#E84F). */
         m->ram[0x0A01] = 0x00;
         bus_write(m, 0x0A01, 0x9E);
         CHECK(m->ram[0x0A01] == 0x00, "#0A01 belongs to the FDC, not to RAM");
-
-        /* ... and the other 252 bytes of the page still are. */
+        m->ram[0x0A04] = 0x00;
         bus_write(m, 0x0A04, 0x9E);
-        CHECK(bus_read(m, 0x0A04) == 0x9E, "#0A04 should still be ordinary RAM");
+        CHECK(m->ram[0x0A04] == 0x00, "#0A04 is the FDC's data register, not RAM");
+        CHECK(bus_read(m, 0x0A04) == 0x9E, "the data register reads back what was written");
+
+        /* ... and the other 248 bytes of the page still are. */
+        bus_write(m, 0x0A08, 0x9E);
+        CHECK(bus_read(m, 0x0A08) == 0x9E, "#0A08 should still be ordinary RAM");
         bus_write(m, 0x0AFF, 0x3C);
         CHECK(bus_read(m, 0x0AFF) == 0x3C, "#0AFF should still be ordinary RAM");
 
         /* Without AtomDOS the whole page is plain RAM on the fast path. */
-        m = machine(&cfg);
+        atom_config_t none = cfg;
+        none.atomdos = false;
+        m = machine(&none);
         CHECK(m->page[0x0A].write != NULL, "without AtomDOS page #0A is ordinary RAM");
         bus_write(m, 0x0A01, 0x9E);
         CHECK(bus_read(m, 0x0A01) == 0x9E, "#0A01 is RAM on a machine with no disc system");

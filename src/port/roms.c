@@ -55,8 +55,8 @@ bool roms_load(atom_t *m, roms_report_t *r) {
         if (n == FILE_MISSING) { r->slot[s] = ROM_MISSING; continue; }
         if (n != (int)ROM_IMAGE_SIZE) { r->slot[s] = ROM_BAD_SIZE; continue; }
 
-        /* AtomDOS wants the 8271, which is M9's (§17). Loading its ROM
-         * without the controller gives a machine whose *DOS hangs. */
+        /* AtomDOS wants the 8271: without the controller, *DOS
+         * gives a machine that hangs on its first disc command. */
         if (s == ROM_DOS && !m->cfg.atomdos) { r->slot[s] = ROM_SKIPPED; continue; }
         r->slot[s] = load_slot(m, s, s_image);
     }

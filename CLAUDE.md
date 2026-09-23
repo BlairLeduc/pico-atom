@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M8 are done** (`docs/design.md` §17).
+**Implementation status: M0–M9 are done** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -94,9 +94,28 @@ BASIC loader and was played. Two findings: **`LOAD ""` is the ROM's nameless
 format, not "the next file"** (the menu names a UEF's first file), and games
 want RAM at `#4000`–`#7FFF`, now fitted by default (design.md §7.2). The port
 C hook costs 3.5 % on scrolling, measured against a control build (§6.3).
-Next is M9, AtomDOS and the 8271.
+M9 is done: AtomDOS and the 8271 (`i8271.c`, design.md §11.4). The
+registers were read off the DOS ROM, not the old doc: `#0A00`–`#0A02`, data at
+`#0A04`, and INT on **NMI** through `#0200` (`#E87B`). The chip knows each
+drive's geometry and asks the port only for bytes, a track at a time. Core 1
+serves that off `/atom/discs/` in the tape call's park/handoff (`discio.c`).
+`atom_run` stops its slice at the chip's next event, so the FDC costs nothing
+per instruction. READY follows the head load, and that is how the DOS knows to
+re-read a catalogue after a disc change (`#E731`). `test_disc` runs the real
+DOS: `*DOS`, `*CAT`, `*LOAD` across tracks, `*RUN`, `*SAVE`,
+`DISK PROT`, drives 1 and 2, disc changes, and a snapshot restored mid-session.
+`PICO_ATOM_DISC=path PICO_ATOM_DISC_RUN=NAME` also loads and runs a BASIC
+program off a real image. The DOS is dormant until `*DOS`, the kernel's own command for `#E000`, as on
+the real machine; commands follow the Acornsoft Atom Disc Pack manual
+(`*LOAD GALAXI`, no quotes needed). Verified on a Plus 2 W on 2026-09-23:
+`*CAT`, `LOAD`/`RUN` of a game off an image, `*SAVE` listed afterwards, a disc
+changed from the menu noticed, Galaxians played off `games1.dsk`. A track takes
+17–19 ms to read off the card and 25–27 ms to write, with zero underruns.
+`PICO_ATOM_BOOT_DISC` puts an image in drive 0 for a UART-driven run.
 
-What does not exist: discs and the 8271 (M9), recording at signal level
+Nothing after M9 is named in design.md §17 yet.
+
+What does not exist: recording at signal level
 (saves still go to `.atm` files), the status band, settings persisted to
 flash (§11.6).
 
@@ -144,7 +163,8 @@ Characters sent to UART1 are typed at the guest as PicoCalc key events
 without anyone at the keyboard. Byte `0x1E` is not a key: it plays or stops
 the deck. A build configured with `-DPICO_ATOM_BOOT_TAPE=/atom/tapes/x.uef`,
 in its own build directory, boots with that tape in the deck, because the
-menu cannot be reached over the UART. Send slowly: `uart-type.sh` paces at 0.25 s a
+menu cannot be reached over the UART; `-DPICO_ATOM_BOOT_DISC=/atom/discs/x.ssd`
+does the same for drive 0. Send slowly: `uart-type.sh` paces at 0.25 s a
 character because the MOS takes about eight fields a key.
 
 **Core 0 never calls `printf` after the guest starts.** Its lines go through
@@ -186,6 +206,7 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/uef.*` | §11.3's walker: a UEF image as half-cycles, in quarters of the base period |
 | `src/core/cassette.*` | the half-cycles on port C bit 5 in guest cycles, and bit 4's 2.4 kHz reference; brought up to date on a port C read, not per instruction |
 | `src/core/inflate.*` | gzip into a flat buffer, for UEF images; static tables, not reentrant |
+| `src/core/i8271.*` | §11.4's FDC: command/parameter/result, seek against the track register, non-DMA bytes on INT (NMI), READY from the head load; asks the port for sectors, never holds a disc |
 | `src/core/snapshot.*` | §11.5's format: explicit fields, CRC, ROM hash, two-pass load |
 | `src/core/via6522.*` | the VIA; fitted by default because the MOS reads its PCR on every character |
 | `src/core/keymatrix.*` | held-key set, paced replay of southbridge events into the matrix (§10.2) |
@@ -203,12 +224,14 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/port/log.*` | core 0's UART lines, formatted into a ring that core 1 drains |
 | `src/port/storage.*` | mount and unmount the card, once per piece of card work |
 | `src/port/tapeio.*` | serves a stalled tape call from `/atom/tapes/`; the tape list and the inserted tape; a `.uef` decompressed into the deck's 64 KiB buffer |
+| `src/port/discio.*` | serves the FDC's sector requests from `/atom/discs/` images (`.ssd`, `.dsk`, `.40t`, `.dsd`); the menu's disc list; the image in each drive |
 | `src/port/snapio.*` | snapshot slots in `/atom/snaps/`: temp file, publish, recovery on load |
 | `src/port/keymapio.*` | the layouts the menu offers: built-in, then `/atom/keymaps/`; the first parse error for the status row |
 | `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer |
 | `src/port/main.c` | core 0's field loop, turbo while a tape plays, core 1's bring-up and live present; the park/handoff that gives core 1 the machine for tape calls and the menu; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot`, `test_tape` and `test_snapshot` run the real MOS when `roms/` holds the images |
 | `test/host/test_uef.c`, `test_cassette.c` | inflate against the system's `gzip`; the waveform to the cycle; the ROM's own SAVE recorded off port C, decoded, and loaded back by its own LOAD. `test_cassette` writes `m8-two-part.uef`, the hardware check's tape |
+| `test/host/test_disc.c`, `test_i8271.c` | the real DOS against an in-memory image, served as `main.c` serves one; the chip's timing and the commands the DOS does not use |
 | `test/host/guest.*` | the real machine on the host for those tests: ROMs found by SHA-1, keys typed through keymatrix |
 | `test/host/vdg_scenes.*` | the VRAM behind the golden images, shared by the test and `vdg-ppm` |
 | `test/golden/` | §15.1's reference PPMs, all nine modes, both colour sets |
@@ -218,9 +241,9 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `tools/uart-log.sh`, `uart-type.sh` | capture UART1 to a file; type at the guest over it |
 | `tools/perf-run.sh`, `perf-summary.sh` | M7's measurement: one boot per workload, then one line per workload from the heartbeats |
 
-**Device hooks that do not exist yet are marked in place**, as `/* M2: ... */`
-and `/* M9: ... */` comments at the point in `src/core/bus.c` where the call
-belongs. Grep for `M[0-9]:` before assuming a device is missing entirely — the
+**Device hooks that do not exist yet are marked in place**, as comments
+naming a milestone (`/* M6+: ... */` for the expansion port) at the point in
+`src/core/bus.c` where the call belongs. Grep for `M[0-9]:` before assuming a device is missing entirely — the
 decode is already written and only the device is absent. Keep that convention
 when you stub something.
 
@@ -281,7 +304,7 @@ a plausible-looking change silently breaks:
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
   in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
-  at M8 `.bss` is ~210 KiB, of which 64 KiB is the UEF deck, and `.data`
+  at M9 `.bss` is ~221 KiB, of which 64 KiB is the UEF deck, and `.data`
   ~27 KiB (the SRAM-resident interpreter) of the 520 KiB budget.
 - **Copy a machine with `atom_copy`, never `=`.** The page table points into
   `ram[]`, so a struct assignment leaves the copy reading and writing the

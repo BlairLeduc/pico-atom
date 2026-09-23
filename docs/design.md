@@ -395,6 +395,8 @@ DMA storage and peak heap together (hardware notes §2.3).
 | Mode expansion LUT | 8,192 | rebuilt on mode/`CSS` change (§8.3) |
 | RGB565 line buffers, 2 × 320 × 2 B | 1,280 | DMA ping-pong (§4.6) |
 | UEF deck, decompressed | 65,536 | `ATOM_UEF_MAX`, added at M8 (§11.3) |
+| 8271 track buffer | 2,560 | `ATOM_FDC_BUF_LEN`, in `atom_t`, added at M9 (§11.4) |
+| Menu's disc list | 7,680 | 48 × 160 B, `ATOM_DISC_LIST_MAX` (§13) |
 | MC6847 character ROM | 768 | 64 glyphs × 12 rows |
 | Audio DMA ring, 2 halves × 128 frames × **2 slots** × 4 B | 2,048 | power-of-two, aligned, hardware wrap |
 | PCM software queue, 1024 × 4 B | 4,096 | ~28 ms (§5.8) |
@@ -403,7 +405,7 @@ DMA storage and peak heap together (hardware notes §2.3).
 | FatFs + SD buffers | ~2,500 | |
 | Stacks, both cores | 8,192 | |
 | Heap, UI, perf counters, misc | ~16,000 | |
-| **Total** | **~218 KiB** | **42 % of 520 KiB** |
+| **Total** | **~228 KiB** | **44 % of 520 KiB** |
 
 Two observations worth acting on:
 
@@ -523,11 +525,11 @@ MOS's tape loops.
 
 - `RES` — the Atom's **BREAK key is wired to reset**, so the UI maps a host key
   to `reset_pending` rather than synthesising anything cleverer.
-- `IRQ` — level-sensitive, OR of the 6522 VIA (if fitted) and the 8271 FDC (if
-  fitted). Modelled as a bitmask so sources compose correctly; an `irq_lines`
-  of zero deasserts.
-- `NMI` — edge-triggered, latched. No standard Atom peripheral drives it; it
-  exists for expansion and for the debugger.
+- `IRQ` — level-sensitive, from the 6522 VIA (if fitted). Modelled as a bitmask
+  so sources compose correctly; an `irq_lines` of zero deasserts.
+- `NMI` — edge-triggered, latched. The 8271's INT drives it (§11.4): AtomDOS
+  points `#0200`, the kernel's NMI vector (`#FFC7` is `PHA`, `JMP (#0200)`), at
+  its handler `#E87B`, which moves one disc byte per NMI.
 
 ---
 
@@ -566,15 +568,15 @@ Reads take the same shape, with a fast path for everything outside
 `#A000`–`#BFFF`.
 
 **A page-granular fast path cannot express a sub-page device, and the Atom has
-one.** With AtomDOS enabled the 8271 sits at `#0A00`–`#0A03` (§7.3), inside a
-page that is otherwise RAM. If page `#0A` keeps a non-NULL `write`, those four
+one.** With AtomDOS enabled the 8271 sits at `#0A00`–`#0A07` (§7.3), inside a
+page that is otherwise RAM. If page `#0A` keeps a non-NULL `write`, those eight
 addresses take the fast RAM store and the FDC is never reached — silently, with
 the disc system simply not responding. So when AtomDOS is enabled, page `#0A` is
 marked `PAGE_IO` with `write = NULL`, and `bus_write_slow` splits it:
 
 ```c
-/* page #0A, AtomDOS enabled: 4 bytes of FDC, 252 bytes of ordinary RAM */
-if ((a & 0xFFFC) == 0x0A00) fdc_write(m, a & 3, v);
+/* page #0A, AtomDOS enabled: 8 bytes of FDC, 248 bytes of ordinary RAM */
+if ((a & 0xFFF8) == 0x0A00) i8271_write(&m->fdc, FDC_REG(a), v, now);
 else                        m->ram[a] = v;
 ```
 
@@ -615,10 +617,15 @@ partially and the 8255 mirrors every four bytes:
 | `(a & 0xFC00) == 0xB000` | 8255, register `a & 3` |
 | `(a & 0xFC00) == 0xB400` | expansion / printer |
 | `(a & 0xFC00) == 0xB800` | 6522 VIA, register `a & 15` |
-| `(a & 0xFFFC) == 0x0A00` | 8271 FDC (AtomDOS builds only) |
+| `(a & 0xFFF8) == 0x0A00` | 8271 FDC, when AtomDOS is enabled (the default) |
 
 The 8271 at `#0A00` sits inside RAM space, which is unusual and easy to get
-wrong: with AtomDOS enabled, four bytes of page `#0A` stop being RAM.
+wrong: with AtomDOS enabled, eight bytes of page `#0A` stop being RAM. The DOS
+ROM touches four of them: `#0A00` (command and status), `#0A01` (parameter and
+result), `#0A02` (reset, `#E000`) and `#0A04`, the data register, which its NMI
+handler reads and writes (`#E84F`, `#E85A`). `#0A04` is the chip's DACK
+input, not a fifth register. Taking A2 as DACK gives the eight bytes; that the
+rest of the page is RAM is inferred, since the DOS uses none of it.
 
 **The VIA is fitted by default** even though it was optional on the real
 machine, because the MOS depends on it before the first prompt. It keeps the
@@ -1394,14 +1401,92 @@ edge, to the cycle.
 ### 11.4 Disc, phase 3
 
 AtomDOS: the `dosrom.rom` at `#E000` plus an 8271 FDC at `#0A00`, backed by
-`.ssd`/`.dsk` images. The 8271 needs command/result phases, a seek model and an
-IRQ line; it is a self-contained piece of work and it is not on the critical
-path to a useful emulator.
+Acorn disc images in `/atom/discs/`. **Built at M9.** The DOS is dormant until
+`*DOS`, the kernel's own command for `#E000` (its command table at `#F8E7`), as
+the Acornsoft Atom Disc Pack manual has it: the kernel does not start it at
+reset.
+
+**What the DOS asks of the chip, read off its ROM.** Every command goes out with
+the drive select in bits 7–6 (`#E7D2`: select 0 is bit 6, select 1 bit 7; drives
+2 and 3 are the second sides, chosen by the side-select bit of the drive control
+output, table `#E78E`). At `LINK` it resets the chip (`#E000`), SPECIFYs, loads
+empty bad-track registers, writes the mode register to `#C1` for non-DMA
+operation (`#E874`) and seeks track 0. A transfer is READ DATA or WRITE DATA,
+variable length, 256-byte sectors, at most to the end of the track (`#E816`); a
+load across tracks is one command per track. Before each, it polls READ DRIVE
+STATUS until bit 2 (RDY0) is set (`#E774`) — for either drive, which is only
+right if both RDY inputs follow the selected drive, as a shared READY line on a
+Shugart cable makes them. So they do here, and an empty drive makes the DOS
+wait, as the real one does, until a disc goes in.
+
+**READY is also how the DOS notices a new disc.** It keeps the catalogue in
+RAM at `#2000` and re-reads it only when the drive is not ready (`#E731`). On
+the real machine READY drops when the 8271 unloads the head, which stops the
+motor. That happens after SPECIFY's idle count, `#CA`'s high nibble, 12
+revolutions or 2.4 s. The model does the same: a command loads the head, a
+completion starts the count, and READY is a disc in the drive with the head
+loaded. A disc is changed from the menu with the guest paused, so no guest time
+passes, and an unload that was counting down happens then instead. Without
+that, a swapped disc listed the old catalogue. A head the DOS has loaded itself
+(`#E75B`, writing the drive control output) to wait for READY is not unloaded,
+so a disc put into an empty drive lets a waiting `*CAT` go on.
+
+In non-DMA mode each byte raises INT with the non-DMA data request, and INT is
+the Atom's NMI (§6.4). The DOS's handler checks bit 2 of the status, moves the
+byte through `#0A04` with a routine it copied into page zero (`#00F2`), or, if
+bit 2 is clear, reads the result. At FM's 125 kbit/s a byte comes every 64 µs,
+and the handler takes 52 cycles of it, so a 1 MHz Atom keeps up. Result `#12` is
+`DISK PROT` and anything else, after ten tries, is `DISK ERROR nn` (`#E7A9`).
+
+**The model** (`i8271.c`) knows each drive's geometry and decides for itself
+what is there: sector not found when the track under the head is not the one
+asked for or the sector is past 9, write protect, not ready. It asks the port
+only for bytes, a track at most at a time: a read posts a request and waits,
+busy, while the CPU runs on; a write collects its sectors from the CPU and then
+posts. `main.c` parks core 0 at the field boundary and core 1 serves the request
+from the image (`discio.c`), as it serves a tape call (§11.2). Guest time stands
+still while it does, so the card's latency is invisible to the guest.
+
+The chip's time is the guest's. A byte every `ATOM_FDC_BYTE_CYCLES` (64), a
+sector every tenth of a 300 rpm revolution, a fixed step and settle time.
+SPECIFY's parameters are taken and not modelled, since their units are
+unconfirmed and nothing the DOS does depends on them. `atom_run` stops its slice
+at the chip's next event, so the FDC costs one compare per slice, not per
+instruction. Measured on a Plus 2 W on 2026-09-23 with `perf-run.sh`, against an M8
+control build on the same board in the same session: scrolling 233.0 host
+cycles per instruction against 234.9, and compute 171.7, idle 214.9 and bell
+155.4, all within the run-to-run spread (§6.3). The FDC costs nothing
+measurable. A command written in the middle of a slice starts at that slice's
+end at the latest. Late data is not modelled. Format, verify and read ID are
+there for the utilities that call them; the scans and the 128-byte command forms
+are not.
+
+The track register is per surface and the head moves by the difference, so a
+program that rewrites it, as double-stepping DFS variants do, finds what the
+real chip would.
+
+**Images.** `.ssd`, `.dsk` and `.40t` are one side, track after track; `.dsd`
+is two, interleaved by track. A short image, cut off after its last used
+sector, is a 40-track disc that reads zeros past its end and grows when written
+there. A file with the read-only attribute is a write-protected disc. The menu's
+Disc page puts an image in drive 0 or 1 (§13).
+
+**Snapshots** carry the chip's setup: mode register, drive control output,
+track registers and head positions (§11.5). Without the mode register a restored
+machine would be back in DMA mode, and its next read would never raise an NMI.
+A snapshot is refused while a command is in progress or its completion has not
+been taken.
+
+`test_disc` holds the model to the DOS itself: `*DOS`, then `*CAT`,
+`*LOAD` across a track boundary, `*RUN`, `*SAVE`, `DISK PROT` on a protected
+disc, drive 1, a missing side, and an empty drive that the DOS waits on until a
+disc goes in. `test_i8271` holds the chip's timing and the parts the DOS does
+not reach.
 
 ### 11.5 Snapshots
 
 Whole-machine state, in `snapshot.c`: a 20-byte header (magic, version,
-lengths, CRC-32 of the payload), 96 bytes of CPU, 8255, VIA and machine state
+lengths, CRC-32 of the payload), 96 bytes of CPU, 8255, VIA, 8271 and machine state
 written field by field, little-endian, then the whole 64 KiB address space —
 65,652 bytes in all. It is never a struct dumped from memory: `atom_t` holds
 pointers and padding, and a snapshot has to outlive the build that wrote it.
@@ -1563,8 +1648,11 @@ name loads (§11.2), the game keymap (§10.5, added at M6b), Reset, volume and
 backlight. `Esc` or `Alt`+`M` closes it. At M8 the tape page gained the deck's
 controls, *Eject*, *Play*/*Stop* and *Rewind*, and lists `.uef` images beside
 `.atm` files. Inserting a UEF says which name to `LOAD`. The main page shows
-the deck's state and how far through the tape it is (§11.3).
-The table below is the full intent; disc, machine and display settings wait
+the deck's state and how far through the tape it is (§11.3). M9 added a Disc
+page: left and right choose drive 0 or 1, and the images in `/atom/discs/` are
+listed with the drive each is in and a `P` if it is write-protected. The main
+page names each drive's image, and the keys-chosen note moved to the status row.
+The table below is the full intent; machine and display settings wait
 for the milestones that give them something to set, and settings are not yet
 persisted to flash (§11.6).
 
@@ -1746,7 +1834,7 @@ class of bug in emulation.
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source | **medium** — affects §12.1 throughout |
 | `FS` low interval, ~6 % of a field (§12.1) | MC6847 datasheet, `FS` timing | **low** — `ATOM_FLYBACK_PERCENT`; software polls the edge, so the length matters less than that it exists |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
-| 8271 base address `#0A00` (§7.3) | AtomDOS documentation | medium |
+| 8271 base address `#0A00` (§7.3) | the DOS ROM, disassembled and executed | **confirmed** — `#0A00`–`#0A02` and data at `#0A04` (`#E84F`), not `#0A00`–`#0A03` as first written; INT on NMI through `#0200` (`#EEEF`); `test_disc` runs the DOS against the model |
 | VRAM byte wiring in alpha mode (§2.4) | the MOS and BASIC, executed | **confirmed** — bit 6 is `A/S` and `INT/EXT` (SG6), bit 7 is `INV`: the MOS's cursor is `#A0`, and `CLEAR 0` then `PLOT` writes `#40` plus one element bit per point; `test_boot` pins both |
 | SG6 colour from bits 7:6 (§2.4) | MC6847 datasheet; a reference emulator | **confirmed** — the datasheet's `C1:C0` = `D7:D6`, so yellow/red (cyan/orange with `CSS`); `CLEAR 0` + `PLOT` compared by eye against another Atom emulator on 2026-09-22 |
 | 2.4 kHz cassette reference period, port C bit 4 (§11.3) | Atom circuit diagram | **medium**: 416 cycles, 4 MHz ÷ 1664 = 2403.8 Hz, which MAME's Atom driver also uses. `ATOM_CASSETTE_REF_CYCLES`. The ROM reads a tape by its own loop timing, so only the speed of a signal-level save depends on it |
@@ -1789,7 +1877,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M6b** | Game keymaps (§10.5) | Galaxians played with the Games layout: `Left`/`Right` move, `]` fires, moving and firing at once — **done** 2026-09-23 on a Plus 2 W: Galaxians played with the layout, moving and firing at once (fire then on `Up`, moved to `]` after that run); Bouncing Babies played with a card layout its tape load chose |
 | **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to — **done** 2026-09-23 on a Plus 2 W: headroom 2.2–2.9× real time, 158–218 host cycles per guest instruction (§6.3); tier 2 ships, 1.12–1.19× for 25 KiB; tier 3 measured nothing; core 1's `sleep_us` was interrupting core 0, and fixing it was worth 1.11× |
 | **M8** | Tape phase 2 (UEF at signal level), turbo clock | a UEF image that phase 1 cannot load, loads — **done** 2026-09-23 on a Plus 2 W: Chuckie Egg's two-part UEF, 45 blocks through its own BASIC loader, loaded at 2.7–2.8× under turbo and was played (§11.3). On the host, the kernel's own `SAVE`, recorded at signal level, loads back through its own `LOAD`, and a headerless block loads through a loader phase 1 never sees |
-| **M9** | AtomDOS + 8271, 6522 VIA | an `.ssd` boots |
+| **M9** | AtomDOS + 8271, 6522 VIA | an `.ssd` boots — **done** 2026-09-23 on a Plus 2 W: `*DOS`, `*CAT` off a 40-track image, `LOAD"INVADER"` read 19 sectors over tracks 35–37 and ran; `*SAVE` wrote the catalogue and two sectors and `*CAT` then listed the file; a disc changed from the menu was noticed and its catalogue read; Galaxians loaded off `games1.dsk` and was played. A track off the card takes 17–19 ms to read and 25–27 ms to write, with the guest parked; underruns and late refills stayed at zero. The VIA was fitted at M4 (§7.3); its shift register and handshake lines remain inert, as nothing on an Atom without a printer drives them |
 
 M4 is the milestone that matters; everything before it is scaffolding and
 everything after it is refinement.

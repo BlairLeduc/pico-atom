@@ -14,6 +14,7 @@ set(PICO_ATOM_HOST_TESTS
     test_via6522
     test_audio
     test_uef
+    test_i8271
 )
 
 foreach(t ${PICO_ATOM_HOST_TESTS})
@@ -87,7 +88,7 @@ target_compile_definitions(guest PRIVATE
 # M4: the real MOS boots and the keyboard types (§17). M6: the tape
 # traps leave the machine as the ROM's own routines do (§11.2), and a
 # restored snapshot runs on to the same state as the original (§11.5).
-foreach(t test_boot test_tape test_snapshot test_cassette)
+foreach(t test_boot test_tape test_snapshot test_cassette test_disc)
     add_executable(${t} ${t}.c)
     target_link_libraries(${t} PRIVATE guest)
     target_compile_options(${t} PRIVATE ${PICO_ATOM_WARNINGS})

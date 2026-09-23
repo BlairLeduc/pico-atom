@@ -9,23 +9,31 @@
 
 #include "hot.h"
 #include "i8255.h"
+#include "i8271.h"
 #include "via6522.h"
 
 #define IS_8255(a)   (((a) & 0xFC00u) == 0xB000u)
 #define IS_EXPAN(a)  (((a) & 0xFC00u) == 0xB400u)
 #define IS_VIA(a)    (((a) & 0xFC00u) == 0xB800u)
-#define IS_FDC(a)    (((a) & 0xFFFCu) == 0x0A00u)
+/* #0A00-#0A02 are the 8271's registers on its A1-A0, and #0A04 its data
+ * register on DACK: the four addresses the DOS ROM touches. A2 as DACK
+ * gives eight bytes; that the rest of page #0A is RAM is §7.1's. */
+#define IS_FDC(a)    (((a) & 0xFFF8u) == 0x0A00u)
+#define FDC_REG(a)   ((uint8_t)(((a) & 4u) ? I8271_REG_DATA : ((a) & 3u)))
 
 #define FDC_PAGE     0x0Au
 
 uint8_t ATOM_HOT1(bus_read_slow)(atom_t *m, uint16_t a) {
-    /* Page #0A, AtomDOS enabled: 4 bytes of FDC, 252 bytes of ordinary
+    /* Page #0A, AtomDOS enabled: 8 bytes of FDC, 248 bytes of ordinary
      * RAM. This page has no fast path precisely so that this split can
      * happen — see the note in atom_init (§7.1). */
     if ((a >> 8) == FDC_PAGE && m->cfg.atomdos) {
         if (IS_FDC(a)) {
-            /* M9: fdc_read(m, a & 3). */
-            return m->open_bus;
+            /* Reading the result or the data drops INT, and NMI with it. */
+            uint8_t v = i8271_read(&m->fdc, FDC_REG(a), m->cpu.cycles);
+            atom_fdc_int(m);
+            m->open_bus = v;
+            return v;
         }
         uint8_t v = m->ram[a];
         m->open_bus = v;
@@ -70,7 +78,8 @@ uint8_t ATOM_HOT1(bus_read_slow)(atom_t *m, uint16_t a) {
 void ATOM_HOT1(bus_write_slow)(atom_t *m, uint16_t a, uint8_t v) {
     if ((a >> 8) == FDC_PAGE && m->cfg.atomdos) {
         if (IS_FDC(a)) {
-            /* M9: fdc_write(m, a & 3, v). */
+            i8271_write(&m->fdc, FDC_REG(a), v, m->cpu.cycles);
+            atom_fdc_int(m);
             return;
         }
         m->ram[a] = v;

@@ -15,6 +15,7 @@
 #include "cassette.h"
 #include "config.h"
 #include "i8255.h"
+#include "i8271.h"
 #include "m6502.h"
 #include "mc6847.h"
 #include "tape.h"
@@ -44,7 +45,7 @@ typedef struct {
     bool video;           /* #8000-#97FF */
     bool video_aperture;  /* #9800-#9FFF, absent on a stock machine */
     bool via_fitted;      /* 6522 at #B800; the MOS needs it (via6522.h) */
-    bool atomdos;         /* 8271 FDC at #0A00 — steals 4 bytes of page #0A */
+    bool atomdos;         /* 8271 FDC at #0A00 — steals 8 bytes of page #0A */
     bool tape_traps;      /* serve OSLOAD/OSSAVE from files (tape.h, §11.2) */
     bool tape_cues;       /* the deck follows the MOS's PLAY TAPE (§11.3) */
     unsigned field_hz;    /* 50 or 60; §16 medium confidence, so configurable */
@@ -81,6 +82,10 @@ typedef struct atom_s {
      * level (cassette.h, §11.3). While one is in the deck the OSLOAD
      * trap stands aside, since the program is on the tape. */
     cassette_t cas;
+
+    /* The disc controller, inert unless cfg.atomdos (i8271.h, §11.4).
+     * Its INT pin is the CPU's NMI. */
+    i8271_t fdc;
 
     uint8_t ram[ATOM_ADDR_SPACE];
     page_t  page[ATOM_PAGE_COUNT];
@@ -165,6 +170,23 @@ void atom_cassette_sync_slow(atom_t *m);
 static inline void atom_cassette_sync(atom_t *m) {
     if (__builtin_expect((int32_t)((uint32_t)m->cpu.cycles - m->cas.ref_next) >= 0, 0))
         atom_cassette_sync_slow(m);
+}
+
+/* The disc controller (i8271.h, §11.4), on the guest clock. A request
+ * is the bytes the FDC is waiting on: the port fills or stores
+ * m->fdc.buf and says so with atom_disc_served. Geometry is the port's
+ * to say, from the image; the FDC works out the rest. */
+static inline const i8271_req_t *atom_disc_request(const atom_t *m) {
+    return m->cfg.atomdos ? i8271_request(&m->fdc) : NULL;
+}
+void atom_disc_served(atom_t *m, bool ok);
+void atom_disc_insert(atom_t *m, unsigned drive, uint8_t tracks, uint8_t sides, bool protect);
+void atom_disc_eject(atom_t *m, unsigned drive);
+
+/* The FDC's INT pin, which is the Atom's NMI: bus.c calls this after
+ * every access to the chip, atom_run after every event. */
+static inline void atom_fdc_int(atom_t *m) {
+    m6502_set_nmi(&m->cpu, i8271_int(&m->fdc));
 }
 
 /* A/G, GM2:0 and CSS packed into five bits (§8.1). */

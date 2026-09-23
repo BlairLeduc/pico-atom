@@ -15,7 +15,7 @@ void atom_config_default(atom_config_t *cfg) {
     cfg->video          = true;
     cfg->video_aperture = false;   /* absent on a stock machine */
     cfg->via_fitted     = true;    /* the MOS hangs without it (via6522.h) */
-    cfg->atomdos        = false;
+    cfg->atomdos        = true;    /* the 8271; harmless without dosrom.rom */
     cfg->tape_traps     = true;
     cfg->tape_cues      = true;
     cfg->field_hz       = ATOM_FIELD_HZ_DEFAULT;
@@ -75,10 +75,10 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
     map_io(m, 0xB0u, 0xBFu);
 
     /* A page-granular fast path cannot express a sub-page device, and the
-     * Atom has one: with AtomDOS the 8271 sits at #0A00-#0A03 inside a
+     * Atom has one: with AtomDOS the 8271 sits at #0A00-#0A07 inside a
      * page that is otherwise RAM. If page #0A kept a non-NULL write those
-     * four addresses would take the fast RAM store and the FDC would
-     * never be reached — silently (§7.1). */
+     * addresses would take the fast RAM store and the FDC would never be
+     * reached — silently (§7.1). */
     if (m->cfg.atomdos) map_io(m, 0x0Au, 0x0Au);
 
     /* ROM sockets stay unpopulated until an image is supplied; the build
@@ -100,6 +100,7 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
     beeper_init(&m->beeper, m->cpu.cycles, atom_speaker(m), ATOM_CPU_HZ,
                 ATOM_AUDIO_RATE_NUM, ATOM_AUDIO_RATE_DEN);
     cassette_init(&m->cas);
+    i8271_init(&m->fdc);
 }
 
 void atom_reset(atom_t *m) {
@@ -107,6 +108,9 @@ void atom_reset(atom_t *m) {
     m->tape.pass = false;
     m->tape.cue_play = false;
     m->cpu.reset_pending = false;
+    /* BREAK resets the disc card with the CPU; the discs stay in. */
+    i8271_reset(&m->fdc);
+    m6502_set_nmi(&m->cpu, false);
     m6502_reset(&m->cpu, m);
 }
 
@@ -159,25 +163,46 @@ static uint8_t tape_pc_lo[256] = {
     [TAPE_LOADED_PC & 0xFFu] = 1,
 };
 
+/* The FDC's event that fell due: run it and drive NMI from INT. */
+static void fdc_event(atom_t *m) {
+    i8271_event(&m->fdc, m->cpu.cycles);
+    atom_fdc_int(m);
+}
+
 uint32_t ATOM_HOT2(atom_run)(atom_t *m, uint32_t cycles) {
     uint32_t done = 0, n = 0;
     /* Whole instructions until at least `cycles` have elapsed; the caller
      * carries the overshoot forward as debt (§6.2, §12.1). */
     while (done < cycles) {
-        uint32_t c;
-        if (__builtin_expect(tape_pc_lo[m->cpu.pc & 0xFFu], 0) && tape_at(m)) {
-            /* Stalled on a tape request, like a 6502 with RDY low: the
-             * rest of the slice passes with no instruction run (§11.2). */
-            c = cycles - done;
-            m->cpu.cycles += c;
-        } else {
-            c = m6502_step(m);
-            n++;
+        /* The slice stops early at the FDC's next event, so the chip
+         * costs nothing per instruction: one compare per slice while it
+         * is idle, which is nearly always. */
+        uint32_t limit = cycles;
+        if (__builtin_expect(m->fdc.due != I8271_NEVER, 0)) {
+            if (m->fdc.due <= m->cpu.cycles) {
+                fdc_event(m);
+                continue;
+            }
+            uint64_t left = m->fdc.due - m->cpu.cycles;
+            if (left < cycles - done) limit = done + (uint32_t)left;
         }
-        done += c;
-        if (m->cfg.via_fitted) {
-            via6522_tick(&m->via, c);
-            m6502_set_irq(&m->cpu, M6502_IRQ_VIA, via6522_irq(&m->via));
+        while (done < limit) {
+            uint32_t c;
+            if (__builtin_expect(tape_pc_lo[m->cpu.pc & 0xFFu], 0) && tape_at(m)) {
+                /* Stalled on a tape request, like a 6502 with RDY low:
+                 * the rest of the slice passes with no instruction run
+                 * (§11.2). */
+                c = limit - done;
+                m->cpu.cycles += c;
+            } else {
+                c = m6502_step(m);
+                n++;
+            }
+            done += c;
+            if (m->cfg.via_fitted) {
+                via6522_tick(&m->via, c);
+                m6502_set_irq(&m->cpu, M6502_IRQ_VIA, via6522_irq(&m->via));
+            }
         }
     }
     /* Close off every sample that ended inside this run, so a drain
@@ -308,6 +333,21 @@ void atom_cassette_play(atom_t *m, bool on) {
 void atom_cassette_rewind(atom_t *m) {
     cassette_rewind(&m->cas, m->cpu.cycles);
     atom_cassette_sync_slow(m);
+}
+
+/* ---- the disc controller (design.md §11.4) --------------------------- */
+
+void atom_disc_served(atom_t *m, bool ok) {
+    i8271_served(&m->fdc, ok, m->cpu.cycles);
+    atom_fdc_int(m);
+}
+
+void atom_disc_insert(atom_t *m, unsigned drive, uint8_t tracks, uint8_t sides, bool protect) {
+    i8271_insert(&m->fdc, drive, tracks, sides, protect);
+}
+
+void atom_disc_eject(atom_t *m, unsigned drive) {
+    i8271_eject(&m->fdc, drive);
 }
 
 /* ---- audio (design.md §9) ------------------------------------------- */
