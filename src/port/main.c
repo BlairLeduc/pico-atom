@@ -1,14 +1,13 @@
-/* main.c — bring-up and the two cores' loops (design.md §4.2, §12.1, §17 M3).
+/* main.c — bring-up and the two cores' loops (design.md §4.2, §12.1, §17).
  *
  * Core 0 owns the 6502 and runs it in field-sized slices, split at the
  * flyback boundary, publishing a VRAM snapshot per field. Core 1 owns
- * the southbridge and the LCD: it brings them up in hardware-notes.md
- * §10's order, draws M3's test pattern, measures present time against
- * design.md §8.4's estimate, and then presents snapshots live.
+ * the southbridge, the LCD and the SD card: it brings them up in
+ * hardware-notes.md §10's order, loads the ROMs, and then presents
+ * snapshots and polls the keyboard.
  *
- * Keyboard (M4) and audio (M5) are still to come. Until audio exists the
- * field loop paces on time_us_64() against an absolute deadline — §12.2's
- * fallback path.
+ * Audio (M5) is still to come. Until it exists the field loop paces on
+ * time_us_64() against an absolute deadline — §12.2's fallback path.
  */
 
 #include <stdio.h>
@@ -21,10 +20,19 @@
 #include "atom.h"
 #include "board.h"
 #include "display.h"
+#include "kbd.h"
+#include "keymatrix.h"
 #include "lcd.h"
 #include "mc6847.h"
+#include "roms.h"
 #include "snappool.h"
 #include "southbridge.h"
+
+/* M3's present-time measurement (design.md §8.4), kept for the perf pass
+ * (M7) but not run on every boot: it holds the panel for seconds. */
+#ifndef PICO_ATOM_MEASURE_PRESENT
+#define PICO_ATOM_MEASURE_PRESENT 0
+#endif
 
 #if PICO_ATOM_HAVE_FONT
 #include "mc6847_font.h"
@@ -36,13 +44,16 @@
 /* The guest lives in .bss, not the heap: src/core/ has no allocator, and
  * keeping it static is what makes the §5 budget a link-time fact. */
 static atom_t g_atom;
+static keymatrix_t g_keys;   /* core 0's, like g_atom */
 static snappool_t g_pool;
 static spin_lock_t *g_pool_lock;
 
 /* Core 1's counters, read by core 0's heartbeat. Each is a single 32-bit
  * word written by one core, so a torn read is not possible. */
 static volatile struct {
-    bool     ready;          /* bring-up and measurement finished */
+    bool     ready;          /* bring-up finished; set after roms_ok */
+    bool     roms_ok;        /* the machine can boot                */
+    uint32_t key_events;
     uint32_t presents;
     uint32_t full_presents;
     uint32_t last_us;
@@ -79,9 +90,11 @@ static void pool_release(int i) {
 
 /* ---- core 1: bring-up, measurement, presentation --------------------- */
 
-/* One scene, reused by every measurement; not a snapshot from the pool,
- * so measuring never holds a buffer core 0 might need. */
+/* One scene, reused by every measurement and by the no-ROMs page; not a
+ * snapshot from the pool, so it never holds a buffer core 0 might need. */
 static uint8_t s_scene[ATOM_VRAM_SIZE];
+
+#if PICO_ATOM_MEASURE_PRESENT
 
 static uint32_t s_rng = 0x2545F491u;
 static uint8_t rnd8(void) {
@@ -172,6 +185,26 @@ static void measure_present(void) {
     measure_partial("alpha-line", alpha, 3u * 32u, 32u);
     measure_partial("alpha-cell", alpha, 5u * 32u + 7u, 1u);
 }
+#endif /* PICO_ATOM_MEASURE_PRESENT */
+
+/* The MCU resets its own I2C bus after 2.5 s of silence (§6.1); the key
+ * poll is what keeps it awake, at 30 Hz from this loop, in thread
+ * context and never from a timer IRQ (design.md §10.2). */
+#define KBD_POLL_US 33333u
+
+/* No ROMs: show why, and keep the southbridge awake, for ever. A blank
+ * screen is the most expensive failure to debug on this hardware
+ * (design.md §11.1). The menu will offer a way out at M6. */
+static void __attribute__((noreturn)) no_roms(const roms_report_t *r) {
+    roms_explain(r, s_scene);
+    display_invalidate();
+    display_present(s_scene, 0, NULL);
+    for (;;) {
+        uint8_t reply[2];
+        (void)sb_read(SB_REG_KEY, reply);
+        sleep_ms(1000);
+    }
+}
 
 static void core1_main(void) {
     printf("  core 1       : up\n");
@@ -194,17 +227,28 @@ static void core1_main(void) {
     printf("  lcd          : spi1 configured at %lu Hz\n", (unsigned long)baud);
 
     display_init(FONT);
+#if PICO_ATOM_MEASURE_PRESENT
     display_test_pattern();
     printf("  M3 pattern   : white border on (32,64)-(287,255); corners "
            "red TL, green TR, blue BL, yellow BR; outside black\n");
     sleep_ms(5000);
-
     measure_present();
+#endif
     display_invalidate();
-    g_c1.ready = true;
 
-    /* Live: present the newest snapshot, drop superseded ones (§12.2). */
-    uint32_t last_sb_poll = time_us_32();
+    /* 3. The card, while core 0 waits: loading writes the ROMs into the
+     *    machine, the one time core 1 touches atom_t (roms.h). */
+    roms_report_t report;
+    bool ok = roms_load(&g_atom, &report);
+    roms_log(&report);
+    g_c1.roms_ok = ok;
+    __dmb();
+    g_c1.ready = true;
+    if (!ok) no_roms(&report);
+
+    /* Live: present the newest snapshot, drop superseded ones (§12.2),
+     * and poll the keyboard at 30 Hz. */
+    uint32_t last_poll = time_us_32();
     for (;;) {
         int i = pool_take();
         if (i >= 0) {
@@ -218,12 +262,9 @@ static void core1_main(void) {
             if (st.us > g_c1.max_us) g_c1.max_us = st.us;
         }
 
-        /* The MCU resets its own I2C bus after 2.5 s of silence (§6.1).
-         * Until the keyboard poll exists (M4), a cheap read every second
-         * keeps it awake and keeps sb_error_count() meaningful. */
-        if (time_us_32() - last_sb_poll > 1000000u) {
-            (void)sb_read(SB_REG_KEY, r);
-            last_sb_poll = time_us_32();
+        if (time_us_32() - last_poll >= KBD_POLL_US) {
+            last_poll = time_us_32();
+            g_c1.key_events += kbd_poll();
         }
 
         /* A hardware-timer wait between iterations rather than spinning
@@ -264,12 +305,21 @@ int main(void) {
 
     snappool_init(&g_pool);
     g_pool_lock = spin_lock_init(spin_lock_claim_unused(true));
+    keymatrix_init(&g_keys);
     multicore_launch_core1(core1_main);
 
-    /* No ROMs yet: they come off the SD card at M4, and the build ships
-     * none (design.md §1, §11.1). The guest executes whatever the open
-     * bus gives it, which exercises the loop and the handoff; the screen
-     * shows zeroed VRAM, which is '@' throughout (CLAUDE.md). */
+    /* Core 1 loads the ROMs off the card into g_atom; until it says so,
+     * the machine is its to write (roms.h). The build ships none
+     * (design.md §1, §11.1). */
+    while (!g_c1.ready) sleep_ms(1);
+    __dmb();
+    if (!g_c1.roms_ok) {
+        printf("  guest        : not started — no ROMs (the panel says which)\n");
+        for (;;) sleep_ms(1000);
+    }
+    atom_reset(&g_atom);   /* the vectors arrived with the kernel */
+    printf("  guest        : started at #%04X\n", g_atom.cpu.pc);
+
     uint32_t field = 0, late = 0;
     const uint32_t field_us = 1000000u / g_atom.cfg.field_hz;
     absolute_time_t next = get_absolute_time();
@@ -279,6 +329,16 @@ int main(void) {
         next = delayed_by_us(next, field_us);
         if (absolute_time_diff_us(get_absolute_time(), next) < 0) late++;
         sleep_until(next);
+
+        /* Keys first, so the matrix the guest scans this field is the
+         * one the events describe (§10.2). */
+        uint8_t kstate, kcode;
+        while (kbd_pop(&kstate, &kcode)) keymatrix_event(&g_keys, kstate, kcode);
+        keymatrix_field(&g_keys, &g_atom);
+        if (g_keys.menu_request) {
+            g_keys.menu_request = false;
+            printf("  menu         : Alt+M — the menu arrives at M6 (design.md §13)\n");
+        }
 
         atom_run_field(&g_atom);
 
@@ -295,7 +355,8 @@ int main(void) {
             const mc6847_mode_info_t *vdg = mc6847_mode_info(atom_vdg_mode(&g_atom));
             printf("  heartbeat    : %lu fields (%lu late), %llu guest cycles, "
                    "%u undoc op(s), VDG %s | %s %lu presents (%lu full, "
-                   "%lu dropped), last %lu us, max %lu us, i2c errors %lu\n",
+                   "%lu dropped), last %lu us, max %lu us, i2c errors %lu | "
+                   "keys %lu (%lu lost)\n",
                    (unsigned long)field, (unsigned long)late,
                    (unsigned long long)g_atom.cpu.cycles,
                    (unsigned)g_atom.cpu.undoc_count, vdg->name,
@@ -303,7 +364,9 @@ int main(void) {
                    (unsigned long)g_c1.presents, (unsigned long)g_c1.full_presents,
                    (unsigned long)g_pool.dropped,
                    (unsigned long)g_c1.last_us, (unsigned long)g_c1.max_us,
-                   (unsigned long)sb_error_count());
+                   (unsigned long)sb_error_count(),
+                   (unsigned long)g_c1.key_events,
+                   (unsigned long)(kbd_overflows() + g_keys.dropped));
         }
     }
 }

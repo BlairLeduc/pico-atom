@@ -72,11 +72,36 @@ else()
 
     pico_sdk_init()
 
+    # FatFs is not in the tree. The SDK carries a copy for TinyUSB, and
+    # ff.h includes "ffconf.h" from its own directory, so the three files
+    # are copied into the build tree beside our src/port/fatfs/ffconf.h
+    # rather than compiled in place (which would find TinyUSB's config).
+    set(PICO_ATOM_FATFS_SRC ${PICO_SDK_PATH}/lib/tinyusb/lib/fatfs/source)
+    set(PICO_ATOM_FATFS_DIR ${CMAKE_BINARY_DIR}/fatfs)
+    foreach(f ff.c ff.h ffunicode.c diskio.h)
+        if (NOT EXISTS ${PICO_ATOM_FATFS_SRC}/${f})
+            message(FATAL_ERROR "pico-atom: FatFs ${f} not found in ${PICO_ATOM_FATFS_SRC}")
+        endif()
+        configure_file(${PICO_ATOM_FATFS_SRC}/${f} ${PICO_ATOM_FATFS_DIR}/${f} COPYONLY)
+    endforeach()
+    configure_file(src/port/fatfs/ffconf.h ${PICO_ATOM_FATFS_DIR}/ffconf.h COPYONLY)
+
+    add_library(pico_atom_fatfs STATIC
+        ${PICO_ATOM_FATFS_DIR}/ff.c
+        ${PICO_ATOM_FATFS_DIR}/ffunicode.c
+    )
+    target_include_directories(pico_atom_fatfs PUBLIC ${PICO_ATOM_FATFS_DIR})
+    # Third-party code: built as it comes, without our -Werror.
+
     add_executable(pico-atom
         src/port/main.c
         src/port/board.c
+        src/port/diskio.c
         src/port/display.c
+        src/port/kbd.c
         src/port/lcd.c
+        src/port/roms.c
+        src/port/sd.c
         src/port/southbridge.c
         ${PICO_ATOM_CORE_SOURCES}
     )
@@ -95,6 +120,7 @@ else()
     )
 
     target_link_libraries(pico-atom
+        pico_atom_fatfs
         pico_stdlib
         pico_multicore
         pico_unique_id
