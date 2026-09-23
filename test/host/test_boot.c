@@ -19,7 +19,9 @@
 #include "atom.h"
 #include "keymatrix.h"
 #include "mc6847.h"
+#if PICO_ATOM_HAVE_FONT
 #include "mc6847_font.h"
+#endif
 #include "romset.h"
 #include "test_util.h"
 

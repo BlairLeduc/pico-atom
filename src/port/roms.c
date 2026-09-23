@@ -17,15 +17,22 @@ static FATFS   s_fs;
 static FIL     s_file;
 static uint8_t s_image[2 * ROM_IMAGE_SIZE];   /* room for abasic.ic20 */
 
+#define FILE_MISSING  (-1)   /* could not be opened or read */
+#define FILE_TOO_BIG  (-2)   /* bigger than any ROM this loader takes */
+
 /* Read a whole file of at most sizeof s_image bytes. Returns the length,
- * or -1 if it is missing or too big. */
+ * FILE_MISSING or FILE_TOO_BIG. */
 static int read_file(const char *path) {
-    if (f_open(&s_file, path, FA_READ) != FR_OK) return -1;
-    UINT n = 0;
+    if (f_open(&s_file, path, FA_READ) != FR_OK) return FILE_MISSING;
     FSIZE_t size = f_size(&s_file);
-    FRESULT fr = (size <= sizeof s_image) ? f_read(&s_file, s_image, (UINT)size, &n) : FR_DENIED;
+    if (size > sizeof s_image) {
+        f_close(&s_file);
+        return FILE_TOO_BIG;
+    }
+    UINT n = 0;
+    FRESULT fr = f_read(&s_file, s_image, (UINT)size, &n);
     f_close(&s_file);
-    return (fr == FR_OK && n == size) ? (int)n : -1;
+    return (fr == FR_OK && n == size) ? (int)n : FILE_MISSING;
 }
 
 static rom_state_t load_slot(atom_t *m, int slot, const uint8_t *data) {
@@ -45,7 +52,7 @@ bool roms_load(atom_t *m, roms_report_t *r) {
         char path[ATOM_PATH_MAX];
         snprintf(path, sizeof path, ROM_DIR "%s", romset_slots[s].file);
         int n = read_file(path);
-        if (n < 0) { r->slot[s] = ROM_MISSING; continue; }
+        if (n == FILE_MISSING) { r->slot[s] = ROM_MISSING; continue; }
         if (n != (int)ROM_IMAGE_SIZE) { r->slot[s] = ROM_BAD_SIZE; continue; }
 
         /* AtomDOS wants the 8271, which is M9's (§17). Loading its ROM

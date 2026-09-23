@@ -80,3 +80,9 @@ target_compile_definitions(test_boot PRIVATE
 )
 add_test(NAME test_boot COMMAND test_boot)
 set_tests_properties(test_boot PROPERTIES SKIP_RETURN_CODE 77)
+
+# test_keymap checks romset's SHA-1 table against README.md's list, which
+# is the documented source of those digests (design.md §11.1).
+target_compile_definitions(test_keymap PRIVATE
+    PICO_ATOM_README="${CMAKE_SOURCE_DIR}/README.md"
+)

@@ -3,6 +3,7 @@
  * against the MOS itself when the images are present.
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "atom.h"
@@ -83,6 +84,35 @@ int main(void) {
     CHECK(romset_slots[ROM_UTILITY].addr == 0xA000u, "utility at #A000");
     CHECK(romset_slots[ROM_KERNEL].required && romset_slots[ROM_BASIC].required,
           "the kernel and BASIC are what a machine needs");
+
+    /* Every digest in the table is README.md's, byte for byte. The table
+     * is typed in by hand as bytes, the README as hex, and a transposed
+     * pair would only show when that ROM failed to be recognised — for
+     * dosrom.rom, not until M9. */
+    {
+        FILE *f = fopen(PICO_ATOM_README, "r");
+        CHECK(f != NULL, "cannot open %s", PICO_ATOM_README);
+        unsigned checked = 0;
+        char line[256];
+        while (f && fgets(line, sizeof line, f)) {
+            char hex[41], name[64];
+            if (sscanf(line, "%40[0-9a-f]  %63s", hex, name) != 2 || strlen(hex) != 40)
+                continue;
+            for (int slot = 0; slot < ROM_SLOT_COUNT; slot++) {
+                const rom_slot_info_t *r = &romset_slots[slot];
+                if (!r->has_sha1 || strcmp(r->file, name) != 0) continue;
+                char got[41];
+                for (unsigned i = 0; i < SHA1_DIGEST_LEN; i++)
+                    snprintf(&got[2 * i], 3, "%02x", r->sha1[i]);
+                CHECK(strcmp(got, hex) == 0, "%s: table has %s, README.md has %s",
+                      name, got, hex);
+                checked++;
+            }
+        }
+        if (f) fclose(f);
+        CHECK(checked == 4, "README.md should list all four hashed slots, found %u",
+              checked);
+    }
 
     /* ---- keymap table invariants (§10.3) ----------------------------- */
     for (size_t i = 0; i < keymap_picocalc_len; i++) {

@@ -1,10 +1,12 @@
 /* romset.h — the ROM sockets and the images known to fit them
  * (design.md §11.1).
  *
- * Images are recognised by SHA-1, not by file name: Atom ROMs have been
- * re-dumped and renamed for forty years, and a near-miss boots and then
- * misbehaves, which §16 calls the most expensive class of bug here.
- * The table is data about images; nothing in the tree contains one.
+ * The device finds each image by the file name §11.1 gives it and then
+ * checks it by SHA-1: Atom ROMs have been re-dumped and renamed for forty
+ * years, and a near-miss boots and then misbehaves, which §16 calls the
+ * most expensive class of bug here. The host tests go further and pick
+ * images out of a directory by hash alone. The table is data about
+ * images; nothing in the tree contains one.
  */
 #ifndef PICO_ATOM_ROMSET_H
 #define PICO_ATOM_ROMSET_H
