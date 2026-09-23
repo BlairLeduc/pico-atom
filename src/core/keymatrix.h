@@ -68,7 +68,14 @@ typedef struct {
     keymatrix_event_t queue[ATOM_KEY_EVENT_QUEUE];
     uint8_t q_head, q_len;
     uint8_t gap;          /* fields before the next press may apply */
-    uint32_t dropped;     /* events lost to a full queue */
+    uint32_t dropped;     /* presses refused for want of room */
+
+    /* Keys whose press is queued or applied and whose release has not
+     * arrived yet. The queue always keeps a slot for each of their
+     * releases: a lost press drops a character, a lost release holds a
+     * key down for ever. */
+    uint8_t open[ATOM_KEY_EVENT_QUEUE];
+    uint8_t n_open;
 
     keymatrix_held_t held[ATOM_KEY_HELD_MAX];
     uint8_t n;
@@ -81,7 +88,9 @@ typedef struct {
 void keymatrix_init(keymatrix_t *k);
 
 /* One [state, code] event off the southbridge FIFO. Queued, not applied:
- * see keymatrix_field. */
+ * see keymatrix_field. A press that finds no room for itself and for
+ * every outstanding release is refused, and its release with it; a
+ * press of a key already down (the MCU's auto-repeat) is absorbed. */
 void keymatrix_event(keymatrix_t *k, uint8_t state, uint8_t code);
 
 /* Once per field, before the guest runs: replay queued events, drive the

@@ -16,6 +16,7 @@
 #include "i8255.h"
 #include "m6502.h"
 #include "mc6847.h"
+#include "tape.h"
 #include "via6522.h"
 
 /* Page descriptor flags (§7.1). */
@@ -42,6 +43,7 @@ typedef struct {
     bool video_aperture;  /* #9800-#9FFF, absent on a stock machine */
     bool via_fitted;      /* 6522 at #B800; the MOS needs it (via6522.h) */
     bool atomdos;         /* 8271 FDC at #0A00 — steals 4 bytes of page #0A */
+    bool tape_traps;      /* serve OSLOAD/OSSAVE from files (tape.h, §11.2) */
     unsigned field_hz;    /* 50 or 60; §16 medium confidence, so configurable */
 } atom_config_t;
 
@@ -67,6 +69,10 @@ typedef struct atom_s {
     /* The loudspeaker, port C bit 2, integrated into PCM (§9.3). The
      * port drains it once per field with atom_audio_drain. */
     beeper_t beeper;
+
+    /* Tape phase 1: the OSLOAD/OSSAVE request the CPU is stalled on, if
+     * any (tape.h, §11.2). */
+    tape_t tape;
 
     uint8_t ram[ATOM_ADDR_SPACE];
     page_t  page[ATOM_PAGE_COUNT];
@@ -98,6 +104,11 @@ uint32_t atom_run(atom_t *m, uint32_t cycles);
  * m->budget across both halves and across fields. Returns the cycles
  * actually run. */
 uint32_t atom_run_field(atom_t *m);
+
+/* Copy a whole machine. The page table points into ram[], so a plain
+ * struct assignment leaves the copy reading and writing the original's
+ * memory; this moves the pointers across with the bytes. */
+void atom_copy(atom_t *dst, const atom_t *src);
 
 /* Load a ROM image at a guest address, marking its pages PAGE_ROM. */
 bool atom_load_rom(atom_t *m, uint16_t addr, const uint8_t *data, size_t len);

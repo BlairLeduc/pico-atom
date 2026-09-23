@@ -23,6 +23,8 @@ set(PICO_ATOM_CORE_SOURCES
     src/core/romset.c
     src/core/sha1.c
     src/core/snappool.c
+    src/core/snapshot.c
+    src/core/tape.c
     src/core/via6522.c
 )
 
@@ -96,6 +98,9 @@ else()
 
     add_executable(pico-atom
         src/port/main.c
+        src/port/menu.c
+        src/port/snapio.c
+        src/port/textpage.c
         src/port/audio.c
         src/port/board.c
         src/port/diskio.c
@@ -106,6 +111,8 @@ else()
         src/port/roms.c
         src/port/sd.c
         src/port/southbridge.c
+        src/port/storage.c
+        src/port/tapeio.c
         ${PICO_ATOM_CORE_SOURCES}
     )
     target_include_directories(pico-atom PRIVATE src/core src/port)

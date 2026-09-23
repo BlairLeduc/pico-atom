@@ -14,8 +14,8 @@ An Acorn Atom emulator for the PicoCalc
 
 Acorn's ROMs are still copyrighted, so **this repository ships none of them**
 and never will. The emulator reads them off the SD card at `/atom/roms/`
-(design document §11.1); without them it boots to its menu with an explanatory
-screen rather than into a dead machine.
+(design document §11.1); without them it boots to a screen explaining which
+are missing rather than into a dead machine.
 
 You need five files. Four are the machine; `utility.rom` is the `#A000` socket
 and is yours to fill:
@@ -71,3 +71,24 @@ first is a different revision.
 Copy them to the SD card as `/atom/roms/akernel.rom` and so on. The repository
 also has an ignored [`roms/`](roms/) directory you can stage them in; see
 [`roms/README.md`](roms/README.md).
+
+## Using it
+
+The emulator boots straight to the Atom's `>` prompt.
+
+| Atom key | PicoCalc |
+|---|---|
+| `REPT` | `Tab` — hold it, then hold the key to repeat |
+| `COPY` | `Alt`+`C` |
+| `LOCK` | `Alt`+`L` |
+| `BREAK` | `Alt`+`K` |
+| the emulator's menu | `Alt`+`M` |
+
+**Tapes** are `.atm` files in `/atom/tapes/` on the card. `LOAD "NAME"` and
+`*RUN "NAME"` find the file whose header carries that name, or failing that the
+file called `NAME.atm`; `SAVE "NAME"` writes one. `LOAD ""` takes whichever
+tape the menu's *Tapes* page has inserted.
+
+**Snapshots** save and restore the whole machine from the menu, in four slots
+kept in `/atom/snaps/`. They contain no ROM bytes, and load only over the same
+ROMs.

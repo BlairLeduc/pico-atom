@@ -28,9 +28,11 @@
 #include "lcd.h"
 #include "log.h"
 #include "mc6847.h"
+#include "menu.h"
 #include "roms.h"
 #include "snappool.h"
 #include "southbridge.h"
+#include "tapeio.h"
 
 #ifndef PICO_ATOM_AUDIO
 #define PICO_ATOM_AUDIO 1
@@ -75,6 +77,23 @@ static volatile struct {
     uint32_t last_us;
     uint32_t max_us;
 } g_c1;
+
+/* ---- the machine handoff (§4.2, §11.1) ------------------------------ *
+ * Card work belongs to core 1 and can outlast both the field and the
+ * audio deadline, so it happens with the guest parked. Core 0 stops at a
+ * field boundary, names the reason here, and from then on the machine is
+ * core 1's until core 1 writes HANDOFF_NONE back. Core 0 keeps the PCM
+ * queue fed with silence meanwhile, so the audio path neither underruns
+ * nor loses its pacing (§12.2). */
+#define HANDOFF_NONE 0u
+#define HANDOFF_TAPE 1u   /* the CPU is stalled on OSLOAD/OSSAVE (tape.h) */
+#define HANDOFF_MENU 2u   /* Alt+M (design.md §13)                      */
+
+static volatile uint32_t g_handoff = HANDOFF_NONE;
+
+/* Written by the menu on core 1 while core 0 is parked, applied by core
+ * 0 once it has the machine back. */
+static menu_settings_t g_settings = { .volume = 8 };
 
 /* ---- the snapshot handoff (§4.2): every transition under one lock ---- */
 
@@ -210,7 +229,7 @@ static void measure_present(void) {
 
 /* No ROMs: show why, and keep the southbridge awake, for ever. A blank
  * screen is the most expensive failure to debug on this hardware
- * (design.md §11.1). The menu will offer a way out at M6. */
+ * (design.md §11.1). The fix is a card with the ROMs on it and a reset. */
 static void __attribute__((noreturn)) no_roms(const roms_report_t *r) {
     roms_explain(r, s_scene);
     display_invalidate();
@@ -280,6 +299,14 @@ static void core1_main(void) {
 
         log_pump();
 
+        if (g_handoff != HANDOFF_NONE) {
+            __dmb();
+            if (g_handoff == HANDOFF_TAPE) tapeio_serve(&g_atom);
+            else menu_run(&g_atom, &g_settings, s_scene);
+            __dmb();
+            g_handoff = HANDOFF_NONE;
+        }
+
         if (time_us_32() - last_poll >= KBD_POLL_US) {
             last_poll = time_us_32();
             g_c1.key_events += kbd_poll();
@@ -300,7 +327,7 @@ static void core1_main(void) {
  * has room for all four events, so a fast sender loses characters in
  * the UART FIFO rather than in the replay queue; send slowly. */
 static void uart_keys(void) {
-    if (g_keys.q_len + 4u > ATOM_KEY_EVENT_QUEUE) return;
+    if (g_keys.q_len + g_keys.n_open + 8u > ATOM_KEY_EVENT_QUEUE) return;
     int ch = getchar_timeout_us(0);
     if (ch == PICO_ERROR_TIMEOUT) return;
 
@@ -323,6 +350,19 @@ static void uart_keys(void) {
     keymatrix_event(&g_keys, KEY_EV_RELEASED, keymap_picocalc_canonical(c));
 }
 #endif
+
+/* Hand the machine to core 1 and wait for it back (g_handoff). */
+static void park(uint32_t why) {
+    __dmb();
+    g_handoff = why;
+#if PICO_ATOM_AUDIO
+    static const int16_t silence[128];
+    while (g_handoff != HANDOFF_NONE) audio_push(silence, 128u);
+#else
+    while (g_handoff != HANDOFF_NONE) sleep_us(100);
+#endif
+    __dmb();
+}
 
 int main(void) {
     stdio_init_all();
@@ -416,8 +456,14 @@ int main(void) {
         while (kbd_pop(&kstate, &kcode)) keymatrix_event(&g_keys, kstate, kcode);
         keymatrix_field(&g_keys, &g_atom);
         if (g_keys.menu_request) {
-            g_keys.menu_request = false;
-            log_printf("  menu         : Alt+M — the menu arrives at M6 (design.md §13)\n");
+            /* The menu pauses the guest (§13). Its keys, the chord's own
+             * releases among them, are core 1's while it is open, so the
+             * held set starts again empty. */
+            park(HANDOFF_MENU);
+            keymatrix_init(&g_keys);
+#if PICO_ATOM_AUDIO
+            audio_set_volume(g_settings.volume * 32u);
+#endif
         }
 
         atom_run_field(&g_atom);
@@ -442,6 +488,10 @@ int main(void) {
         while (atom_audio_drain(&g_atom, discard, 64u) > 0) {}
 #endif
 
+        /* The CPU has stopped on a tape call (§11.2): the file is core
+         * 1's to find, and the machine is core 1's while it does. */
+        if (atom_tape_pending(&g_atom)) park(HANDOFF_TAPE);
+
         if (++field % (g_atom.cfg.field_hz * 5u) == 0) {
             /* Real-time ratio, guest seconds per wall second, in
              * thousandths: the headline number (§12.3). */
@@ -453,7 +503,7 @@ int main(void) {
             log_printf("  heartbeat    : %lu fields, rt %lu.%03lu, %llu guest cycles, "
                    "%u undoc op(s), VDG %s | %s %lu presents (%lu full, "
                    "%lu dropped), last %lu us, max %lu us, i2c errors %lu | "
-                   "keys %lu (%lu lost)\n",
+                   "keys %lu (%lu lost), tape calls %lu\n",
                    (unsigned long)field,
                    (unsigned long)(rt1000 / 1000u), (unsigned long)(rt1000 % 1000u),
                    (unsigned long long)g_atom.cpu.cycles,
@@ -464,7 +514,8 @@ int main(void) {
                    (unsigned long)g_c1.last_us, (unsigned long)g_c1.max_us,
                    (unsigned long)sb_error_count(),
                    (unsigned long)g_c1.key_events,
-                   (unsigned long)(kbd_overflows() + g_keys.dropped));
+                   (unsigned long)(kbd_overflows() + g_keys.dropped),
+                   (unsigned long)g_atom.tape.served);
 #if PICO_ATOM_AUDIO
             /* The consumed-sample rate against the microsecond timer is
              * the control quantity: it is the PWM wrap, measured, and it

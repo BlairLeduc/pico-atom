@@ -107,5 +107,6 @@
 
 #define ATOM_ATM_NAME_LEN      16u
 #define ATOM_PATH_MAX         128u
+#define ATOM_TAPE_LIST_MAX     48u  /* .atm files the menu lists (§13)     */
 
 #endif /* PICO_ATOM_CONFIG_H */

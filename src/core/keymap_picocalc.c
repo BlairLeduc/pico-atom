@@ -155,6 +155,13 @@ const keymap_t keymap_picocalc[] = {
     { PC_DEL,       AK_DEL, 0 },
     { PC_ESC,       AK_ESC, 0 },
 
+    /* REPT is a modifier on the Atom: held while another key is held,
+     * that key repeats. So it has to be a key of its own, never an Alt
+     * chord, because a key pressed while Alt is down is taken from the
+     * Alt layer. The Atom has no Tab; Shift+Tab arrives as Home. */
+    { PC_TAB,       NOCELL, KM_REPT },
+    { PC_HOME,      NOCELL, KM_REPT },
+
     /* The MCU sends no Shift+Left or Shift+Right at all (hardware-notes
      * §6.3), so the direction SHIFT would pick is supplied here. */
     { PC_UP,    AK_UPDOWN, 0 },
@@ -167,7 +174,6 @@ const keymap_t keymap_picocalc[] = {
      * arrive: the MCU keeps them for the backlights and battery. */
     { 'C', AK_COPY, KM_ALT },
     { 'L', AK_LOCK, KM_ALT },
-    { 'R', NOCELL,  KM_ALT | KM_REPT },
     { 'K', NOCELL,  KM_ALT | KM_BREAK },
     { 'M', NOCELL,  KM_ALT | KM_MENU },
 };
