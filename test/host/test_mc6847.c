@@ -223,9 +223,10 @@ int main(void) {
     {
         /* Flat, like a ROM dump: glyph g row r at font[g * 12 + r], with
          * the 5-wide glyph in bits 5..1. 0x2A is #.#.# in those bits —
-         * a real row from the ROM — and becomes 0xA8 once the renderer
-         * shifts it to bit 7 leftmost. A value with bit 0 set would be
-         * outside the 5-wide field and would light a spacing column. */
+         * a real row from the ROM — and is drawn as it stands, bit 7
+         * leftmost, so it lands in columns 2..6. A value with bit 0 set
+         * would be outside the 5-wide field and would light a spacing
+         * column. */
         static uint8_t font[MC6847_FONT_BYTES];
         memset(font, 0, sizeof(font));
         font[5 * MC6847_FONT_ROWS + 3] = 0x2A;
@@ -247,15 +248,23 @@ int main(void) {
 
         mc6847_render_row(&g_vdg, g_vram, 3, g_row);
         for (unsigned x = 0; x < 8u; x++) {
-            bool lit = ((0x2Au << MC6847_FONT_LSHIFT) >> (7u - x)) & 1u;
+            bool lit = (0x2Au >> (7u - x)) & 1u;
             CHECK(g_row[x] == mc6847_palette[lit ? VDG_GREEN : VDG_BLACK],
                   "alpha glyph pixel %u wrong", x);
         }
-        /* The three spacing columns on the right of the cell are always
-         * background: the glyph is 5 wide in an 8-wide cell. */
-        for (unsigned x = MC6847_FONT_GLYPH_W; x < 8u; x++)
-            CHECK(g_row[x] == mc6847_palette[VDG_BLACK],
-                  "cell column %u is spacing and should be background", x);
+        /* The glyph is 5 wide in an 8-wide cell, two columns in from the
+         * left: columns 0, 1 and 7 are spacing, and always background.
+         * This is what put every character against the left edge when
+         * the renderer shifted the glyph instead. */
+        CHECK(g_row[MC6847_FONT_GLYPH_X] == mc6847_palette[VDG_GREEN],
+              "the glyph's first column is cell column %u", MC6847_FONT_GLYPH_X);
+        for (unsigned x = 0; x < 8u; x++) {
+            bool spacing = x < MC6847_FONT_GLYPH_X ||
+                           x >= MC6847_FONT_GLYPH_X + MC6847_FONT_GLYPH_W;
+            if (spacing)
+                CHECK(g_row[x] == mc6847_palette[VDG_BLACK],
+                      "cell column %u is spacing and should be background", x);
+        }
 
         /* A row the glyph does not set is background. */
         mc6847_render_row(&g_vdg, g_vram, 4, g_row);
@@ -264,8 +273,10 @@ int main(void) {
         /* Bit 7 inverts; it is how the MOS draws its cursor. */
         g_vram[0] = (uint8_t)(5u | VDG_BYTE_INV);
         mc6847_render_row(&g_vdg, g_vram, 3, g_row);
-        CHECK(g_row[0] == mc6847_palette[VDG_BLACK], "inverse video should swap fg and bg");
-        CHECK(g_row[1] == mc6847_palette[VDG_GREEN], "inverse video should swap fg and bg");
+        /* Row 0x2A is .#.#.#.. across the cell: ink at 2, gap at 3. */
+        CHECK(g_row[2] == mc6847_palette[VDG_BLACK], "inverse video should swap fg and bg");
+        CHECK(g_row[3] == mc6847_palette[VDG_GREEN], "inverse video should swap fg and bg");
+        CHECK(g_row[0] == mc6847_palette[VDG_GREEN], "inverse fills the spacing columns too");
 
         /* Glyph index to ASCII is the MC6847's own order, not plain
          * ASCII: 0..31 are $40..$5F and 32..63 are $20..$3F. */
@@ -290,7 +301,8 @@ int main(void) {
         g_vram[0] = 5;
         mc6847_set_mode(&g_vdg, mode_of(false, 0, true));
         mc6847_render_row(&g_vdg, g_vram, 3, g_row);
-        CHECK(g_row[0] == mc6847_palette[VDG_ORANGE], "alpha with CSS should be orange");
+        CHECK(g_row[MC6847_FONT_GLYPH_X] == mc6847_palette[VDG_ORANGE],
+              "alpha with CSS should be orange");
     }
 
 #if PICO_ATOM_HAVE_FONT

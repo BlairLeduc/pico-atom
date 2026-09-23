@@ -249,9 +249,11 @@ time. They apply to every driver in `src/port/`:
   `THIRD-PARTY.md` if you ever regenerate it, since `mkfont.py` emits its own
   banner and would drop it. Three things about the layout:
 
-  - A glyph is **5 px wide in bits 5..1**, not bit 7 leftmost. The renderer
-    shifts it left by `MC6847_FONT_LSHIFT`, leaving the three spacing columns
-    at the right of the 8-wide cell. Bits 7, 6 and 0 are unused.
+  - A glyph is **5 px wide in bits 5..1**, and the byte is drawn as it
+    stands, bit 7 leftmost: the glyph lands in columns 2..6, with two spacing
+    columns on the left and one on the right. Bits 7, 6 and 0 are unused. Do
+    not shift it — that puts every character against the left edge of its
+    cell, which is how the shift was found and removed.
   - The 7 glyph rows sit at **rows 3..9** of the 12-row cell.
   - Glyph order is the **MC6847's own, not ASCII**: index 0–31 are `$40`–`$5F`
     (`@A`–`Z[\]^_`), index 32–63 are `$20`–`$3F` (space onwards). Use

@@ -70,8 +70,8 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # 4. A 5x7 source pads into the 8x12 cell the way the real ROM is
     #    laid out: 3 blank rows above, 7 glyph rows, 2 below, and the
-    #    5-wide glyph in bits 5..1 so three spacing columns sit at the
-    #    right of the cell.
+    #    5-wide glyph in bits 5..1: two spacing columns on the left of
+    #    the cell and one on the right.
     narrow = [(g ^ r) & 0x1F for g in range(64) for r in range(7)]
     (tmp / "n.txt").write_text("\n".join(render(narrow, 5)))
     out = run([str(tmp / "n.txt"), "--rows", "7", "--cols", "5",
