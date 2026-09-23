@@ -23,6 +23,7 @@
 #include "atom.h"
 #include "audio.h"
 #include "board.h"
+#include "discio.h"
 #include "display.h"
 #include "hot.h"
 #include "kbd.h"
@@ -102,6 +103,7 @@ static volatile struct {
 #define HANDOFF_NONE 0u
 #define HANDOFF_TAPE 1u   /* the CPU is stalled on OSLOAD/OSSAVE (tape.h) */
 #define HANDOFF_MENU 2u   /* Alt+M (design.md §13)                      */
+#define HANDOFF_DISC 3u   /* the FDC is waiting on sectors (i8271.h)    */
 
 static volatile uint32_t g_handoff = HANDOFF_NONE;
 
@@ -316,6 +318,13 @@ static void core1_main(void) {
         printf("  tape         : boot tape %s: %s\n", PICO_ATOM_BOOT_TAPE,
                err ? err : "in the deck");
 #endif
+#ifdef PICO_ATOM_BOOT_DISC
+        /* In drive 0, for a run driven over the UART, where the menu
+         * cannot be reached. */
+        const char *derr = discio_insert(&g_atom, 0, PICO_ATOM_BOOT_DISC);
+        printf("  disc         : boot disc %s: %s\n", PICO_ATOM_BOOT_DISC,
+               derr ? derr : "in drive 0");
+#endif
         storage_unmount();
     }
     g_c1.roms_ok = ok;
@@ -346,6 +355,8 @@ static void core1_main(void) {
             if (g_handoff == HANDOFF_TAPE) {
                 char loaded[ATOM_ATM_NAME_LEN + 1];
                 if (tapeio_serve(&g_atom, loaded)) keys_for_tape(loaded);
+            } else if (g_handoff == HANDOFF_DISC) {
+                (void)discio_serve(&g_atom);
             } else {
                 menu_run(&g_atom, &g_settings, s_scene);
             }
@@ -590,6 +601,11 @@ int main(void) {
             keymatrix_set_layout(&g_keys, g_settings.layout);
         }
 
+        /* The FDC is waiting on sectors (§11.4). The CPU runs on while
+         * it waits, busy, as it would behind a real drive; guest time
+         * stands still while core 1 reads the card. */
+        if (atom_disc_request(&g_atom)) park(HANDOFF_DISC);
+
         if (++field % (g_atom.cfg.field_hz * 5u) == 0) {
             /* Real-time ratio, guest seconds per wall second, in
              * thousandths: the headline number (§12.3). */
@@ -601,7 +617,7 @@ int main(void) {
             log_printf("  heartbeat    : %lu fields, rt %lu.%03lu, %llu guest cycles, "
                    "%u undoc op(s), VDG %s | %s %lu presents (%lu full, "
                    "%lu dropped), last %lu us, max %lu us, i2c errors %lu | "
-                   "keys %lu (%lu lost), tape calls %lu\n",
+                   "keys %lu (%lu lost), tape calls %lu, disc sectors %lu read %lu written\n",
                    (unsigned long)field,
                    (unsigned long)(rt1000 / 1000u), (unsigned long)(rt1000 % 1000u),
                    (unsigned long long)g_atom.cpu.cycles,
@@ -613,7 +629,9 @@ int main(void) {
                    (unsigned long)sb_error_count(),
                    (unsigned long)g_c1.key_events,
                    (unsigned long)(kbd_overflows() + g_keys.dropped),
-                   (unsigned long)g_atom.tape.served);
+                   (unsigned long)g_atom.tape.served,
+                   (unsigned long)g_atom.fdc.sectors_read,
+                   (unsigned long)g_atom.fdc.sectors_written);
             /* Where core 0's time goes (§12.3, design.md §6.3). The
              * guest is paced, so rt above reads 1.000 whatever the code
              * costs; the cost is the time spent inside the guest.

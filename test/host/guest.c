@@ -68,10 +68,7 @@ void guest_boot(guest_t *g) {
     atom_init(&g->m, &cfg);
     keymatrix_init(&g->k);
     for (int s = 0; s < ROM_SLOT_COUNT; s++) {
-        /* AtomDOS wants the 8271 (M9), so its ROM waits for it. */
-        if (have[s] && s != ROM_DOS) {
-            atom_load_rom(&g->m, romset_slots[s].addr, images[s], ROM_IMAGE_SIZE);
-        }
+        if (have[s]) atom_load_rom(&g->m, romset_slots[s].addr, images[s], ROM_IMAGE_SIZE);
     }
     atom_reset(&g->m);
     guest_fields(g, 120);

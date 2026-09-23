@@ -30,8 +30,8 @@ typedef struct {
 bool guest_find_roms(const char **dir);
 bool guest_have_rom(rom_slot_t s);
 
-/* Build the machine, install every image found but AtomDOS (which wants
- * the 8271, M9), reset, and run two seconds to the prompt. */
+/* Build the machine, install every image found, reset, and run two
+ * seconds to the prompt. AtomDOS is in, and dormant until *DOS. */
 void guest_boot(guest_t *g);
 
 void guest_fields(guest_t *g, int n);

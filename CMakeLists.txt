@@ -17,6 +17,7 @@ set(PICO_ATOM_CORE_SOURCES
     src/core/bus.c
     src/core/cassette.c
     src/core/i8255.c
+    src/core/i8271.c
     src/core/inflate.c
     src/core/keylayout.c
     src/core/keymap_picocalc.c
@@ -108,6 +109,7 @@ else()
         src/port/audio.c
         src/port/board.c
         src/port/diskio.c
+        src/port/discio.c
         src/port/display.c
         src/port/kbd.c
         src/port/keymapio.c
@@ -141,6 +143,13 @@ else()
     if (PICO_ATOM_BOOT_TAPE)
         target_compile_definitions(pico-atom PRIVATE
             PICO_ATOM_BOOT_TAPE="${PICO_ATOM_BOOT_TAPE}")
+    endif()
+
+    # The same for a disc image in drive 0 (src/port/discio.h).
+    set(PICO_ATOM_BOOT_DISC "" CACHE STRING "Card path of a disc for drive 0 at boot, or empty")
+    if (PICO_ATOM_BOOT_DISC)
+        target_compile_definitions(pico-atom PRIVATE
+            PICO_ATOM_BOOT_DISC="${PICO_ATOM_BOOT_DISC}")
     endif()
 
     # clk_peri does not follow clk_sys by default; the SPI baud and the

@@ -105,6 +105,17 @@ so eject it to go back to `.atm` files. `SAVE` still writes `.atm` files.
 
 Games that need a 32 KB Atom have it: RAM runs from `#0000` to `#7FFF`.
 
+**Discs** are Acorn disc images in `/atom/discs/`: `.ssd`, `.dsk` or `.40t` for
+one side, `.dsd` for two. The menu's *Discs* page puts one in drive 0 or 1. As
+on a real Atom, the disc system sleeps until you wake it, and the commands are
+the Acornsoft Atom Disc Pack manual's: `*DOS`, then `*CAT`, `*LOAD NAME`,
+`*RUN NAME` or `*SAVE NAME start end` (hex, no `#`). A BASIC program loads with
+`LOAD "NAME"` and starts with `RUN`. `*DRIVE 1` changes drive; drives 2 and 3 are the second sides of 0 and 1.
+Writes go straight into the image file. Set the file read-only on your computer
+to write-protect the disc. The Atom then says `DISK PROT`. An empty drive makes
+the Atom wait until a disc goes in, as a real drive with its door open would.
+AtomDOS needs `dosrom.rom`; without it, discs do nothing.
+
 **Game keymaps** put a game's keys under one hand. Atom games scan the keyboard
 themselves, and many were laid out for keys that sit far apart on the PicoCalc.
 The menu's *Keys* item picks a layout. It lays a few keys over the standard map,

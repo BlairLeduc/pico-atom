@@ -128,4 +128,30 @@
  * its tones, so this is room for the biggest multi-part games. */
 #define ATOM_UEF_MAX         65536u
 
+/* ---- Disc (design.md §11.4) ------------------------------------------ */
+
+/* Two drive select lines on the 8271; drives 2 and 3 are their second
+ * sides, which AtomDOS picks with the side-select output (#E78E). */
+#define ATOM_FDC_DRIVES          2u
+
+/* Acorn's FM format: 256-byte sectors, ten to a track. The FDC asks
+ * the port for at most a track at a time, so this is its buffer. */
+#define ATOM_DISC_SECTOR_LEN   256u
+#define ATOM_DISC_SECTORS       10u
+#define ATOM_DISC_TRACKS_MAX    80u
+#define ATOM_FDC_BUF_LEN   (ATOM_DISC_SECTORS * ATOM_DISC_SECTOR_LEN)
+
+/* Guest cycles, at 1 MHz. FM at 125 kbit/s is a byte every 64 us: the
+ * DOS's NMI handler (#E87B) takes 52 cycles a byte, so it keeps up. A
+ * 300 rpm revolution is 200 ms, a tenth of it per sector. Stepping and
+ * settling are not taken from SPECIFY's parameters, whose units are
+ * unconfirmed; nothing the DOS does depends on them. */
+#define ATOM_FDC_BYTE_CYCLES     64u
+#define ATOM_FDC_SECTOR_CYCLES 20000u
+#define ATOM_FDC_STEP_CYCLES    6000u
+#define ATOM_FDC_SETTLE_CYCLES 15000u
+#define ATOM_FDC_CMD_CYCLES      200u   /* command to its first action */
+
+#define ATOM_DISC_LIST_MAX      48u    /* disc images the menu lists (§13) */
+
 #endif /* PICO_ATOM_CONFIG_H */

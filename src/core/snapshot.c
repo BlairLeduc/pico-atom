@@ -48,7 +48,8 @@ enum {
     S_BUDGET = 49,
     S_CFG = 53, S_FIELD_HZ = 54,
     S_ROMS = 56,                  /* SHA-1 of the ROM pages, 20 bytes  */
-    S_END = 76,                   /* the rest is reserved, written zero */
+    S_FDC = 76,                   /* mode, output, track 0, track 1, head 0, head 1 */
+    S_END = 82,                   /* the rest is reserved, written zero */
 };
 
 _Static_assert(S_END <= SNAP_STATE_LEN, "the state section has outgrown its length");
@@ -108,6 +109,16 @@ static void state_encode(const atom_t *m, uint8_t st[SNAP_STATE_LEN]) {
     st[S_CFG] = cfg_bits(&m->cfg);
     put16(st + S_FIELD_HZ, (uint16_t)m->cfg.field_hz);
     rom_hash(m, st + S_ROMS);
+
+    /* The 8271's setup, which the DOS writes once at *DOS and a
+     * restored machine still counts on: non-DMA mode above all, or the
+     * next read never raises an NMI. A command in progress is not
+     * saved; snapshot_save refuses while there is one. */
+    const i8271_t *f = &m->fdc;
+    q = st + S_FDC;
+    *q++ = f->special[I8271_SR_MODE];   *q++ = f->special[I8271_SR_OUTPUT];
+    *q++ = f->special[I8271_SR_TRACK0]; *q++ = f->special[I8271_SR_TRACK1];
+    *q++ = f->drv[0].head;              *q++ = f->drv[1].head;
 }
 
 /* ---- the stream -------------------------------------------------------- */
@@ -129,6 +140,9 @@ static const uint8_t *page_out(const atom_t *m, unsigned p, uint8_t *scratch) {
 
 snap_status_t snapshot_save(const atom_t *m, snap_write_fn write, void *ctx) {
     if (m->tape.op != TAPE_NONE) return SNAP_BUSY;
+    /* The FDC mid-command, or with a completion the DOS has not taken:
+     * neither is in the state section. */
+    if (i8271_busy(&m->fdc) || i8271_int(&m->fdc)) return SNAP_BUSY;
 
     uint8_t st[SNAP_STATE_LEN];
     uint8_t scratch[PIECE];
@@ -266,6 +280,17 @@ snap_status_t snapshot_load(atom_t *m, snap_read_fn read, void *ctx) {
     m->tape.pass = false;
     m->tape.cue_play = false;
 
+    /* The discs stay in their drives, as the tape stays in the deck. */
+    i8271_t *f = &m->fdc;
+    i8271_reset(f);
+    q = st + S_FDC;
+    f->special[I8271_SR_MODE] = *q++;   f->special[I8271_SR_OUTPUT] = *q++;
+    f->special[I8271_SR_TRACK0] = *q++; f->special[I8271_SR_TRACK1] = *q++;
+    f->drv[0].head = *q++;              f->drv[1].head = *q++;
+    /* The head comes back unloaded, the drive not ready, so the DOS
+     * reads the catalogue again: the disc may not be the one it was. */
+    f->special[I8271_SR_OUTPUT] &= (uint8_t)~I8271_OUT_LOAD;
+
     /* The loudspeaker starts again from the restored clock and level, at
      * the rate the port set: cycles per sample num / den, as it was. */
     beeper_t *b = &m->beeper;
@@ -284,7 +309,7 @@ const char *snapshot_status_str(snap_status_t st) {
     case SNAP_CORRUPT:       return "DAMAGED (CRC)";
     case SNAP_OTHER_MACHINE: return "OTHER MACHINE CONFIG";
     case SNAP_OTHER_ROMS:    return "OTHER ROMS";
-    case SNAP_BUSY:          return "TAPE CALL IN PROGRESS";
+    case SNAP_BUSY:          return "TAPE OR DISC BUSY";
     }
     return "?";
 }

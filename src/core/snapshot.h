@@ -48,7 +48,7 @@ typedef enum {
     SNAP_CORRUPT,         /* the CRC does not match                     */
     SNAP_OTHER_MACHINE,   /* RAM populated differently, or another rate */
     SNAP_OTHER_ROMS,      /* the ROMs fitted are not the ones it ran on */
-    SNAP_BUSY,            /* the CPU is stalled on a tape call          */
+    SNAP_BUSY,            /* a tape call, or the FDC mid-command        */
 } snap_status_t;
 
 /* Move exactly n bytes; false on any failure. */

@@ -7,6 +7,7 @@
 
 #include "pico/stdlib.h"
 
+#include "discio.h"
 #include "display.h"
 #include "kbd.h"
 #include "keymapio.h"
@@ -37,7 +38,8 @@
 #define BKL_MAX   240u
 
 enum {
-    I_RESUME, I_SAVE, I_LOAD, I_DELETE, I_TAPES, I_KEYS, I_RESET, I_VOLUME, I_BACKLIGHT,
+    I_RESUME, I_SAVE, I_LOAD, I_DELETE, I_TAPES, I_DISCS, I_KEYS, I_RESET, I_VOLUME,
+    I_BACKLIGHT,
     I_COUNT
 };
 
@@ -63,9 +65,16 @@ static struct {
     bool             tapes;
     unsigned         n_tapes;
     int              tape_sel, tape_top;
+
+    /* The disc page: row 0 empties the drive, the images follow. */
+    bool             discs;
+    unsigned         n_discs;
+    int              disc_sel, disc_top;
+    unsigned         drive;
 } s;
 
 static tapeio_entry_t s_list[ATOM_TAPE_LIST_MAX];
+static discio_entry_t s_discs[ATOM_DISC_LIST_MAX];
 
 static void say(const char *fmt, const char *arg) {
     snprintf(s.status, sizeof s.status, fmt, arg);
@@ -84,6 +93,7 @@ static void draw_main(void) {
         case I_LOAD:   snprintf(line, sizeof line, " LOAD SNAPSHOT   < SLOT %u >", s.slot + 1u); break;
         case I_DELETE: snprintf(line, sizeof line, " DELETE SNAPSHOT < SLOT %u >", s.slot + 1u); break;
         case I_TAPES:  snprintf(line, sizeof line, " TAPES..."); break;
+        case I_DISCS:  snprintf(line, sizeof line, " DISCS..."); break;
         case I_KEYS:
             snprintf(line, sizeof line, " KEYS   < %s >",
                      s.set->layout ? s.set->layout->name : "STANDARD");
@@ -94,7 +104,7 @@ static void draw_main(void) {
             snprintf(line, sizeof line, " BACKLIGHT       < %u >", s.backlight / BKL_STEP);
             break;
         }
-        textpage_line(s.vram, 2 + i, line, i == s.item);
+        textpage_line(s.vram, 1 + i, line, i == s.item);
     }
 
     snprintf(line, sizeof line, " SLOT %u: %s", s.slot + 1u, slot_state);
@@ -112,10 +122,16 @@ static void draw_main(void) {
              ins[0] ? (base ? base + 1 : ins) : "NONE", deck);
     textpage_line(s.vram, 12, line, false);
 
-    /* A layout a tape chose says so (§10.5). */
-    line[0] = 0;
-    if (s.set->layout && s.set->keys_tape[0])
-        snprintf(line, sizeof line, " KEYS CHOSEN BY %.16s", s.set->keys_tape);
+    /* Each drive's image, without its directory or extension. */
+    char name[ATOM_FDC_DRIVES][12];
+    for (unsigned d = 0; d < ATOM_FDC_DRIVES; d++) {
+        const char *p = discio_inserted(d);
+        const char *b = strrchr(p, '/');
+        snprintf(name[d], sizeof name[d], "%s", p[0] ? (b ? b + 1 : p) : "-");
+        char *dot = strrchr(name[d], '.');
+        if (dot && dot != name[d]) *dot = 0;
+    }
+    snprintf(line, sizeof line, " DISC 0: %-9.9s 1: %.9s", name[0], name[1]);
     textpage_line(s.vram, 13, line, false);
 }
 
@@ -150,14 +166,41 @@ static void draw_tapes(void) {
     }
 }
 
+static void draw_discs(void) {
+    char line[TEXT_COLS + 1];
+    snprintf(line, sizeof line, " DRIVE < %c >%.20s", (char)('0' + s.drive % 10u),
+             s.n_discs ? "" : "  NONE IN /ATOM/DISCS/");
+    textpage_line(s.vram, 2, line, false);
+    for (int r = 0; r < TAPE_ROWS; r++) {
+        int i = s.disc_top + r;
+        line[0] = 0;
+        if (i == 0) {
+            snprintf(line, sizeof line, " (EMPTY THE DRIVE)");
+        } else if (i <= (int)s.n_discs) {
+            const discio_entry_t *e = &s_discs[i - 1];
+            /* Which drive holds it, if either. */
+            char in = ' ';
+            for (unsigned d = 0; d < ATOM_FDC_DRIVES; d++)
+                if (strcmp(e->path, discio_inserted(d)) == 0) in = (char)('0' + d);
+            unsigned kib = e->size / 1024u;
+            snprintf(line, sizeof line, "%c%-22.22s %3uK%.2s", in, e->name,
+                     kib > 999u ? 999u : kib, e->protect ? " P" : "");
+        }
+        textpage_line(s.vram, 3 + r, line, i == s.disc_sel);
+    }
+}
+
 static void draw(void) {
     textpage_clear(s.vram);
-    textpage_line(s.vram, 0, s.tapes ? " PICO-ATOM: TAPES" : " PICO-ATOM", true);
+    textpage_line(s.vram, 0, s.tapes ? " PICO-ATOM: TAPES" : s.discs ? " PICO-ATOM: DISCS"
+                                                                     : " PICO-ATOM", true);
     if (s.tapes) draw_tapes();
+    else if (s.discs) draw_discs();
     else draw_main();
     textpage_line(s.vram, 14, s.status, false);
     textpage_line(s.vram, 15, s.tapes ? " ENTER INSERTS  ESC BACK"
-                                      : " ARROWS  ENTER  ESC RESUMES", true);
+                              : s.discs ? " < > DRIVE  ENTER INSERTS  ESC"
+                                        : " ARROWS  ENTER  ESC RESUMES", true);
     display_present(s.vram, 0, NULL);
 }
 
@@ -208,6 +251,17 @@ static void open_tapes(void) {
         if (strcmp(s_list[i].path, tapeio_inserted()) == 0) s.tape_sel = T_FIRST + (int)i;
     }
     s.tape_top = s.tape_sel >= TAPE_ROWS ? s.tape_sel - TAPE_ROWS + 1 : 0;
+    s.status[0] = 0;
+}
+
+static void open_discs(void) {
+    s.n_discs = s.card ? discio_list(s_discs, ATOM_DISC_LIST_MAX) : 0;
+    s.discs = true;
+    s.disc_sel = 0;
+    for (unsigned i = 0; i < s.n_discs; i++) {
+        if (strcmp(s_discs[i].path, discio_inserted(s.drive)) == 0) s.disc_sel = (int)i + 1;
+    }
+    s.disc_top = s.disc_sel >= TAPE_ROWS ? s.disc_sel - TAPE_ROWS + 1 : 0;
     s.status[0] = 0;
 }
 
@@ -271,6 +325,7 @@ static void key_main(uint8_t c) {
         case I_LOAD:   say(" LOADING...", ""); draw(); do_load(); break;
         case I_DELETE: do_delete(); break;
         case I_TAPES:  open_tapes(); break;
+        case I_DISCS:  open_discs(); break;
         case I_RESET:  s.m->cpu.reset_pending = true; s.done = true; break;
         }
         break;
@@ -329,6 +384,38 @@ static void key_tapes(uint8_t c) {
     if (s.tape_sel >= s.tape_top + TAPE_ROWS) s.tape_top = s.tape_sel - TAPE_ROWS + 1;
 }
 
+static void key_discs(uint8_t c) {
+    switch (c) {
+    case PC_UP:   if (s.disc_sel > 0) s.disc_sel--; break;
+    case PC_DOWN: if (s.disc_sel < (int)s.n_discs) s.disc_sel++; break;
+    case PC_LEFT:
+    case PC_RIGHT:
+        s.drive = (s.drive + 1u) % ATOM_FDC_DRIVES;
+        break;
+    case PC_ENTER: {
+        if (s.disc_sel == 0) {
+            discio_insert(s.m, s.drive, NULL);
+            snprintf(s.status, sizeof s.status, " DRIVE %u EMPTIED", s.drive);
+        } else {
+            const discio_entry_t *e = &s_discs[s.disc_sel - 1];
+            /* One image in one drive: two would write over each other. */
+            unsigned other = (s.drive + 1u) % ATOM_FDC_DRIVES;
+            if (strcmp(e->path, discio_inserted(other)) == 0) discio_insert(s.m, other, NULL);
+            const char *err = discio_insert(s.m, s.drive, e->path);
+            if (err) { say(" NOT INSERTED: %.16s", err); return; }
+            snprintf(s.status, sizeof s.status, " DRIVE %u: *DOS, THEN *CAT", s.drive);
+        }
+        s.discs = false;
+        return;
+    }
+    case PC_ESC:
+        s.discs = false;
+        return;
+    }
+    if (s.disc_sel < s.disc_top) s.disc_top = s.disc_sel;
+    if (s.disc_sel >= s.disc_top + TAPE_ROWS) s.disc_top = s.disc_sel - TAPE_ROWS + 1;
+}
+
 /* Presses only: releases and the MCU's held reports move nothing. Alt is
  * tracked so that Alt+M closes the menu as it opened it. */
 static void keys(void) {
@@ -338,6 +425,7 @@ static void keys(void) {
         if (st != KEY_EV_PRESSED) continue;
         if (s.alt && (c == 'm' || c == 'M')) { s.done = true; break; }
         if (s.tapes) key_tapes(c);
+        else if (s.discs) key_discs(c);
         else key_main(c);
         draw();
     }
@@ -355,6 +443,9 @@ void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram) {
     if (!s.card) say(" NO CARD: NO SNAPSHOTS OR TAPES", "");
     refresh_slots();
     rescan_keys();
+    /* A layout a tape chose says so (§10.5). */
+    if (!s.status[0] && s.set->layout && s.set->keys_tape[0])
+        snprintf(s.status, sizeof s.status, " KEYS CHOSEN BY %.16s", s.set->keys_tape);
 
     uint8_t r[2] = { 0, 0 };
     s.backlight = sb_read(SB_REG_BKL, r) == SB_OK ? r[1] : 0u;
