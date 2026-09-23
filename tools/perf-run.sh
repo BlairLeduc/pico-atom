@@ -35,6 +35,18 @@ program() {
 }
 
 mkdir -p "$outdir"
+
+# A failed flash or type exits under set -e; the capture must not outlive
+# it, or it holds the port and every later run finds it busy.
+logger=
+stop_logger() {
+    [ -n "$logger" ] || return 0
+    kill "$logger" 2>/dev/null || true
+    wait "$logger" 2>/dev/null || true
+    logger=
+}
+trap stop_logger EXIT
+
 for w in "${workloads[@]}"; do
     text="$(program "$w")"
     log="$outdir/$w.log"
@@ -48,6 +60,7 @@ for w in "${workloads[@]}"; do
         sleep 1
         if kill -0 "$logger" 2>/dev/null && [ -e "$log" ]; then break; fi
         wait "$logger" 2>/dev/null || true
+        logger=
         [ "$try" -lt 10 ] || { echo "perf-run.sh: no capture for $w" >&2; exit 1; }
     done
     "$here/flash.sh" "$elf" >"$outdir/$w.flash.log" 2>&1
@@ -56,7 +69,6 @@ for w in "${workloads[@]}"; do
     # Mark where the program started: heartbeats before this are typing.
     grep -c 'perf ' "$log" >"$outdir/$w.start" || true
     sleep "$dwell"
-    kill "$logger" 2>/dev/null || true
-    wait "$logger" 2>/dev/null || true
+    stop_logger
     echo "perf-run.sh: $w -> $log"
 done
