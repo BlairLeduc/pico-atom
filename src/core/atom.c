@@ -91,6 +91,9 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
     m6502_init(&m->cpu);
     m->budget = 0;
     atom_reset(m);
+
+    beeper_init(&m->beeper, m->cpu.cycles, atom_speaker(m), ATOM_CPU_HZ,
+                ATOM_AUDIO_RATE_NUM, ATOM_AUDIO_RATE_DEN);
 }
 
 void atom_reset(atom_t *m) {
@@ -141,6 +144,9 @@ uint32_t atom_run(atom_t *m, uint32_t cycles) {
             m6502_set_irq(&m->cpu, M6502_IRQ_VIA, via6522_irq(&m->via));
         }
     }
+    /* Close off every sample that ended inside this run, so a drain
+     * after it sees them all (§9.3). Once per call, not per step. */
+    beeper_advance(&m->beeper, m->cpu.cycles);
     return done;
 }
 
@@ -223,4 +229,26 @@ uint8_t atom_vdg_mode(const atom_t *m) {
 
 bool atom_speaker(const atom_t *m) {
     return i8255_speaker(&m->ppi);
+}
+
+/* ---- audio (design.md §9) ------------------------------------------- */
+
+/* The edge is stamped with the cycle count at the start of the writing
+ * instruction; the store itself lands on its last cycle. The offset is
+ * the same for every edge a given loop makes, so periods, and therefore
+ * pitch, are exact — only the phase is a few cycles early. */
+void atom_speaker_written(atom_t *m) {
+    beeper_set_level(&m->beeper, m->cpu.cycles, atom_speaker(m));
+}
+
+void atom_audio_set_rate(atom_t *m, uint32_t rate_num, uint32_t rate_den) {
+    beeper_advance(&m->beeper, m->cpu.cycles);
+    beeper_t *b = &m->beeper;
+    bool dc_block = b->dc_block;
+    beeper_init(b, m->cpu.cycles, atom_speaker(m), ATOM_CPU_HZ, rate_num, rate_den);
+    b->dc_block = dc_block;
+}
+
+size_t atom_audio_drain(atom_t *m, int16_t *dst, size_t max) {
+    return beeper_drain(&m->beeper, dst, max);
 }

@@ -12,6 +12,7 @@
  */
 
 #include <dirent.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,9 +62,21 @@ static atom_t      m;
 static keymatrix_t k;
 static atom_t      booted;      /* the machine at its first prompt */
 
+/* Every field's audio, drained the way the port drains it (§12.2), and
+ * kept from the last reset of audio_n so the bell can be measured. */
+#define AUDIO_MAX 80000u
+static int16_t audio[AUDIO_MAX];
+static size_t  audio_n;
+
 static void field(void) {
     keymatrix_field(&k, &m);
     atom_run_field(&m);
+    int16_t tmp[ATOM_AUDIO_BUF_LEN];
+    size_t n = atom_audio_drain(&m, tmp, ATOM_AUDIO_BUF_LEN);
+    if (audio_n + n <= AUDIO_MAX) {
+        memcpy(audio + audio_n, tmp, n * sizeof(tmp[0]));
+        audio_n += n;
+    }
 }
 
 static void fields(int n) {
@@ -341,6 +354,42 @@ int main(void) {
         chord(PICOCALC_KEY_ALT, 'M');
         CHECK(k.menu_request, "Alt+M should request the menu");
         CHECK(strcmp(row_text(2), ">") == 0, "Alt+M reached the guest: '%s'", row_text(2));
+    }
+
+    /* ---- the bell (§17 M5) ------------------------------------------- *
+     * CTRL-G reaches the kernel's bell at #FD18, which toggles PC2 through
+     * the 8255's BSR path: STA #B003 (4), DEX/BNE over X = 0, so 256 turns
+     * (5 x 256 - 1), EOR (2), INY (2), BPL (3). That is 1290 cycles a half
+     * period, 387.6 Hz, and Y runs from 5 to 128, so 123 half periods. */
+    {
+        restore();
+        audio_n = 0;
+        chord(PICOCALC_KEY_CTRL, 'g');
+        fields(30);
+
+        const double T = 2048.0 / 75.0;
+        double first = -1, last = -1;
+        unsigned rising = 0;
+        size_t lit_first = 0, lit_last = 0;
+        for (size_t i = 1; i < audio_n; i++) {
+            if (audio[i] != 0 && lit_first == 0) lit_first = i;
+            if (audio[i] != audio[i - 1] && abs(audio[i] - audio[i - 1]) > 1000) lit_last = i;
+            if (audio[i - 1] < 0 && audio[i] >= 0) {
+                double frac = (double)-audio[i - 1] / (double)(audio[i] - audio[i - 1]);
+                double at = ((double)(i - 1) + frac) * T;
+                if (first < 0) first = at;
+                last = at;
+                rising++;
+            }
+        }
+        double hz = rising > 1 ? (rising - 1) * 1e6 / (last - first) : 0;
+        double want = 1e6 / 2580.0;
+        double ms = (double)(lit_last - lit_first) * T / 1000.0;
+        printf("bell: %.2f Hz over %.1f ms, %u cycles; the loop counts %.2f Hz over %.1f ms\n",
+               hz, ms, rising, want, 122 * 1290 / 1000.0);
+        CHECK(rising >= 60 && rising <= 62, "the bell should be ~61 cycles, got %u", rising);
+        CHECK(fabs(hz - want) / want < 1e-3, "the bell at %.2f Hz, expected %.2f Hz", hz, want);
+        CHECK(strcmp(row_text(2), ">") == 0, "CTRL-G should not print: '%s'", row_text(2));
     }
 
     TEST_DONE();

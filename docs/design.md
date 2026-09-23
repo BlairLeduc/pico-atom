@@ -265,16 +265,16 @@ allocation order (hardware notes §10).
 ### 4.1 Layering
 
 ```
-      ┌──────────────────────────────────────────────────────┐
+      ┌───────────────────────────────────────────────────────┐
       │  port/   PicoCalc + Pico SDK                          │
-      │  main · board · lcd · display · audio · kbd · sd · ui  │
-      └───────────────┬──────────────────────────────────────┘
+      │  main · board · lcd · display · audio · kbd · sd · ui │
+      └───────────────┬───────────────────────────────────────┘
                       │  narrow, synchronous interface
-      ┌───────────────▼──────────────────────────────────────┐
+      ┌───────────────▼───────────────────────────────────────┐
       │  core/   pure C, no SDK, host-buildable               │
       │  m6502 · bus · i8255 · mc6847 · via6522 · tape        │
       │  keymatrix · snapshot                                 │
-      └──────────────────────────────────────────────────────┘
+      └───────────────────────────────────────────────────────┘
 ```
 
 `core/` knows nothing about DMA, I²C, SPI or `pico/stdlib.h`. It exposes:
@@ -795,7 +795,34 @@ literals anywhere near it (hardware notes §2.2).
 
 Cassette bits (port C bits 0–1) are excluded from the mix by default and
 available as a monitor option, because hearing your loads is charming for about
-ninety seconds.
+ninety seconds. (The monitor option arrives with tape, M6/M8.)
+
+As built, in `src/core/beeper.c`:
+
+- **The sample boundary is tracked in units of 1/den of a guest cycle**, where
+  guest cycles per sample is the reduced fraction `num/den` — 2048/75 at
+  150 MHz. A boundary is a whole cycle count plus a remainder; advancing by one
+  sample adds `q` and `r` with no division. There is no accumulated rounding, so
+  the count of samples after any run is exactly `⌊cycles × den / num⌋`.
+- **An edge is stamped with the cycle count at the start of the writing
+  instruction.** The store lands on its last cycle, a few cycles later, but the
+  offset is the same for every edge a given loop makes, so periods — and pitch
+  — are exact and only the phase moves.
+- **A one-pole DC blocker** (pole 0.995, a corner near 29 Hz) follows the box
+  filter, so a speaker left high and one left low both come to rest at 0. That
+  makes 0 the silence value, which is what the port pads an underrun with.
+- The core holds up to `ATOM_AUDIO_BUF_LEN` (1024) samples between drains; one
+  field is 611 at 60 Hz. `atom_run` closes off every sample that ended before its
+  last instruction, once per call.
+
+`test/host/test_audio.c` checks every sample of a guest-executed square wave
+against an independent box-filter model built from the edges the guest actually
+made (to 1 LSB), and measures the pitch of the DC-blocked output against the
+loop's hand-counted period: 1002.004 Hz both ways. `test_boot` rings the real
+MOS bell with CTRL-G. The kernel's bell at `#FD18` toggles PC2 through the
+8255's BSR path, 1290 cycles each half period, for 123 half periods, so
+387.60 Hz for 157 ms by the cycle count. The output measures 387.64 Hz over
+156 ms.
 
 ### 9.4 Plumbing
 
@@ -824,6 +851,45 @@ to both channels.
 DMA refills are separate failure modes with separate causes, and a single
 counter hides whichever one is not happening. When muted, samples are still
 consumed so that muting does not change application timing.
+
+As built, in `src/port/audio.c`: the queue holds finished compare words, so the
+IRQ only copies, and the producer converts at push time. The producer and the
+IRQ are both on core 0, so the queue is SPSC between thread and interrupt
+context and needs no lock. A refill is **late** when its channel is already
+running again on entry. That means the other half drained too and chained
+back. A late refill is counted and the live channel is left alone. Un-re-armed, it
+replays the other half, and the ring wrap keeps it inside the buffer until its
+next completion re-arms it. Nothing comes off the queue on a late refill. That
+next completion refills the half, so samples taken now would be overwritten
+before they played. Left in the queue, they are only late. Playback
+starts when the producer's push takes the queue to 768 samples.
+
+**The UART is not on core 0's path.** A heartbeat is a few hundred bytes, and
+115200 baud takes ~30 ms to send it — more than the queue's ~11 ms of low-water
+slack — so a blocking `printf` from the field loop would cause the underruns it
+reports. Core 0 formats into a ring (`src/port/log.c`) and core 1 moves bytes
+into the UART FIFO as it has room.
+
+**Measured** on a Plus 2 W, 2026-09-22 (`out/` logs, not committed). The guest
+ran `10 P.$7;` / `20 G.10`, a continuous MOS bell typed in over UART1
+(`tools/uart-type.sh`), for 690 s of 5-second heartbeats:
+
+| | |
+|---|---:|
+| Speaker edges | 507,608 — the bell rang throughout |
+| PCM underrun samples | **0** |
+| Late DMA refills | **0** |
+| Samples consumed per second, against `time_us_64()` | 36,620–36,621 (nominal 36,621.09; the log truncates) |
+| Real-time ratio | 0.999–1.000 |
+| Queue low water | 385 samples, ~10.5 ms |
+| I²C errors, dropped presents, dropped log lines | 0, 0, 0 |
+
+The consumed rate is the control quantity: it is the PWM wrap measured against
+an independent timer, and it did not move with the guest's load. By ear, the
+MOS bell (`PRINT $7`) is audible from the PicoCalc's speaker. An uncalibrated
+phone app read it as ~387 Hz, against 387.60 Hz from the cycle count. That
+only confirms the pitch, like hardware notes §5.8's 439 Hz reading. It is not
+a calibrated measurement.
 
 ---
 
@@ -1067,7 +1133,13 @@ fire would be dead code, and §9.4's requirement to count producer starvation
 separately from late DMA refills only means something if both can happen.
 
 When audio is muted, samples are still produced and consumed (hardware notes
-§5.8) so that muting does not change timing. The fallback path, for a build with
+§5.8) so that muting does not change timing.
+
+As built, core 0 publishes the field's snapshot and then pushes its samples.
+`audio_push` waits on `__wfi()` while the queue is full, and the DMA IRQ on the
+same core wakes it. The queue's depth then swings between ~385 and 1024 samples
+each field. The low-water mark is reported, so the slack is measured rather
+than assumed. The fallback path, for a build with
 audio disabled entirely, paces on `time_us_64()` against an absolute field
 deadline — absolute, not incremental, so a late field does not accumulate.
 
@@ -1146,6 +1218,7 @@ pico-atom/
 │   │   ├── m6502.c/.h
 │   │   ├── bus.c/.h
 │   │   ├── atom.c/.h
+│   │   ├── beeper.c/.h         # PC2 → PCM: box filter at the sample period (§9.3)
 │   │   ├── i8255.c/.h
 │   │   ├── mc6847.c/.h         # mode decode, LUT build, row generation, band diff
 │   │   ├── mc6847_font.c/.h    # 64-glyph character ROM (XRoar's, THIRD-PARTY.md)
@@ -1161,6 +1234,7 @@ pico-atom/
 │   │   ├── lcd.c/.h            # ST7789P init, windows, DMA blit
 │   │   ├── display.c/.h        # snapshot diff, band present, status band
 │   │   ├── audio.c/.h          # PWM slice, chained DMA, SPSC queue
+│   │   ├── log.c/.h            # core 0's UART lines, drained by core 1 (§9.4)
 │   │   ├── southbridge.c/.h    # i2c1 register layer: read, write, busy flag, errors
 │   │   ├── kbd.c/.h            # key-event normalisation on top of it
 │   │   ├── sd.c/.h  fs.c/.h    # SPI0, FatFs
@@ -1309,7 +1383,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M2** | Bus, 8255, VDG row generation, host only | golden images match for all nine modes |
 | **M3** | Board bring-up: clocks, I²C, LCD, test pattern; the real core 0 slice loop, split at flyback (§12.1) | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate; a guest loop polling `FS` observes the low state and escapes |
 | **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` — **done** 2026-09-22 on a Plus 2 W: typed on the PicoCalc keyboard, answer read off the panel; `CLEAR 0` + `PLOT` draws an SG6 element of the right size |
-| **M5** | Audio | integrator verified against a known frequency; underrun and late-refill counters both zero over 10 minutes |
+| **M5** | Audio | integrator verified against a known frequency; underrun and late-refill counters both zero over 10 minutes — **done** 2026-09-22 on a Plus 2 W (§9.4) |
 | **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs |
 | **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to |
 | **M8** | Tape phase 2 (UEF at signal level), turbo clock | a UEF image that phase 1 cannot load, loads |

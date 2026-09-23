@@ -12,6 +12,7 @@ set(PICO_ATOM_HOST_TESTS
     test_present
     test_keymap
     test_via6522
+    test_audio
 )
 
 foreach(t ${PICO_ATOM_HOST_TESTS})
@@ -21,6 +22,9 @@ foreach(t ${PICO_ATOM_HOST_TESTS})
     target_compile_options(${t} PRIVATE ${PICO_ATOM_WARNINGS})
     add_test(NAME ${t} COMMAND ${t})
 endforeach()
+
+# test_audio measures pitch with lround and fabs.
+target_link_libraries(test_audio PRIVATE m)
 
 # The Dormann and Clark suites need binaries the repository does not ship;
 # without them the test reports as skipped, not as passing.
@@ -78,6 +82,7 @@ target_compile_options(test_boot PRIVATE ${PICO_ATOM_WARNINGS})
 target_compile_definitions(test_boot PRIVATE
     PICO_ATOM_DEFAULT_ROMS="${CMAKE_SOURCE_DIR}/roms"
 )
+target_link_libraries(test_boot PRIVATE m)
 add_test(NAME test_boot COMMAND test_boot)
 set_tests_properties(test_boot PROPERTIES SKIP_RETURN_CODE 77)
 

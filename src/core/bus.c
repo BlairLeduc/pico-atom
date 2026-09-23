@@ -91,6 +91,10 @@ void bus_write_slow(atom_t *m, uint16_t a, uint8_t v) {
              * against what it last drew (§8.4), so a scan does not look
              * like a mode change. */
             if (reg == 0u || reg == 3u) atom_refresh_ppi_inputs(m);
+
+            /* Port C and the BSR path both reach the speaker bit, and a
+             * mode-set write clears it (§9.3). */
+            if (reg >= 2u) atom_speaker_written(m);
             return;
         }
         if (IS_VIA(a) && m->cfg.via_fitted) {

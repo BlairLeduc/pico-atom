@@ -6,8 +6,10 @@
  * hardware-notes.md §10's order, loads the ROMs, and then presents
  * snapshots and polls the keyboard.
  *
- * Audio (M5) is still to come. Until it exists the field loop paces on
- * time_us_64() against an absolute deadline — §12.2's fallback path.
+ * Core 0 also owns audio (§9.4): each field's samples go into the PCM
+ * queue, and waiting for room there is what paces the guest (§12.2). A
+ * build with PICO_ATOM_AUDIO=0 paces on time_us_64() against an
+ * absolute deadline instead — §12.2's fallback path.
  */
 
 #include <stdio.h>
@@ -18,15 +20,29 @@
 #include "pico/stdlib.h"
 
 #include "atom.h"
+#include "audio.h"
 #include "board.h"
 #include "display.h"
 #include "kbd.h"
 #include "keymatrix.h"
 #include "lcd.h"
+#include "log.h"
 #include "mc6847.h"
 #include "roms.h"
 #include "snappool.h"
 #include "southbridge.h"
+
+#ifndef PICO_ATOM_AUDIO
+#define PICO_ATOM_AUDIO 1
+#endif
+
+/* Characters received on UART1 are typed at the guest, so a hardware
+ * run can be driven from the workstation that captures it (§12.3). The
+ * probe's RX is already wired to GP5 for the log (hardware-notes.md
+ * §2.7); nothing else reads it. */
+#ifndef PICO_ATOM_UART_KEYS
+#define PICO_ATOM_UART_KEYS 1
+#endif
 
 /* M3's present-time measurement (design.md §8.4), kept for the perf pass
  * (M7) but not run on every boot: it holds the panel for seconds. */
@@ -262,6 +278,8 @@ static void core1_main(void) {
             if (st.us > g_c1.max_us) g_c1.max_us = st.us;
         }
 
+        log_pump();
+
         if (time_us_32() - last_poll >= KBD_POLL_US) {
             last_poll = time_us_32();
             g_c1.key_events += kbd_poll();
@@ -274,6 +292,37 @@ static void core1_main(void) {
 }
 
 /* ---- core 0: the guest ------------------------------------------------- */
+
+#if PICO_ATOM_UART_KEYS
+/* One character from UART1 as the PicoCalc would send it: a press and a
+ * release, with Shift held around the characters that need it — the
+ * same events test_boot types with (§10.2). Taken only while keymatrix
+ * has room for all four events, so a fast sender loses characters in
+ * the UART FIFO rather than in the replay queue; send slowly. */
+static void uart_keys(void) {
+    if (g_keys.q_len + 4u > ATOM_KEY_EVENT_QUEUE) return;
+    int ch = getchar_timeout_us(0);
+    if (ch == PICO_ERROR_TIMEOUT) return;
+
+    uint8_t c = (uint8_t)ch;
+    if (c == '\r') c = '\n';
+    if (c >= 1u && c <= 26u && c != '\n') {
+        /* Control characters arrive as CTRL + letter. */
+        keymatrix_event(&g_keys, KEY_EV_PRESSED, PICOCALC_KEY_CTRL);
+        keymatrix_event(&g_keys, KEY_EV_PRESSED, (uint8_t)(c + 'a' - 1u));
+        keymatrix_event(&g_keys, KEY_EV_RELEASED, (uint8_t)(c + 'a' - 1u));
+        keymatrix_event(&g_keys, KEY_EV_RELEASED, PICOCALC_KEY_CTRL);
+        return;
+    }
+    bool shifted = c != 0 && strchr("!\"#$%&'()=<+*>?", c) != NULL;
+    if (c >= 'A' && c <= 'Z') c = (uint8_t)(c + 32u);   /* unshifted = capitals */
+    else if (c >= 'a' && c <= 'z') { c = (uint8_t)(c - 32u); shifted = true; }
+    if (shifted) keymatrix_event(&g_keys, KEY_EV_PRESSED, PICOCALC_KEY_SHIFT_L);
+    keymatrix_event(&g_keys, KEY_EV_PRESSED, c);
+    if (shifted) keymatrix_event(&g_keys, KEY_EV_RELEASED, PICOCALC_KEY_SHIFT_L);
+    keymatrix_event(&g_keys, KEY_EV_RELEASED, keymap_picocalc_canonical(c));
+}
+#endif
 
 int main(void) {
     stdio_init_all();
@@ -317,18 +366,49 @@ int main(void) {
         printf("  guest        : not started — no ROMs (the panel says which)\n");
         for (;;) sleep_ms(1000);
     }
+    /* Audio last in bring-up order (hardware-notes.md §10), and after the
+     * LCD has claimed its fixed DMA channel on core 1. */
+#if PICO_ATOM_AUDIO
+    audio_init();
+    uint32_t rate_num, rate_den;
+    audio_rate(&rate_num, &rate_den);
+    atom_audio_set_rate(&g_atom, rate_num, rate_den);
+    printf("  audio        : PWM GP26/GP27, %lu/%lu Hz (%lu.%02lu kHz), "
+           "%u guest cycles per %u samples, ring %u slots\n",
+           (unsigned long)rate_num, (unsigned long)rate_den,
+           (unsigned long)(rate_num / rate_den / 1000u),
+           (unsigned long)(rate_num / rate_den % 1000u / 10u),
+           (unsigned)g_atom.beeper.num, (unsigned)g_atom.beeper.den,
+           (unsigned)ATOM_DMA_RING_SLOTS);
+#else
+    printf("  audio        : disabled; pacing on the microsecond timer\n");
+#endif
+
     atom_reset(&g_atom);   /* the vectors arrived with the kernel */
     printf("  guest        : started at #%04X\n", g_atom.cpu.pc);
 
-    uint32_t field = 0, late = 0;
+    uint32_t field = 0;
+#if PICO_ATOM_AUDIO
+    static int16_t pcm[ATOM_AUDIO_BUF_LEN];
+    audio_stats_t au_last = { 0 };
+#else
+    uint32_t late = 0;
     const uint32_t field_us = 1000000u / g_atom.cfg.field_hz;
     absolute_time_t next = get_absolute_time();
+#endif
+    uint64_t hb_us = time_us_64(), hb_cycles = g_atom.cpu.cycles;
     for (;;) {
+#if !PICO_ATOM_AUDIO
         /* Absolute, not incremental, so a late field does not accumulate
          * (§12.2). */
         next = delayed_by_us(next, field_us);
         if (absolute_time_diff_us(get_absolute_time(), next) < 0) late++;
         sleep_until(next);
+#endif
+
+#if PICO_ATOM_UART_KEYS
+        uart_keys();
+#endif
 
         /* Keys first, so the matrix the guest scans this field is the
          * one the events describe (§10.2). */
@@ -337,7 +417,7 @@ int main(void) {
         keymatrix_field(&g_keys, &g_atom);
         if (g_keys.menu_request) {
             g_keys.menu_request = false;
-            printf("  menu         : Alt+M — the menu arrives at M6 (design.md §13)\n");
+            log_printf("  menu         : Alt+M — the menu arrives at M6 (design.md §13)\n");
         }
 
         atom_run_field(&g_atom);
@@ -351,13 +431,31 @@ int main(void) {
             pool_publish(i);
         }
 
+#if PICO_ATOM_AUDIO
+        /* Blocks while the queue is full: this is the throttle (§12.2). */
+        size_t n = atom_audio_drain(&g_atom, pcm, ATOM_AUDIO_BUF_LEN);
+        audio_push(pcm, n);
+#else
+        /* The core makes samples regardless; discard them, or its buffer
+         * fills and every later one is counted as an overflow. */
+        int16_t discard[64];
+        while (atom_audio_drain(&g_atom, discard, 64u) > 0) {}
+#endif
+
         if (++field % (g_atom.cfg.field_hz * 5u) == 0) {
+            /* Real-time ratio, guest seconds per wall second, in
+             * thousandths: the headline number (§12.3). */
+            uint64_t now = time_us_64();
+            uint64_t guest = g_atom.cpu.cycles - hb_cycles;
+            uint32_t rt1000 = (uint32_t)(guest * 1000u * 1000000u / ATOM_CPU_HZ /
+                                         (now - hb_us + 1u));
             const mc6847_mode_info_t *vdg = mc6847_mode_info(atom_vdg_mode(&g_atom));
-            printf("  heartbeat    : %lu fields (%lu late), %llu guest cycles, "
+            log_printf("  heartbeat    : %lu fields, rt %lu.%03lu, %llu guest cycles, "
                    "%u undoc op(s), VDG %s | %s %lu presents (%lu full, "
                    "%lu dropped), last %lu us, max %lu us, i2c errors %lu | "
                    "keys %lu (%lu lost)\n",
-                   (unsigned long)field, (unsigned long)late,
+                   (unsigned long)field,
+                   (unsigned long)(rt1000 / 1000u), (unsigned long)(rt1000 % 1000u),
                    (unsigned long long)g_atom.cpu.cycles,
                    (unsigned)g_atom.cpu.undoc_count, vdg->name,
                    g_c1.ready ? "live" : "bring-up",
@@ -367,6 +465,29 @@ int main(void) {
                    (unsigned long)sb_error_count(),
                    (unsigned long)g_c1.key_events,
                    (unsigned long)(kbd_overflows() + g_keys.dropped));
+#if PICO_ATOM_AUDIO
+            /* The consumed-sample rate against the microsecond timer is
+             * the control quantity: it is the PWM wrap, measured, and it
+             * must not move whatever the guest does. */
+            audio_stats_t au;
+            audio_stats(&au, true);
+            uint32_t rate = (uint32_t)((uint64_t)(au.consumed - au_last.consumed) *
+                                       1000000u / (now - hb_us + 1u));
+            log_printf("  audio        : %lu Hz consumed, queue %lu (low %lu), "
+                   "underrun samples %lu, late refills %lu, core overflow %lu, "
+                   "speaker edges %lu, log dropped %u%s\n",
+                   (unsigned long)rate, (unsigned long)au.level,
+                   (unsigned long)au.low_water,
+                   (unsigned long)au.underrun_samples, (unsigned long)au.late_refills,
+                   (unsigned long)g_atom.beeper.overflow,
+                   (unsigned long)g_atom.beeper.edges, log_dropped(),
+                   au.started ? "" : " (not started)");
+            au_last = au;
+#else
+            log_printf("  pacing       : %lu late fields\n", (unsigned long)late);
+#endif
+            hb_us = now;
+            hb_cycles = g_atom.cpu.cycles;
         }
     }
 }

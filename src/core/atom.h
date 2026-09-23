@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "beeper.h"
 #include "config.h"
 #include "i8255.h"
 #include "m6502.h"
@@ -62,6 +63,10 @@ typedef struct atom_s {
     bool    key_shift, key_ctrl, key_rept;
 
     bool in_flyback;      /* drives FS, port C bit 7 */
+
+    /* The loudspeaker, port C bit 2, integrated into PCM (§9.3). The
+     * port drains it once per field with atom_audio_drain. */
+    beeper_t beeper;
 
     uint8_t ram[ATOM_ADDR_SPACE];
     page_t  page[ATOM_PAGE_COUNT];
@@ -120,6 +125,22 @@ uint8_t atom_vdg_mode(const atom_t *m);
 
 /* Is the loudspeaker bit currently high? Port C bit 2 (§9.1). */
 bool atom_speaker(const atom_t *m);
+
+/* A port C write may have moved the speaker bit; bus.c calls this after
+ * every write to #B002 or #B003 (§9.3). */
+void atom_speaker_written(atom_t *m);
+
+/* The sample rate is rate_num / rate_den Hz, as a fraction so that the
+ * cadence is exact (§9.2). atom_init starts at the nominal
+ * ATOM_AUDIO_RATE_NUM / ATOM_AUDIO_RATE_DEN; the port passes the rate
+ * its clocks actually give. */
+void atom_audio_set_rate(atom_t *m, uint32_t rate_num, uint32_t rate_den);
+
+/* Move up to `max` samples of signed 16-bit mono out of the machine,
+ * oldest first. Samples are produced as the guest runs, one per 27.31
+ * guest cycles at the nominal rate; atom_run leaves every sample that
+ * ended before its last instruction ready to drain (§4.1). */
+size_t atom_audio_drain(atom_t *m, int16_t *dst, size_t max);
 
 /* Cycles in one field, from the configured field rate (§12.1).
  * atom_init sanitises field_hz, but cfg is public and callers can reach
