@@ -8,6 +8,10 @@ void keymatrix_init(keymatrix_t *k) {
     memset(k, 0, sizeof(*k));
 }
 
+void keymatrix_set_layout(keymatrix_t *k, const keylayout_t *l) {
+    k->layout = l;
+}
+
 static void enqueue(keymatrix_t *k, uint8_t state, uint8_t code) {
     unsigned tail = (k->q_head + k->q_len) % ATOM_KEY_EVENT_QUEUE;
     k->queue[tail] = (keymatrix_event_t){ state, code };
@@ -54,16 +58,24 @@ static int find_held(const keymatrix_t *k, uint8_t canon) {
     return -1;
 }
 
-/* The entry for a code, chosen once at press time: the Alt layer while
- * Alt is down, the plain table otherwise. An Alt chord with no binding
- * maps to nothing, so the layer never leaks a shifted letter. */
-static int lookup(const keymatrix_t *k, uint8_t code) {
+/* The entry for a code, chosen once at press time. With Alt down it is
+ * the Alt layer and nothing else, so a layout can never take the menu,
+ * BREAK or COPY away; an Alt chord with no binding maps to nothing, so
+ * the layer never leaks a shifted letter. Otherwise the layout comes
+ * first, by physical key, then the plain table (§10.5). */
+static const keymap_t *lookup(const keymatrix_t *k, uint8_t code) {
+    if (!k->alt && k->layout) {
+        uint8_t canon = keymap_picocalc_canonical(code);
+        for (unsigned i = 0; i < k->layout->n; i++) {
+            if (k->layout->bind[i].code == canon) return &k->layout->bind[i];
+        }
+    }
     uint8_t want = k->alt ? KM_ALT : 0;
     for (size_t i = 0; i < keymap_picocalc_len; i++) {
         const keymap_t *e = &keymap_picocalc[i];
-        if (e->code == code && (e->flags & KM_ALT) == want) return (int)i;
+        if (e->code == code && (e->flags & KM_ALT) == want) return e;
     }
-    return -1;
+    return NULL;
 }
 
 static bool is_modifier(uint8_t code) {
@@ -103,12 +115,12 @@ static bool apply_head(keymatrix_t *k) {
     if (h >= 0) return true;
     if (k->gap > 0) return false;
 
-    int e = lookup(k, ev.code);
-    if (e < 0) return true;
-    if (keymap_picocalc[e].flags & KM_MENU) k->menu_request = true;
+    const keymap_t *e = lookup(k, ev.code);
+    if (!e) return true;
+    if (e->flags & KM_MENU) k->menu_request = true;
     if (k->n >= ATOM_KEY_HELD_MAX) return true;  /* more keys than fingers */
 
-    k->held[k->n++] = (keymatrix_held_t){ .canon = canon, .entry = (uint8_t)e };
+    k->held[k->n++] = (keymatrix_held_t){ .canon = canon, .map = *e };
     return true;
 }
 
@@ -118,17 +130,19 @@ void keymatrix_field(keymatrix_t *k, atom_t *m) {
         k->q_len--;
     }
 
-    bool shift = false, rept = false, brk = false;
+    bool shift = false, ctrl = k->ctrl, rept = false, brk = false;
     memset(m->key_col, 0, sizeof(m->key_col));
     for (uint8_t i = 0; i < k->n; i++) {
         keymatrix_held_t *h = &k->held[i];
-        const keymap_t *e = &keymap_picocalc[h->entry];
+        const keymap_t *e = &h->map;
         if (h->fields < UINT8_MAX) h->fields++;
 
+        /* A layout's CTRL is OR-ed with the host's own (§10.5). */
+        if (e->flags & KM_SHIFT) shift = true;
+        if (e->flags & KM_CTRL)  ctrl = true;
         if (e->flags & KM_REPT)  rept = true;
         if (e->flags & KM_BREAK) brk = true;
         if (e->flags & KM_NOCELL) continue;
-        if (e->flags & KM_SHIFT) shift = true;
         m->key_col[e->col] |= (uint8_t)(1u << e->row);
     }
     if (k->gap > 0) k->gap--;
@@ -137,5 +151,5 @@ void keymatrix_field(keymatrix_t *k, atom_t *m) {
      * is reset every field, and the MOS starts once it is let go. */
     if (brk) m->cpu.reset_pending = true;
 
-    atom_key_mods(m, shift, k->ctrl, rept);   /* refreshes the PPI too */
+    atom_key_mods(m, shift, ctrl, rept);   /* refreshes the PPI too */
 }

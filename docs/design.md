@@ -973,8 +973,8 @@ says whether that is affordable.
 
 ### 10.5 Game keymaps
 
-**Not yet built.** The standard map (§10.3) is right for typing and wrong for
-play. Atom games do not read characters. They scan the matrix and the
+**Built at M6b**, passed on the host and played on the device (below). The
+standard map (§10.3) is right for typing and wrong for play. Atom games do not read characters. They scan the matrix and the
 standalone lines directly, and many were laid out for the Atom's own keyboard,
 where the keys a game used sat under one hand. Galaxians says so on its title
 page: `CTRL` to move right, "the adjacent cursor control" (the `↑↓` key,
@@ -993,74 +993,121 @@ prompts still type. A target is one of:
   scanning the matrix sees the cell, not a character; or
 - one of the standalone lines: `CTRL`, `SHIFT` or `REPT`.
 
-The first built-in layout is **Cursor games**, for Galaxians and titles like
-it:
+The first built-in layout is **Games**, for Galaxians and titles like it.
+It names no game: the user chooses it in the menu.
 
 | PicoCalc | Atom | Galaxians' meaning |
 |---|---|---|
 | `Left` | `UPDOWN` cell | move left |
 | `Right` | `CTRL` line | move right |
-| `Up` | `REPT` line | fire |
+| `]` | `REPT` line | fire |
 
-The directions sit on the direction keys, and fire is on the same cluster,
-under one thumb. That is the property the Atom's own layout had.
+The directions sit on the direction keys and fire is at the far side of the
+keyboard, one hand each. The first cut put fire on `Up`, under the same thumb as
+the directions, and on the device that played worse. A Shift was the next
+thought and cannot work. While either Shift is down the MCU sends nothing at all
+for `Left` or `Right` (hardware notes §6.3): no press, no repeat, and no
+release, so the player could not move while firing, and a direction let go
+under Shift would stay held. Any key a layout uses for fire must be one whose
+chord with the direction keys the MCU delivers.
 
-**Mechanism.** `keymap_t` gains the `KM_CTRL` flag §10.3 sketched but the code never needed, which asserts the CTRL line
-(OR-ed with the host's own `Ctrl`) in the same way `KM_SHIFT` asserts SHIFT, and
-`lookup()` in `keymatrix.c` consults the active overlay before the Alt layer
-and the plain table. The binding is still chosen once, at press time, so a
-key's release always undoes what its press did. The overlay is only ever swapped
-while core 0 is parked in the menu, and core 0 starts its held-key set afresh
-on the way back (§13), so no key can be held across a change of layout and there
-is no cross-core race. Capacities — layouts and bindings per layout — are fixed
-in `config.h` (§5).
+**Mechanism.** `keymap_t` gains the `KM_CTRL` flag §10.3 sketched, which
+asserts the CTRL line (OR-ed with the host's own `Ctrl`) in the same way
+`KM_SHIFT` asserts SHIFT, and `KM_LINE`, which marks a target that is a line
+and no cell. A layout (`keylayout_t`, `keymatrix.h`) binds **canonical** codes,
+so a binding holds whichever way the MCU translated the key. `lookup()` in
+`keymatrix.c` consults the layout, then the plain table. With `Alt` down it
+consults the Alt layer only, so no layout can take away the menu, `BREAK` or
+`COPY`. The binding is chosen once, at press time, and the held set keeps a
+copy of it, so a key's release undoes what its press did even if the layout
+changed in between. That can happen: a tape load (below) changes the layout
+while core 0 is parked, and core 0 does not empty its held set after a tape
+call, as it does after the menu (§13). Core 1 writes the choice only while
+core 0 is parked, and core 0 applies it with `keymatrix_set_layout()` once it
+has the machine back, so there is no cross-core race. Capacities — layouts,
+bindings and tape names per layout, and the size of a file — are fixed in
+`config.h` (§5).
 
 **Where layouts come from.** Built-in layouts are data in `src/core/`, alongside
 the standard map. Further layouts are text files in `/atom/keymaps/` on the card,
 read when the menu opens, one binding per line:
 
 ```
-# Cursor games: Galaxians and friends
-name  = CURSOR GAMES
+# Games: move on the arrows, fire on ]
+name  = GAMES
 left  = UPDOWN
 right = CTRL
-up    = REPT
+]     = REPT
 tapes = GALAXI
 ```
 
-The optional `tapes` line names the ATM header names the layout goes with.
-Loading one of those tapes (§11.2) selects the layout, and the menu shows that
-it did. The user can always override the choice in the menu, and an ordinary
-program never has a layout forced on it. The parser rejects a line it does not
-understand and names the file and line on the menu's status row, rather than
-guessing.
+That is the built-in Games as a file, plus a `tapes` line the built-in does
+not have.
+
+The optional `tapes` line names the ATM header names the layout goes with,
+compared ignoring case, since the file is typed by hand. Loading one of those
+tapes (§11.2) selects the layout, and the menu shows that it did
+(`KEYS CHOSEN BY GALAXI`). Only the user's files carry a `tapes` line; a
+built-in layout names no game, because which titles a layout suits is the
+user's knowledge, not the firmware's. The user can always override the choice in the menu. Loading a tape no layout names
+leaves the choice alone, because a game's loader may fetch its next part under
+another name. So an ordinary program never has a layout forced on it, but it
+may inherit one the user or an earlier tape chose. The parser (`keylayout.c`,
+in the core, tested on the host) rejects a line it does not understand, and
+`keymapio.c` leaves that file out and names it and the line on the menu's
+status row, rather than guessing. The card's layouts are read at boot, so the
+first tape load can choose one, and again when the menu opens.
+
+A key on the left of a binding is a PicoCalc key by name (`left`, `right`,
+`up`, `down`, `space`, `enter`, `backspace`, `tab`, `del`, `esc`) or any single
+printable character, which names the key it is on, shifted or not. A target is
+an Atom key by its keycap name (`BREAK` excepted: it is the reset line, and not
+a game's to have) or `CTRL`, `SHIFT` or `REPT`.
 
 **In the menu** the item is `KEYS < STANDARD >`, and left/right cycles through
 the built-in layouts, then the card's. The choice is part of the settings, and
 is persisted when §11.6 exists. It is not part of a snapshot (§11.5): a snapshot
 is guest state, and a layout is a fact about the host's keyboard.
 
-**Things to confirm on the device before the layout table is final:**
+**On the device.** On a Plus 2 W on 2026-09-23 `LOAD "GALAXI"` over the UART
+chose the layout (`keymaps : loading GALAXI chose "CURSOR GAMES"` in the log),
+when the built-in still named the tape; it no longer does. Galaxians was then
+played with the layout on the keyboard, moving and firing at once, with fire on
+`Up`; that run is what moved fire to `]` (above). Bouncing Babies was played
+with a layout from a card file, chosen by loading its tape:
 
-- **Rollover.** The MCU must report `Left` or `Right` held while `Up` is
-  pressed, and the reverse. Moving and firing at once is the whole point. The
-  events are per key (§10.2), but the matrix under the MCU has not been checked
-  for ghosting on the arrow cluster.
+```
+# Bouncing Babies: SHIFT moves left, REPT moves right
+name  = BABIES
+left  = SHIFT
+right = REPT
+tapes = BABIES
+```
+
+Its own source reads the keys: left is `?#B001=127`, SHIFT with nothing else in
+port B, and right is port C bit 6, REPT. The Atom cannot tell its two SHIFT
+keys apart, and the game does not try.
+
+**Still to watch on the device:**
+
+- **Rollover.** Moving and firing at once worked with a direction and `Up`
+  held together. `]` sits on another part of the matrix under the MCU, and has
+  not been checked for ghosting against the arrows.
 - **Key repeat.** A held arrow sends further presses every ~100 ms (hardware
-  notes §6.2). The held set already absorbs them (§10.2), so this should need
-  nothing, but it is worth watching on the first run.
+  notes §6.2). The held set absorbs them (§10.2), and nothing showed in play.
 - **Pacing.** Replay pacing (`ATOM_KEY_MIN_FIELDS` + `ATOM_KEY_GAP_FIELDS`,
   eight fields) was tuned for the MOS's typing loop (`config.h`). A held
   direction is unaffected. A quick tap of fire becomes at least six fields of
   `REPT`, and a second tap waits two more. If a game feels sluggish, the lever is
   per-layout pacing, measured against the game rather than guessed.
 
-**Tests.** `test_keymap` checks the overlay without a ROM. `Left` under Cursor
-games must drive cell (0,2) with SHIFT up, `Right` must drive the CTRL line,
-`Up` must drive REPT, and an unmentioned key must keep its standard cell. The
+**Tests.** `test_keymap` checks the overlay without a ROM. `Left` under Games
+must drive cell (0,2) with SHIFT up, `Right` must drive the CTRL line,
+`]` must drive REPT, and an unmentioned key must keep its standard cell. The
 held-set tests must also pass with an overlay active. `test_boot` checks it
 through the real MOS, with a BASIC loop that reads port B and port C (`?#B001`,
-`?#B002`) while the test holds each key.
+`?#B002`) while the test holds each key, under Games and under the Bouncing
+Babies file above, where `Left` must read exactly `127` in port B.
 
 ---
 
@@ -1360,7 +1407,8 @@ FIFO and consumes the events itself, and core 0 starts its held-key set afresh
 on the way back. The menu is a 32×16 text page presented through the ordinary
 renderer in place of the Atom's screen. It offers Resume, snapshot save, load
 and delete over four slots (§11.5), a tape list whose choice is what an empty
-name loads (§11.2), Reset, volume and backlight. `Esc` or `Alt`+`M` closes it.
+name loads (§11.2), the game keymap (§10.5, added at M6b), Reset, volume and
+backlight. `Esc` or `Alt`+`M` closes it.
 The table below is the full intent; disc, machine and display settings wait
 for the milestones that give them something to set, and settings are not yet
 persisted to flash (§11.6).
@@ -1574,7 +1622,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` — **done** 2026-09-22 on a Plus 2 W: typed on the PicoCalc keyboard, answer read off the panel; `CLEAR 0` + `PLOT` draws an SG6 element of the right size |
 | **M5** | Audio | integrator verified against a known frequency; underrun and late-refill counters both zero over 10 minutes — **done** 2026-09-22 on a Plus 2 W (§9.4) |
 | **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs — **done** 2026-09-22 on a Plus 2 W: Galaxians, extracted from a `games1.dsk` image to `.atm`, loaded off the card by `LOAD "GALAXI"` (4,864 bytes in 5 ms) and was played; `SAVE`/`LOAD` round-tripped through the card; snapshots saved and restored from the menu; a tape chosen in the menu loaded by `LOAD ""` |
-| **M6b** | Game keymaps (§10.5) | Galaxians played with the Cursor games layout: `Left`/`Right` move, `Up` fires, moving and firing at once |
+| **M6b** | Game keymaps (§10.5) | Galaxians played with the Games layout: `Left`/`Right` move, `]` fires, moving and firing at once — **done** 2026-09-23 on a Plus 2 W: Galaxians played with the layout, moving and firing at once (fire then on `Up`, moved to `]` after that run); Bouncing Babies played with a card layout its tape load chose |
 | **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to |
 | **M8** | Tape phase 2 (UEF at signal level), turbo clock | a UEF image that phase 1 cannot load, loads |
 | **M9** | AtomDOS + 8271, 6522 VIA | an `.ssd` boots |

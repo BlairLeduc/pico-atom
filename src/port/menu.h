@@ -17,9 +17,16 @@
 #include <stdint.h>
 
 #include "atom.h"
+#include "keymatrix.h"
 
 typedef struct {
     unsigned volume;      /* 0-8; core 0 applies it as volume * 32      */
+
+    /* The game keymap, NULL for the standard map (§10.5), and the ATM
+     * name of the tape whose load chose it, "" if the user did. Core 0
+     * applies it once it has the machine back. */
+    const keylayout_t *layout;
+    char     keys_tape[ATOM_ATM_NAME_LEN + 1];
 } menu_settings_t;
 
 /* Run the menu until it is closed. `vram` is a page core 1 owns. */

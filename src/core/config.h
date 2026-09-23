@@ -103,6 +103,14 @@
 #define ATOM_KEY_MIN_FIELDS     6u
 #define ATOM_KEY_GAP_FIELDS     2u
 
+/* Game keymaps (§10.5): overlays on the standard map, built in or read
+ * off the card. A layout rebinds a handful of keys, so these are loose. */
+#define ATOM_KEYMAP_LAYOUTS     8u  /* built-in and card layouts together */
+#define ATOM_KEYMAP_BINDINGS   16u  /* bindings per layout                */
+#define ATOM_KEYMAP_TAPES       4u  /* ATM names on a layout's tapes line */
+#define ATOM_KEYMAP_NAME_LEN   16u  /* a layout's name, as the menu shows */
+#define ATOM_KEYMAP_FILE_MAX 1024u  /* the largest .map file read         */
+
 /* ---- Tape (design.md §11) -------------------------------------------- */
 
 #define ATOM_ATM_NAME_LEN      16u

@@ -24,6 +24,7 @@
 #include "board.h"
 #include "display.h"
 #include "kbd.h"
+#include "keymapio.h"
 #include "keymatrix.h"
 #include "lcd.h"
 #include "log.h"
@@ -32,6 +33,7 @@
 #include "roms.h"
 #include "snappool.h"
 #include "southbridge.h"
+#include "storage.h"
 #include "tapeio.h"
 
 #ifndef PICO_ATOM_AUDIO
@@ -241,6 +243,17 @@ static void __attribute__((noreturn)) no_roms(const roms_report_t *r) {
     }
 }
 
+/* A tape a layout names chooses that layout (design.md §10.5). Any other
+ * load leaves the choice alone: a game's loader may fetch its next part
+ * under another name. Core 1, with core 0 parked. */
+static void keys_for_tape(const char *name) {
+    const keylayout_t *l = keymapio_for_tape(name);
+    if (!l || l == g_settings.layout) return;
+    g_settings.layout = l;
+    memcpy(g_settings.keys_tape, name, sizeof g_settings.keys_tape);
+    printf("  keymaps      : loading %s chose \"%s\"\n", name, l->name);
+}
+
 static void core1_main(void) {
     printf("  core 1       : up\n");
 
@@ -276,6 +289,14 @@ static void core1_main(void) {
     roms_report_t report;
     bool ok = roms_load(&g_atom, &report);
     roms_log(&report);
+
+    /*    The card's game keymaps too, so that the first tape load can
+     *    choose one (design.md §10.5). The menu reads them again when it
+     *    opens. */
+    if (ok && storage_mount() == 0) {
+        keymapio_scan();
+        storage_unmount();
+    }
     g_c1.roms_ok = ok;
     __dmb();
     g_c1.ready = true;
@@ -301,8 +322,12 @@ static void core1_main(void) {
 
         if (g_handoff != HANDOFF_NONE) {
             __dmb();
-            if (g_handoff == HANDOFF_TAPE) tapeio_serve(&g_atom);
-            else menu_run(&g_atom, &g_settings, s_scene);
+            if (g_handoff == HANDOFF_TAPE) {
+                char loaded[ATOM_ATM_NAME_LEN + 1];
+                if (tapeio_serve(&g_atom, loaded)) keys_for_tape(loaded);
+            } else {
+                menu_run(&g_atom, &g_settings, s_scene);
+            }
             __dmb();
             g_handoff = HANDOFF_NONE;
         }
@@ -461,6 +486,7 @@ int main(void) {
              * held set starts again empty. */
             park(HANDOFF_MENU);
             keymatrix_init(&g_keys);
+            keymatrix_set_layout(&g_keys, g_settings.layout);
 #if PICO_ATOM_AUDIO
             audio_set_volume(g_settings.volume * 32u);
 #endif
@@ -490,7 +516,11 @@ int main(void) {
 
         /* The CPU has stopped on a tape call (§11.2): the file is core
          * 1's to find, and the machine is core 1's while it does. */
-        if (atom_tape_pending(&g_atom)) park(HANDOFF_TAPE);
+        if (atom_tape_pending(&g_atom)) {
+            park(HANDOFF_TAPE);
+            /* A key already down keeps its binding (keymatrix.h). */
+            keymatrix_set_layout(&g_keys, g_settings.layout);
+        }
 
         if (++field % (g_atom.cfg.field_hz * 5u) == 0) {
             /* Real-time ratio, guest seconds per wall second, in

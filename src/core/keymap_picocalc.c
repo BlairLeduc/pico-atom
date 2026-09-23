@@ -26,6 +26,8 @@
 
 #include "keymatrix.h"
 
+#include <ctype.h>
+
 /* Atom keys as "row, col". */
 #define AK_UPDOWN   0, 2
 #define AK_LTRT     0, 3
@@ -179,6 +181,100 @@ const keymap_t keymap_picocalc[] = {
 };
 
 const size_t keymap_picocalc_len = sizeof keymap_picocalc / sizeof keymap_picocalc[0];
+
+/* ---- game keymaps (§10.5) ---------------------------------------------- */
+
+#define LINE_CTRL  NOCELL, KM_CTRL | KM_LINE
+#define LINE_SHIFT NOCELL, KM_SHIFT | KM_LINE
+#define LINE_REPT  NOCELL, KM_REPT
+
+const keylayout_t keylayout_builtin[] = {
+    /* Games that move on CTRL and UPDOWN and fire on REPT, as Galaxians'
+     * title page asks. Chosen in the menu. Directions on the arrows, fire
+     * on ']' at the far side, one hand each, as the Atom had them.
+     * Played on the device, fire on Up under the same thumb was worse,
+     * and a Shift cannot fire: while one is down the MCU sends nothing
+     * for Left or Right, not even their releases (hardware-notes §6.3). */
+    {
+        .name = "GAMES",
+        .n = 3,
+        .bind = {
+            { PC_LEFT,  AK_UPDOWN, 0 },
+            { PC_RIGHT, LINE_CTRL },
+            { ']',      LINE_REPT },
+        },
+    },
+};
+
+const size_t keylayout_builtin_len = sizeof keylayout_builtin / sizeof keylayout_builtin[0];
+
+/* strcasecmp is POSIX, not C11. */
+static bool same_name(const char *a, const char *b) {
+    for (; *a && *b; a++, b++) {
+        if (toupper((unsigned char)*a) != toupper((unsigned char)*b)) return false;
+    }
+    return *a == *b;
+}
+
+typedef struct { const char *name; uint8_t code; } key_name_t;
+
+static const key_name_t picocalc_keys[] = {
+    { "left", PC_LEFT }, { "right", PC_RIGHT }, { "up", PC_UP }, { "down", PC_DOWN },
+    { "space", ' ' }, { "enter", PC_ENTER }, { "backspace", PC_BACKSPACE },
+    { "tab", PC_TAB }, { "del", PC_DEL }, { "esc", PC_ESC },
+};
+
+bool keymap_picocalc_key_named(const char *name, uint8_t *code) {
+    /* A printable character names the key it is on, shifted or not. */
+    if (name[0] > ' ' && name[0] < 0x7F && name[1] == 0) {
+        *code = keymap_picocalc_canonical((uint8_t)name[0]);
+        return true;
+    }
+    for (size_t i = 0; i < sizeof picocalc_keys / sizeof picocalc_keys[0]; i++) {
+        if (same_name(name, picocalc_keys[i].name)) {
+            *code = picocalc_keys[i].code;
+            return true;
+        }
+    }
+    return false;
+}
+
+typedef struct { const char *name; uint8_t row, col, flags; } atom_target_t;
+
+/* Every key the Atom has but BREAK, which is the reset line and not a
+ * game's to have, by the name on its keycap. */
+static const atom_target_t atom_targets[] = {
+    { "SPACE", AK_SPACE, 0 },     { "RETURN", AK_RETURN, 0 },
+    { "UPDOWN", AK_UPDOWN, 0 },   { "LEFTRIGHT", AK_LTRT, 0 },
+    { "COPY", AK_COPY, 0 },       { "LOCK", AK_LOCK, 0 },
+    { "DELETE", AK_DEL, 0 },      { "ESCAPE", AK_ESC, 0 },
+    { "-", AK_MINUS, 0 },  { ",", AK_COMMA, 0 },    { ";", AK_SEMI, 0 },
+    { ":", AK_COLON, 0 },  { "@", AK_AT, 0 },       { "/", AK_SLASH, 0 },
+    { ".", AK_STOP, 0 },   { "^", AK_CARET, 0 },    { "[", AK_LBRACKET, 0 },
+    { "\\", AK_BSLASH, 0 }, { "]", AK_RBRACKET, 0 },
+    { "0", AK_0, 0 }, { "1", AK_1, 0 }, { "2", AK_2, 0 }, { "3", AK_3, 0 },
+    { "4", AK_4, 0 }, { "5", AK_5, 0 }, { "6", AK_6, 0 }, { "7", AK_7, 0 },
+    { "8", AK_8, 0 }, { "9", AK_9, 0 },
+    { "A", AK_A, 0 }, { "B", AK_B, 0 }, { "C", AK_C, 0 }, { "D", AK_D, 0 },
+    { "E", AK_E, 0 }, { "F", AK_F, 0 }, { "G", AK_G, 0 }, { "H", AK_H, 0 },
+    { "I", AK_I, 0 }, { "J", AK_J, 0 }, { "K", AK_K, 0 }, { "L", AK_L, 0 },
+    { "M", AK_M, 0 }, { "N", AK_N, 0 }, { "O", AK_O, 0 }, { "P", AK_P, 0 },
+    { "Q", AK_Q, 0 }, { "R", AK_R, 0 }, { "S", AK_S, 0 }, { "T", AK_T, 0 },
+    { "U", AK_U, 0 }, { "V", AK_V, 0 }, { "W", AK_W, 0 }, { "X", AK_X, 0 },
+    { "Y", AK_Y, 0 }, { "Z", AK_Z, 0 },
+    { "CTRL", LINE_CTRL }, { "SHIFT", LINE_SHIFT }, { "REPT", LINE_REPT },
+};
+
+bool keymap_atom_target_named(const char *name, keymap_t *out) {
+    for (size_t i = 0; i < sizeof atom_targets / sizeof atom_targets[0]; i++) {
+        const atom_target_t *t = &atom_targets[i];
+        if (same_name(name, t->name)) {
+            *out = (keymap_t){ 0, t->row, t->col, t->flags };
+            return true;
+        }
+    }
+    return false;
+}
 
 uint8_t keymap_picocalc_canonical(uint8_t code) {
     if (code >= 'A' && code <= 'Z') return (uint8_t)(code + ('a' - 'A'));

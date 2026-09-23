@@ -16,6 +16,7 @@ set(PICO_ATOM_CORE_SOURCES
     src/core/beeper.c
     src/core/bus.c
     src/core/i8255.c
+    src/core/keylayout.c
     src/core/keymap_picocalc.c
     src/core/keymatrix.c
     src/core/m6502.c
@@ -106,6 +107,7 @@ else()
         src/port/diskio.c
         src/port/display.c
         src/port/kbd.c
+        src/port/keymapio.c
         src/port/lcd.c
         src/port/log.c
         src/port/roms.c

@@ -324,5 +324,234 @@ int main(void) {
         CHECK(!k.alt && k.n == 0 && k.n_open == 0, "Alt left down after a burst");
     }
 
+    /* ---- game keymaps: the built-in layouts (§10.5) ------------------- */
+    CHECK(keylayout_builtin_len >= 1 && strcmp(keylayout_builtin[0].name, "GAMES") == 0,
+          "Games is the first built-in layout");
+    for (size_t li = 0; li < keylayout_builtin_len; li++) {
+        const keylayout_t *l = &keylayout_builtin[li];
+        CHECK(l->n <= ATOM_KEYMAP_BINDINGS && l->n_tapes <= ATOM_KEYMAP_TAPES,
+              "%s: over config.h's capacities", l->name);
+        for (unsigned i = 0; i < l->n; i++) {
+            const keymap_t *e = &l->bind[i];
+            CHECK(keymap_picocalc_canonical(e->code) == e->code,
+                  "%s: 0x%02X is not a canonical code, so it would never match", l->name,
+                  e->code);
+            CHECK(!(e->flags & (KM_ALT | KM_BREAK | KM_MENU)),
+                  "%s: 0x%02X takes something a layout may not", l->name, e->code);
+            if (!(e->flags & KM_NOCELL)) {
+                CHECK(!(e->flags & KM_SHIFT), "%s: a cell target carries SHIFT", l->name);
+                CHECK(e->row < ATOM_KEY_ROWS && e->col < ATOM_KEY_COLS, "%s: off the matrix",
+                      l->name);
+            }
+            for (unsigned j = i + 1; j < l->n; j++) {
+                CHECK(l->bind[j].code != e->code, "%s: 0x%02X bound twice", l->name, e->code);
+            }
+        }
+    }
+
+    /* ---- game keymaps: the overlay in the held set -------------------- */
+    {
+        const keylayout_t *cursor = &keylayout_builtin[0];
+
+        /* Left is the UPDOWN cell, SHIFT up: the game sees the cell. */
+        fresh();
+        keymatrix_set_layout(&k, cursor);
+        keymatrix_event(&k, KEY_EV_PRESSED, 0xB4u);
+        keymatrix_field(&k, &m);
+        CHECK(cell_down(0, 2) && !cell_down(0, 3) && !m.key_shift,
+              "Left under Games is (0,2), unshifted");
+
+        /* Right is the CTRL line and no cell. */
+        fresh();
+        keymatrix_set_layout(&k, cursor);
+        keymatrix_event(&k, KEY_EV_PRESSED, 0xB7u);
+        keymatrix_field(&k, &m);
+        bool any = false;
+        for (unsigned c = 0; c < ATOM_KEY_COLS; c++) any |= m.key_col[c] != 0;
+        CHECK(m.key_ctrl && !any && !m.key_shift, "Right under Games is CTRL alone");
+        CHECK((m.ppi.in_b & 0x40u) == 0, "and pulls port B bit 6 low");
+
+        /* ']' is REPT. Moving and firing at once: both lines together,
+         * and each lets go on its own release. */
+        keymatrix_event(&k, KEY_EV_PRESSED, ']');
+        keymatrix_field(&k, &m);
+        CHECK(m.key_ctrl && m.key_rept && (m.ppi.in_c & I8255_IN_C_REPT) == 0,
+              "Right and ] held: CTRL and REPT together");
+        for (int f = 0; f < 10; f++) keymatrix_field(&k, &m);
+        keymatrix_event(&k, KEY_EV_RELEASED, 0xB7u);
+        keymatrix_field(&k, &m);
+        CHECK(!m.key_ctrl && m.key_rept, "Right let go, ] still held");
+        keymatrix_event(&k, KEY_EV_RELEASED, ']');
+        keymatrix_field(&k, &m);
+        CHECK(!m.key_rept && k.n == 0, "both let go");
+
+        /* Shifted, ']' arrives as '}', and is the same key. */
+        fresh();
+        keymatrix_set_layout(&k, cursor);
+        keymatrix_event(&k, KEY_EV_PRESSED, '}');
+        keymatrix_field(&k, &m);
+        CHECK(m.key_rept && !cell_down(0, 6), "} is fire too");
+
+        /* The host's own Ctrl still works, and a layout's CTRL is OR-ed
+         * with it rather than replacing it. */
+        fresh();
+        keymatrix_set_layout(&k, cursor);
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_CTRL);
+        keymatrix_event(&k, KEY_EV_PRESSED, 0xB7u);
+        keymatrix_event(&k, KEY_EV_RELEASED, PICOCALC_KEY_CTRL);
+        keymatrix_field(&k, &m);
+        CHECK(m.key_ctrl, "the layout's CTRL holds after the host's Ctrl lets go");
+
+        /* An unmentioned key keeps its standard binding, so RUN types. */
+        fresh();
+        keymatrix_set_layout(&k, cursor);
+        keymatrix_event(&k, KEY_EV_PRESSED, 'r');
+        keymatrix_field(&k, &m);
+        CHECK(cell_down(5, 9) && !m.key_shift && !m.key_ctrl, "r keeps R");
+        fresh();
+        keymatrix_set_layout(&k, cursor);
+        keymatrix_event(&k, KEY_EV_PRESSED, 0xB6u);
+        keymatrix_field(&k, &m);
+        CHECK(cell_down(0, 2) && m.key_shift, "Down keeps its standard shifted UPDOWN");
+
+        /* The Alt layer is never overlaid: Alt+M is the menu whatever a
+         * layout binds. */
+        static keylayout_t greedy;
+        unsigned bad = 0;
+        const char *g = "m = CTRL\nk = REPT\nc = SPACE\n";
+        CHECK(keylayout_parse(&greedy, "GREEDY", g, strlen(g), &bad) == KL_OK,
+              "greedy parses");
+        fresh();
+        keymatrix_set_layout(&k, &greedy);
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_ALT);
+        keymatrix_event(&k, KEY_EV_PRESSED, 'M');
+        keymatrix_field(&k, &m);
+        CHECK(k.menu_request && !m.key_ctrl, "Alt+M is the menu under any layout");
+        fresh();
+        keymatrix_set_layout(&k, &greedy);
+        keymatrix_event(&k, KEY_EV_PRESSED, 'M');   /* Shift+m */
+        keymatrix_field(&k, &m);
+        CHECK(m.key_ctrl && !k.menu_request, "a layout binds the key, shifted or not");
+
+        /* A key keeps the binding it went down with: its release undoes
+         * that even when the layout changed in between. */
+        fresh();
+        keymatrix_set_layout(&k, cursor);
+        keymatrix_event(&k, KEY_EV_PRESSED, 0xB7u);
+        keymatrix_field(&k, &m);
+        keymatrix_set_layout(&k, NULL);
+        keymatrix_field(&k, &m);
+        CHECK(m.key_ctrl && !cell_down(0, 3), "Right held keeps CTRL across a change");
+        keymatrix_event(&k, KEY_EV_RELEASED, 0xB7u);
+        for (int f = 0; f < 10; f++) keymatrix_field(&k, &m);
+        CHECK(!m.key_ctrl && k.n == 0, "and lets go of CTRL, not of <>");
+        keymatrix_event(&k, KEY_EV_PRESSED, 0xB7u);
+        for (int f = 0; f < 3; f++) keymatrix_field(&k, &m);
+        CHECK(cell_down(0, 3) && !m.key_ctrl, "the next press takes the standard map");
+
+        /* The pacing and bounds of the held set hold with a layout. */
+        fresh();
+        keymatrix_set_layout(&k, cursor);
+        keymatrix_event(&k, KEY_EV_PRESSED, ']');
+        keymatrix_event(&k, KEY_EV_RELEASED, ']');
+        unsigned down = 0;
+        for (int f = 0; f < 20; f++) {
+            keymatrix_field(&k, &m);
+            if (m.key_rept) down++;
+        }
+        CHECK(down == ATOM_KEY_MIN_FIELDS, "a tap of fire is %u fields of REPT, want %u",
+              down, (unsigned)ATOM_KEY_MIN_FIELDS);
+        fresh();
+        keymatrix_set_layout(&k, cursor);
+        for (int rep = 0; rep < 60; rep++) {
+            keymatrix_event(&k, KEY_EV_PRESSED, 0xB4u);
+            keymatrix_event(&k, KEY_EV_PRESSED, ']');
+            keymatrix_event(&k, KEY_EV_RELEASED, 0xB4u);
+            keymatrix_event(&k, KEY_EV_PRESSED, 'z');
+            keymatrix_event(&k, KEY_EV_RELEASED, ']');
+            keymatrix_event(&k, KEY_EV_RELEASED, 'z');
+        }
+        for (int f = 0; f < 4000 && (k.q_len || k.n); f++) keymatrix_field(&k, &m);
+        any = false;
+        for (unsigned c = 0; c < ATOM_KEY_COLS; c++) any |= m.key_col[c] != 0;
+        CHECK(k.q_len == 0 && k.n == 0 && k.n_open == 0 && !any && !m.key_rept &&
+                  !m.key_ctrl,
+              "stuck keys under a layout: %u held, %u open", k.n, k.n_open);
+    }
+
+    /* ---- game keymaps: the .map parser -------------------------------- */
+    {
+        static keylayout_t l;
+        unsigned line = 99;
+
+        /* §10.5's example, less its tapes line, is the built-in Games. */
+        const char *ex = "# Games: move on the arrows, fire on ]\n"
+                         "name  = GAMES\n"
+                         "left  = UPDOWN\n"
+                         "right = CTRL\n"
+                         "]     = REPT\n";
+        CHECK(keylayout_parse(&l, "cursor", ex, strlen(ex), &line) == KL_OK && line == 0,
+              "the example parses");
+        const keylayout_t *b = &keylayout_builtin[0];
+        CHECK(strcmp(l.name, b->name) == 0 && l.n == b->n && l.n_tapes == b->n_tapes,
+              "the example is the built-in layout");
+        CHECK(memcmp(l.bind, b->bind, sizeof(keymap_t) * b->n) == 0, "same bindings");
+        CHECK(l.n_tapes == 0 && !keylayout_for_tape(&l, "GAMES") && !keylayout_for_tape(&l, ""),
+              "no tapes line, no tape selects it");
+
+        /* A card file may name its own tapes. */
+        const char *tp = "left = UPDOWN\ntapes = INVADE, Rocket\n";
+        CHECK(keylayout_parse(&l, "mine", tp, strlen(tp), &line) == KL_OK && l.n_tapes == 2,
+              "a tapes line parses");
+        CHECK(keylayout_for_tape(&l, "INVADE") && keylayout_for_tape(&l, "rocket"),
+              "the tapes it names select it, ignoring case");
+        CHECK(!keylayout_for_tape(&l, "INVAD") && !keylayout_for_tape(&l, ""),
+              "nothing else does");
+
+        /* CRLF, blank lines, no final newline, the file's own name. */
+        const char *crlf = "\r\n  A = SPACE\r\n\r\n\tSPACE=z\r\n= = shift\r\n; = :";
+        CHECK(keylayout_parse(&l, "fire", crlf, strlen(crlf), &line) == KL_OK,
+              "CRLF parses, line %u", line);
+        CHECK(strcmp(l.name, "FIRE") == 0 && l.n == 4, "name from the file name, 4 bindings");
+        CHECK(l.bind[0].code == 'a' && l.bind[0].row == 0 && l.bind[0].col == 9 &&
+                  l.bind[0].flags == 0, "A = SPACE");
+        CHECK(l.bind[1].code == ' ' && l.bind[1].row == 5 && l.bind[1].col == 1, "space = Z");
+        CHECK(l.bind[2].code == '=' && l.bind[2].flags == (KM_SHIFT | KM_LINE),
+              "'=' binds the SHIFT line");
+        CHECK(l.bind[3].code == ';' && l.bind[3].row == 2 && l.bind[3].col == 3, "; = :");
+
+        /* Every failure names its line, and nothing is guessed. */
+        static const struct { const char *text; keylayout_status_t st; unsigned line; } bad[] = {
+            { "left = UPDOWN\nright\n",          KL_SYNTAX,     2 },
+            { "left =\n",                        KL_SYNTAX,     1 },
+            { "left up = CTRL\n",                KL_SYNTAX,     1 },
+            { "\n\nf1 = CTRL\n",                 KL_BAD_KEY,    3 },
+            { "left = BREAK\n",                  KL_BAD_TARGET, 1 },
+            { "left = CTRL SHIFT\n",             KL_BAD_TARGET, 1 },
+            { "left = CTRL\nLEFT = REPT\n",      KL_DUPLICATE,  2 },
+            { "a = CTRL\nA = REPT\n",            KL_DUPLICATE,  2 },
+            { "name = A NAME FAR TOO LONG\n",    KL_TOO_LONG,   1 },
+            { "tapes = A B C D E\n",             KL_TOO_MANY,   1 },
+            { "tapes = SEVENTEEN_LETTERS\n",     KL_TOO_LONG,   1 },
+        };
+        for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+            keylayout_status_t st = keylayout_parse(&l, "x", bad[i].text, strlen(bad[i].text),
+                                                    &line);
+            CHECK(st == bad[i].st && line == bad[i].line,
+                  "\"%s\": got %s at line %u, want %s at line %u", bad[i].text,
+                  keylayout_status_str(st), line, keylayout_status_str(bad[i].st),
+                  bad[i].line);
+        }
+
+        /* One more binding than config.h allows. */
+        static char many[1024];
+        size_t at = 0;
+        for (unsigned i = 0; i <= ATOM_KEYMAP_BINDINGS; i++) {
+            at += (size_t)snprintf(many + at, sizeof many - at, "%c = SPACE\n", 'a' + i);
+        }
+        CHECK(keylayout_parse(&l, "x", many, at, &line) == KL_TOO_MANY &&
+                  line == ATOM_KEYMAP_BINDINGS + 1u, "too many bindings");
+    }
+
     TEST_DONE();
 }

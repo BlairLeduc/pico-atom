@@ -112,13 +112,13 @@ unsigned tapeio_list(tapeio_entry_t *out, unsigned max) {
     return n;
 }
 
-static void serve_load(atom_t *m, const char *name) {
+static bool serve_load(atom_t *m, const char *name, char *loaded) {
     atm_header_t h;
     if (!find(name, &h) || f_open(&s_file, s_path, FA_READ) != FR_OK) {
         printf("  tape         : LOAD \"%s\": no file answers to it; the MOS will ask "
                "for the tape\n", name);
         atom_tape_decline(m);
-        return;
+        return false;
     }
     /* A file shorter than its header says is refused before a byte of
      * it reaches the guest, rather than run with the rest missing. */
@@ -127,7 +127,7 @@ static void serve_load(atom_t *m, const char *name) {
                "file is short; the MOS will ask for the tape\n", name, s_path, h.len);
         f_close(&s_file);
         atom_tape_decline(m);
-        return;
+        return false;
     }
 
     uint32_t t0 = time_us_32();
@@ -152,12 +152,14 @@ static void serve_load(atom_t *m, const char *name) {
                "(FatFs %d); the MOS will ask for the tape\n", name, s_path,
                (unsigned long)got, h.len, (int)fr);
         atom_tape_decline(m);
-        return;
+        return false;
     }
     atom_tape_load_end(m);
+    memcpy(loaded, h.name, sizeof h.name);
 
     printf("  tape         : LOAD \"%s\" <- %s: %u bytes at #%04X, exec #%04X, %lu us\n",
            name, s_path, h.len, at, h.exec, (unsigned long)(time_us_32() - t0));
+    return true;
 }
 
 /* <name>.atm, with anything FAT or a shell would trip on made '_'. */
@@ -221,9 +223,10 @@ static void serve_save(atom_t *m, const char *name) {
     }
 }
 
-void tapeio_serve(atom_t *m) {
+bool tapeio_serve(atom_t *m, char loaded[ATOM_ATM_NAME_LEN + 1]) {
+    loaded[0] = 0;
     const tape_t *t = atom_tape_pending(m);
-    if (!t) return;
+    if (!t) return false;
 
     /* The name outlives the request, which completing clears. */
     char name[TAPE_NAME_MAX + 1];
@@ -236,9 +239,11 @@ void tapeio_serve(atom_t *m) {
         /* A save with nowhere to go still has to return (serve_save). */
         if (t->op == TAPE_SAVE) atom_tape_save_end(m);
         else atom_tape_decline(m);
-        return;
+        return false;
     }
-    if (t->op == TAPE_LOAD) serve_load(m, name);
+    bool ok = false;
+    if (t->op == TAPE_LOAD) ok = serve_load(m, name, loaded);
     else serve_save(m, name);
     storage_unmount();
+    return ok;
 }

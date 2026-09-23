@@ -21,7 +21,9 @@
 #include "config.h"
 #include "tape.h"
 
-void tapeio_serve(atom_t *m);
+/* True when a load completed, with the file's ATM header name in
+ * `loaded`, which is what chooses a game keymap (design.md §10.5). */
+bool tapeio_serve(atom_t *m, char loaded[ATOM_ATM_NAME_LEN + 1]);
 
 /* The menu's view (§13). The card must be mounted (storage.h). */
 typedef struct {

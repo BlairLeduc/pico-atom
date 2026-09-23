@@ -9,6 +9,7 @@
 
 #include "display.h"
 #include "kbd.h"
+#include "keymapio.h"
 #include "keymatrix.h"
 #include "log.h"
 #include "snapio.h"
@@ -36,7 +37,7 @@
 #define BKL_MAX   240u
 
 enum {
-    I_RESUME, I_SAVE, I_LOAD, I_DELETE, I_TAPES, I_RESET, I_VOLUME, I_BACKLIGHT,
+    I_RESUME, I_SAVE, I_LOAD, I_DELETE, I_TAPES, I_KEYS, I_RESET, I_VOLUME, I_BACKLIGHT,
     I_COUNT
 };
 
@@ -80,6 +81,10 @@ static void draw_main(void) {
         case I_LOAD:   snprintf(line, sizeof line, " LOAD SNAPSHOT   < SLOT %u >", s.slot + 1u); break;
         case I_DELETE: snprintf(line, sizeof line, " DELETE SNAPSHOT < SLOT %u >", s.slot + 1u); break;
         case I_TAPES:  snprintf(line, sizeof line, " TAPES..."); break;
+        case I_KEYS:
+            snprintf(line, sizeof line, " KEYS   < %s >",
+                     s.set->layout ? s.set->layout->name : "STANDARD");
+            break;
         case I_RESET:  snprintf(line, sizeof line, " RESET (BREAK)"); break;
         case I_VOLUME: snprintf(line, sizeof line, " VOLUME          < %u >", s.set->volume); break;
         case I_BACKLIGHT:
@@ -96,6 +101,12 @@ static void draw_main(void) {
     const char *base = strrchr(ins, '/');
     snprintf(line, sizeof line, " TAPE IN: %.21s", ins[0] ? (base ? base + 1 : ins) : "NONE");
     textpage_line(s.vram, 12, line, false);
+
+    /* A layout a tape chose says so (§10.5). */
+    line[0] = 0;
+    if (s.set->layout && s.set->keys_tape[0])
+        snprintf(line, sizeof line, " KEYS CHOSEN BY %.16s", s.set->keys_tape);
+    textpage_line(s.vram, 13, line, false);
 }
 
 static void draw_tapes(void) {
@@ -179,6 +190,29 @@ static void open_tapes(void) {
     s.status[0] = 0;
 }
 
+/* Standard, then keymapio's list, round and round. */
+static void cycle_keys(int dir) {
+    int n = (int)keymapio_count() + 1;
+    int at = s.set->layout ? keymapio_find(s.set->layout->name) + 1 : 0;
+    at = (at + n + dir) % n;
+    s.set->layout = at ? keymapio_get((unsigned)(at - 1)) : NULL;
+    s.set->keys_tape[0] = 0;   /* the user's choice now */
+}
+
+/* The card's layouts are read afresh, which rewrites the one in force if
+ * it came from the card: find it again by name, or fall back to the
+ * standard map if its file has gone. */
+static void rescan_keys(void) {
+    char name[ATOM_KEYMAP_NAME_LEN + 1] = "";
+    if (s.set->layout) memcpy(name, s.set->layout->name, sizeof name);
+    if (!s.card) return;
+    keymapio_scan();
+    int i = name[0] ? keymapio_find(name) : -1;
+    s.set->layout = i >= 0 ? keymapio_get((unsigned)i) : NULL;
+    if (!s.set->layout) s.set->keys_tape[0] = 0;
+    if (keymapio_error()[0]) say(" %.30s", keymapio_error());
+}
+
 static void set_backlight(int dir) {
     int v = (int)s.backlight + dir * (int)BKL_STEP;
     if (v < (int)BKL_MIN) v = BKL_MIN;
@@ -198,6 +232,8 @@ static void key_main(uint8_t c) {
         int dir = c == PC_RIGHT ? 1 : -1;
         if (s.item == I_SAVE || s.item == I_LOAD || s.item == I_DELETE) {
             s.slot = (s.slot + SNAPIO_SLOTS + (unsigned)dir) % SNAPIO_SLOTS;
+        } else if (s.item == I_KEYS) {
+            cycle_keys(dir);
         } else if (s.item == I_VOLUME) {
             int v = (int)s.set->volume + dir;
             s.set->volume = (unsigned)(v < 0 ? 0 : v > 8 ? 8 : v);
@@ -272,6 +308,7 @@ void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram) {
     s.card = err == 0;
     if (!s.card) say(" NO CARD: NO SNAPSHOTS OR TAPES", "");
     refresh_slots();
+    rescan_keys();
 
     uint8_t r[2] = { 0, 0 };
     s.backlight = sb_read(SB_REG_BKL, r) == SB_OK ? r[1] : 0u;
