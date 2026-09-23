@@ -231,6 +231,74 @@ int main(void) {
         CHECK(strcmp(row_text(2), ">") == 0, "Alt+M reached the guest: '%s'", row_text(2));
     }
 
+    /* ---- game keymaps (§10.5) ----------------------------------------- *
+     * A game scans the matrix and the lines itself, so the test is the
+     * guest doing that: a BASIC loop selects column 2 through port A and
+     * copies ports B and C to #9000, past the alpha page in VRAM, while
+     * the test holds keys under Games. Ports are active low. */
+    {
+        restore();
+        type("DO?#B000=2;?#9000=?#B001;?#9001=?#B002;UNTIL0\n");
+        keymatrix_set_layout(&g.k, &keylayout_builtin[0]);
+        fields(10);
+        uint8_t idle_b = g.m.ram[0x9000], idle_c = g.m.ram[0x9001];
+        CHECK((idle_b & 0xC1u) == 0xC1u && (idle_c & 0x40u),
+              "idle: port B 0x%02X, port C 0x%02X", idle_b, idle_c);
+
+        static const struct {
+            uint8_t code; const char *what; uint8_t b_low, c_low;
+        } held[] = {
+            { 0xB4u, "Left: UPDOWN, no SHIFT", 0x01u, 0 },
+            { 0xB7u, "Right: CTRL alone",      0x40u, 0 },
+            { ']',   "]: REPT",                0,     0x40u },
+        };
+        for (size_t i = 0; i < sizeof held / sizeof held[0]; i++) {
+            keymatrix_event(&g.k, KEY_EV_PRESSED, held[i].code);
+            fields(4);
+            uint8_t b = g.m.ram[0x9000], c = g.m.ram[0x9001];
+            CHECK((b & 0xC1u) == (0xC1u & ~held[i].b_low) &&
+                      (c & 0x40u) == (0x40u & ~held[i].c_low),
+                  "%s: port B 0x%02X, port C 0x%02X", held[i].what, b, c);
+            keymatrix_event(&g.k, KEY_EV_RELEASED, held[i].code);
+            fields(10);
+        }
+
+        /* Moving and firing at once. */
+        keymatrix_event(&g.k, KEY_EV_PRESSED, 0xB4u);
+        keymatrix_event(&g.k, KEY_EV_PRESSED, ']');
+        fields(4);
+        CHECK((g.m.ram[0x9000] & 0xC1u) == 0xC0u && !(g.m.ram[0x9001] & 0x40u),
+              "Left and ]: port B 0x%02X, port C 0x%02X", g.m.ram[0x9000],
+              g.m.ram[0x9001]);
+        keymatrix_event(&g.k, KEY_EV_RELEASED, 0xB4u);
+        keymatrix_event(&g.k, KEY_EV_RELEASED, ']');
+        fields(10);
+
+        /* A card layout onto the SHIFT line. Bouncing Babies moves left
+         * on ?#B001=127, SHIFT and nothing else, and right on PC6, REPT. */
+        static keylayout_t babies;
+        const char *map = "left = SHIFT\nright = REPT\n";
+        unsigned line = 0;
+        CHECK(keylayout_parse(&babies, "babies", map, strlen(map), &line) == KL_OK,
+              "the SHIFT/REPT layout parses, line %u", line);
+        keymatrix_set_layout(&g.k, &babies);
+        keymatrix_event(&g.k, KEY_EV_PRESSED, 0xB4u);
+        fields(4);
+        CHECK(g.m.ram[0x9000] == 0x7Fu && (g.m.ram[0x9001] & 0x40u),
+              "Left as SHIFT: port B 0x%02X, port C 0x%02X", g.m.ram[0x9000],
+              g.m.ram[0x9001]);
+        keymatrix_event(&g.k, KEY_EV_RELEASED, 0xB4u);
+        fields(10);
+        keymatrix_event(&g.k, KEY_EV_PRESSED, 0xB7u);
+        fields(4);
+        CHECK((g.m.ram[0x9000] & 0x80u) && !(g.m.ram[0x9001] & 0x40u),
+              "Right as REPT: port B 0x%02X, port C 0x%02X", g.m.ram[0x9000],
+              g.m.ram[0x9001]);
+        keymatrix_event(&g.k, KEY_EV_RELEASED, 0xB7u);
+        fields(10);
+        keymatrix_set_layout(&g.k, NULL);
+    }
+
     /* ---- the bell (§17 M5) ------------------------------------------- *
      * CTRL-G reaches the kernel's bell at #FD18, which toggles PC2 through
      * the 8255's BSR path: STA #B003 (4), DEX/BNE over X = 0, so 256 turns

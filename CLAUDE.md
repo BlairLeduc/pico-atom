@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M6 are done** (`docs/design.md` §17).
+**Implementation status: M0–M6b are done** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -58,8 +58,15 @@ round-tripped, snapshots saved and restored from the menu, and a tape
 chosen in the menu loaded by `LOAD ""`. REPT is `Tab` (§10.3), not an Alt
 chord: a key pressed with Alt down comes from the Alt layer.
 
-**M6b is next** — game keymaps, chosen in the menu (design.md §10.5; designed,
-not built). Then M7, the perf pass.
+M6b is done: game keymaps (design.md §10.5). A layout is an overlay of
+canonical codes on the standard map, chosen in the menu's `KEYS` item, read
+from `/atom/keymaps/*.map` or built in (Games, for Galaxians and the like).
+Built-in layouts name no game; a card file's `tapes` line may select its
+layout when that tape loads. `test_keymap` checks the overlay and the parser;
+`test_boot` has a BASIC loop read ports B and C while keys are held under a
+layout. On a Plus 2 W on 2026-09-23 Galaxians was played with the layout,
+moving and firing at once, and Bouncing Babies with a card file chosen by its
+tape load. Next is M7, the perf pass.
 
 What does not exist: tape at signal level (M8), discs and the 8271 (M9),
 the status band, settings persisted to flash (§11.6).
@@ -146,7 +153,8 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/snapshot.*` | §11.5's format: explicit fields, CRC, ROM hash, two-pass load |
 | `src/core/via6522.*` | the VIA; fitted by default because the MOS reads its PCR on every character |
 | `src/core/keymatrix.*` | held-key set, paced replay of southbridge events into the matrix (§10.2) |
-| `src/core/keymap_picocalc.c` | PicoCalc code -> Atom cell; the cells are the kernel ROM's, by execution |
+| `src/core/keymap_picocalc.c` | PicoCalc code -> Atom cell; the cells are the kernel ROM's, by execution; the built-in game layouts and the names a `.map` file may use |
+| `src/core/keylayout.c` | §10.5's `.map` parser and tape matching |
 | `src/core/sha1.*`, `romset.*` | identify ROM images by hash; the slot table from §11.1 |
 | `src/port/board.*` | clocks and board identification |
 | `src/port/southbridge.*` | i2c1 register layer; refuses to read `RST` (`0x08`), which resets the MCU |
@@ -160,6 +168,7 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/port/storage.*` | mount and unmount the card, once per piece of card work |
 | `src/port/tapeio.*` | serves a stalled tape call from `/atom/tapes/`; the tape list and the inserted tape |
 | `src/port/snapio.*` | snapshot slots in `/atom/snaps/`: temp file, publish, recovery on load |
+| `src/port/keymapio.*` | the layouts the menu offers: built-in, then `/atom/keymaps/`; the first parse error for the status row |
 | `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer |
 | `src/port/main.c` | core 0's field loop, core 1's bring-up and live present; the park/handoff that gives core 1 the machine for tape calls and the menu; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot`, `test_tape` and `test_snapshot` run the real MOS when `roms/` holds the images |
@@ -234,7 +243,7 @@ a plausible-looking change silently breaks:
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
   in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
-  at M6 `.bss` is ~141 KiB of the 520 KiB budget.
+  at M6b `.bss` is ~144 KiB of the 520 KiB budget.
 - **Copy a machine with `atom_copy`, never `=`.** The page table points into
   `ram[]`, so a struct assignment leaves the copy reading and writing the
   original's memory.

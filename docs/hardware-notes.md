@@ -841,6 +841,28 @@ Registers `0x02` (`CFG`), `0x03` (`INT`), `0x06` (`DEB`) and `0x07` (`FRQ`) are
 where you would ask for raw keys instead of MCU-resolved modifiers, and you
 cannot.
 
+The two `C64_` registers are the only raw view, and neither covers the whole
+keyboard. This is read from `keyboard.ino` and `picocalc_keyboard.ino`. It has
+not been checked against the installed firmware, which reports version `0x00`.
+
+- **`C64_MTX` (`0x0C`)** replies with ten bytes: the register number, eight
+  column bytes and a ninth that is always `0xFF`. Bits 0–6 of column byte *c*
+  are the 7×8 main matrix, active low. Bit 7 of bytes 0–7 carries eight of the
+  side buttons: Alt, Ctrl, left Shift, right Shift, `0`, `9`, `]` and `[`.
+  **The arrow keys are not in it.** The state persists between scans, so the
+  register reads what the last 16 ms scan saw. At 10 kHz a ten-byte reply is
+  roughly three times the bus time of an ordinary read.
+- **`C64_JS` (`0x0D`)** is meant to hold the four arrows (bits 0–3: right, up,
+  down, left) and Enter (bit 4), active low. `keyboard_process()` sets it to
+  `0xFF` on **every** call, before the check that returns early until 16 ms
+  have passed. The main loop calls it far more often than it scans, so a read
+  almost always finds `0xFF`, nothing pressed. As published, the register
+  looks broken.
+
+So the arrows are only visible through the event FIFO, with Shift resolved
+(§6.3). A raw poll could replace the FIFO for the other keys, at extra bus cost,
+but it cannot get around the swallowed Shift+arrow chords.
+
 ### 6.1 What it costs, and how to poll it
 
 - **Each transaction costs 4–5 ms of wall time** at 10 kHz. That is the single
