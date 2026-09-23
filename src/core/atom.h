@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #include "beeper.h"
+#include "cassette.h"
 #include "config.h"
 #include "i8255.h"
 #include "m6502.h"
@@ -39,11 +40,13 @@ typedef struct {
 typedef struct {
     bool block_zero;      /* #0000-#03FF */
     bool text_space;      /* #0400-#3FFF */
+    bool upper_ram;       /* #4000-#7FFF, the 32 KiB machine games assume */
     bool video;           /* #8000-#97FF */
     bool video_aperture;  /* #9800-#9FFF, absent on a stock machine */
     bool via_fitted;      /* 6522 at #B800; the MOS needs it (via6522.h) */
     bool atomdos;         /* 8271 FDC at #0A00 — steals 4 bytes of page #0A */
     bool tape_traps;      /* serve OSLOAD/OSSAVE from files (tape.h, §11.2) */
+    bool tape_cues;       /* the deck follows the MOS's PLAY TAPE (§11.3) */
     unsigned field_hz;    /* 50 or 60; §16 medium confidence, so configurable */
 } atom_config_t;
 
@@ -73,6 +76,11 @@ typedef struct atom_s {
     /* Tape phase 1: the OSLOAD/OSSAVE request the CPU is stalled on, if
      * any (tape.h, §11.2). */
     tape_t tape;
+
+    /* Tape phase 2: a UEF image played into port C bits 4-5 at signal
+     * level (cassette.h, §11.3). While one is in the deck the OSLOAD
+     * trap stands aside, since the program is on the tape. */
+    cassette_t cas;
 
     uint8_t ram[ATOM_ADDR_SPACE];
     page_t  page[ATOM_PAGE_COUNT];
@@ -133,6 +141,30 @@ void atom_field_sync(atom_t *m, bool in_flyback);
 
 static inline const uint8_t *atom_vram(const atom_t *m) {
     return &m->ram[ATOM_VRAM_BASE];
+}
+
+/* The cassette (cassette.h), on the guest clock. The image is the
+ * caller's and must outlive the insertion. */
+bool atom_cassette_insert(atom_t *m, const uint8_t *img, size_t len);
+void atom_cassette_eject(atom_t *m);
+void atom_cassette_play(atom_t *m, bool on);
+void atom_cassette_rewind(atom_t *m);
+static inline bool atom_cassette_playing(const atom_t *m) { return m->cas.playing; }
+
+/* Bring port C's cassette inputs, bits 4 and 5, up to the current cycle.
+ * bus.c calls this before every read of port C: that is the only time
+ * they can be seen, so they are not clocked per instruction. */
+void atom_cassette_sync_slow(atom_t *m);
+
+/* The MOS polls port C for FS in its tightest loops (§12.1), so the
+ * common case is inline and changes nothing: neither bit 4 nor the tape
+ * is due to change yet, so both bits are what the last sync left. One
+ * subtract and a branch; anything else takes the call. The compare is
+ * modulo 2^32, which atom_run_field keeps honest by syncing once a
+ * field whether or not the guest reads. */
+static inline void atom_cassette_sync(atom_t *m) {
+    if (__builtin_expect((int32_t)((uint32_t)m->cpu.cycles - m->cas.ref_next) >= 0, 0))
+        atom_cassette_sync_slow(m);
 }
 
 /* A/G, GM2:0 and CSS packed into five bits (§8.1). */

@@ -121,6 +121,11 @@ bool tape_trap(atom_t *m) {
     else if (pc == TAPE_OSSAVE_PC && signature(m, pc, sig_save)) op = TAPE_SAVE;
     else return false;
 
+    /* A UEF in the deck holds the program as a signal, and the ROM
+     * routine reads it from there (§11.3). Saves still go to files:
+     * recording at signal level is not modelled. */
+    if (op == TAPE_LOAD && m->cas.loaded) return false;
+
     /* The block is X,0..9 in page zero, wrapping as LDA &00,X does. */
     uint8_t x = m->cpu.x;
     for (unsigned i = 0; i < sizeof t->block; i++) {
@@ -143,6 +148,46 @@ bool tape_trap(atom_t *m) {
     t->addr = (uint16_t)(t->block[2] | (t->block[3] << 8));
     t->done = 0;
     return true;
+}
+
+/* ---- the deck's cues (§11.3) ------------------------------------------ *
+ * The Atom has no motor control: a user stops the tape after a load and
+ * starts it when the MOS next says PLAY TAPE. Under turbo the gap between
+ * two files goes by in a second of wall time, and a tape inserted before
+ * LOAD is typed runs past its leader, so the deck takes those cues itself
+ * from the stock kernel. Anything that reads the tape without OSLOAD gets
+ * none, and the deck is played by hand, as on the real machine. */
+
+static void cue(atom_t *m) {
+    tape_t *t = &m->tape;
+    if (!m->cfg.tape_cues || !signature(m, TAPE_OSLOAD_PC, sig_load)) return;
+    switch (m->cpu.pc) {
+    case TAPE_PROMPT_PC:
+        /* PLAY TAPE: stopped until the key that answers it. */
+        t->cue_play = m->cpu.a == TAPE_PROMPT_PLAY;
+        if (t->cue_play) atom_cassette_play(m, false);
+        break;
+    case TAPE_ANSWERED_PC:
+        if (t->cue_play) atom_cassette_play(m, true);
+        t->cue_play = false;
+        break;
+    case TAPE_LOADED_PC: {
+        /* A load is over: stop, unless it was a *RUN, whose program may
+         * go straight on reading the tape. The return address is under
+         * the flags the PLP here is about to pull. */
+        uint16_t lo = peek(m, (uint16_t)(0x0100u | (uint8_t)(m->cpu.s + 2u)));
+        uint16_t hi = peek(m, (uint16_t)(0x0100u | (uint8_t)(m->cpu.s + 3u)));
+        if ((uint16_t)((hi << 8) | lo) != TAPE_RUN_RETURN) atom_cassette_play(m, false);
+        break;
+    }
+    }
+}
+
+bool tape_at(atom_t *m) {
+    uint16_t pc = m->cpu.pc;
+    if (pc == TAPE_OSLOAD_PC || pc == TAPE_OSSAVE_PC) return tape_trap(m);
+    if (pc == TAPE_PROMPT_PC || pc == TAPE_ANSWERED_PC || pc == TAPE_LOADED_PC) cue(m);
+    return false;
 }
 
 const tape_t *atom_tape_pending(const atom_t *m) {

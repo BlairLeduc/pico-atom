@@ -43,6 +43,9 @@ enum {
 
 #define TAPE_ROWS 11
 
+/* The tape page's first rows are the deck's controls; the files follow. */
+enum { T_EJECT, T_PLAY, T_REWIND, T_FIRST };
+
 static struct {
     atom_t          *m;
     menu_settings_t *set;
@@ -99,7 +102,14 @@ static void draw_main(void) {
 
     const char *ins = tapeio_inserted();
     const char *base = strrchr(ins, '/');
-    snprintf(line, sizeof line, " TAPE IN: %.21s", ins[0] ? (base ? base + 1 : ins) : "NONE");
+    const cassette_t *cas = &s.m->cas;
+    char deck[12] = "";
+    if (cas->loaded) {
+        snprintf(deck, sizeof deck, " %s %u%%", cas->ended ? "END" : cas->playing ? "PLAY" : "STOP",
+                 cassette_percent(cas));
+    }
+    snprintf(line, sizeof line, " TAPE IN: %.*s%s", cas->loaded ? 12 : 21,
+             ins[0] ? (base ? base + 1 : ins) : "NONE", deck);
     textpage_line(s.vram, 12, line, false);
 
     /* A layout a tape chose says so (§10.5). */
@@ -111,19 +121,30 @@ static void draw_main(void) {
 
 static void draw_tapes(void) {
     char line[TEXT_COLS + 1];
+    const cassette_t *cas = &s.m->cas;
     textpage_line(s.vram, 2, s.n_tapes ? " NAME             LOAD EXEC  LEN"
-                                        : " NO .ATM FILES IN /ATOM/TAPES/", false);
+                                        : " NO TAPES IN /ATOM/TAPES/", false);
     for (int r = 0; r < TAPE_ROWS; r++) {
         int i = s.tape_top + r;
         line[0] = 0;
-        if (i == 0) {
+        if (i == T_EJECT) {
             snprintf(line, sizeof line, " (EJECT)");
-        } else if (i <= (int)s.n_tapes) {
-            const tapeio_entry_t *e = &s_list[i - 1];
+        } else if (i == T_PLAY) {
+            snprintf(line, sizeof line, " (%s)", !cas->loaded ? "PLAY: NO UEF IN THE DECK"
+                                               : cas->playing ? "STOP" : "PLAY");
+        } else if (i == T_REWIND) {
+            snprintf(line, sizeof line, " (REWIND)");
+        } else if (i < T_FIRST + (int)s.n_tapes) {
+            const tapeio_entry_t *e = &s_list[i - T_FIRST];
             bool in = strcmp(e->path, tapeio_inserted()) == 0;
-            snprintf(line, sizeof line, "%c%-16.16s %04X %04X %4X", in ? '*' : ' ',
-                     e->hdr.name[0] ? e->hdr.name : "\"\"", e->hdr.load, e->hdr.exec,
-                     e->hdr.len);
+            if (e->uef) {
+                snprintf(line, sizeof line, "%c%-16.16s UEF %6lu", in ? '*' : ' ',
+                         e->hdr.name, (unsigned long)e->size);
+            } else {
+                snprintf(line, sizeof line, "%c%-16.16s %04X %04X %4X", in ? '*' : ' ',
+                         e->hdr.name[0] ? e->hdr.name : "\"\"", e->hdr.load, e->hdr.exec,
+                         e->hdr.len);
+            }
         }
         textpage_line(s.vram, 3 + r, line, i == s.tape_sel);
     }
@@ -182,9 +203,9 @@ static void do_delete(void) {
 static void open_tapes(void) {
     s.n_tapes = s.card ? tapeio_list(s_list, ATOM_TAPE_LIST_MAX) : 0;
     s.tapes = true;
-    s.tape_sel = 0;
+    s.tape_sel = T_EJECT;
     for (unsigned i = 0; i < s.n_tapes; i++) {
-        if (strcmp(s_list[i].path, tapeio_inserted()) == 0) s.tape_sel = (int)i + 1;
+        if (strcmp(s_list[i].path, tapeio_inserted()) == 0) s.tape_sel = T_FIRST + (int)i;
     }
     s.tape_top = s.tape_sel >= TAPE_ROWS ? s.tape_sel - TAPE_ROWS + 1 : 0;
     s.status[0] = 0;
@@ -259,19 +280,44 @@ static void key_main(uint8_t c) {
     }
 }
 
+/* The deck's controls act on a UEF, whose tape moves in guest time
+ * (§11.3); the page stays open so they can be used together. */
+static void deck(int what) {
+    atom_t *m = s.m;
+    if (!m->cas.loaded) { say(" NO UEF IN THE DECK", ""); return; }
+    if (what == T_REWIND) {
+        atom_cassette_rewind(m);
+        say(" REWOUND", "");
+    } else if (m->cas.playing) {
+        atom_cassette_play(m, false);
+        say(" STOPPED", "");
+    } else if (m->cas.ended) {
+        say(" AT THE END: REWIND FIRST", "");
+    } else {
+        atom_cassette_play(m, true);
+        say(" PLAYING", "");
+    }
+}
+
 static void key_tapes(uint8_t c) {
-    int last = (int)s.n_tapes;
+    int last = T_FIRST + (int)s.n_tapes - 1;
     switch (c) {
     case PC_UP:   if (s.tape_sel > 0) s.tape_sel--; break;
     case PC_DOWN: if (s.tape_sel < last) s.tape_sel++; break;
     case PC_ENTER:
-        if (s.tape_sel == 0) {
-            tapeio_insert(NULL);
+        if (s.tape_sel == T_EJECT) {
+            tapeio_insert(s.m, NULL);
             say(" TAPE EJECTED", "");
+        } else if (s.tape_sel == T_PLAY || s.tape_sel == T_REWIND) {
+            deck(s.tape_sel);
+            return;
         } else {
-            const tapeio_entry_t *e = &s_list[s.tape_sel - 1];
-            tapeio_insert(e->path);
-            say(" IN: LOAD\"\" TAKES %.10s", e->hdr.name);
+            const tapeio_entry_t *e = &s_list[s.tape_sel - T_FIRST];
+            if (e->uef) { say(" READING %.20s...", e->hdr.name); draw(); }
+            const char *err = tapeio_insert(s.m, e->path);
+            if (err) { say(" NOT INSERTED: %.16s", err); return; }
+            if (e->uef) say(" LOAD\"%.13s\" THEN A KEY", tapeio_first_name());
+            else say(" IN: LOAD\"\" TAKES %.10s", e->hdr.name);
         }
         s.tapes = false;
         return;

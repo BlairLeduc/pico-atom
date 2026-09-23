@@ -57,8 +57,16 @@ for w in "${workloads[@]}"; do
     for try in 1 2 3 4 5 6 7 8 9 10; do
         "$here/uart-log.sh" 0 "$log" 2>/dev/null &
         logger=$!
-        sleep 1
+        # Up to 5 s for the file: it can take longer than a second to
+        # appear, and a capture that is merely slow must not be waited
+        # on — a running one never exits.
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 0.5
+            [ -e "$log" ] && break
+            kill -0 "$logger" 2>/dev/null || break
+        done
         if kill -0 "$logger" 2>/dev/null && [ -e "$log" ]; then break; fi
+        kill "$logger" 2>/dev/null || true
         wait "$logger" 2>/dev/null || true
         logger=
         [ "$try" -lt 10 ] || { echo "perf-run.sh: no capture for $w" >&2; exit 1; }

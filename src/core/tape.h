@@ -34,6 +34,17 @@ struct atom_s;
 #define TAPE_OSLOAD_PC  0xF96Eu
 #define TAPE_OSSAVE_PC  0xFAE5u
 
+/* The deck's cues in the same kernel (§11.3): the prompt routine, entered
+ * with A = 4 for PLAY TAPE, 5 for REWIND and 6 for RECORD; the point
+ * after it has read the key that answers it; and OSLOAD's one exit,
+ * shared by the named and nameless paths. A *RUN's OSLOAD returns to
+ * TAPE_RUN_RETURN + 1. */
+#define TAPE_PROMPT_PC   0xFC40u
+#define TAPE_ANSWERED_PC 0xFC79u
+#define TAPE_LOADED_PC   0xF953u
+#define TAPE_RUN_RETURN  0xFA22u
+#define TAPE_PROMPT_PLAY 4u
+
 /* The MOS takes a name of at most 13 characters and a CR; a longer one
  * is its NAME error (#F85C), which the trap leaves to the ROM. */
 #define TAPE_NAME_MAX   13u
@@ -84,11 +95,14 @@ typedef struct {
     uint8_t   data_sum;
 
     bool      pass;        /* declined: let the ROM run this call once   */
+    bool      cue_play;    /* PLAY TAPE is up: its key starts the deck    */
     uint32_t  served;      /* requests completed, for the heartbeat      */
 } tape_t;
 
-/* Called by atom_run when the PC is at a handler. True if the CPU is to
- * stall this instruction boundary. */
+/* Called by atom_run when the PC may be one of the addresses above. True
+ * if the CPU is to stall this instruction boundary, which only a trap
+ * does; the deck's cues start and stop the cassette and return false. */
+bool tape_at(struct atom_s *m);
 bool tape_trap(struct atom_s *m);
 
 /* The request the CPU is stalled on, or NULL. */

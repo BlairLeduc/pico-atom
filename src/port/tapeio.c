@@ -12,8 +12,10 @@
 #include "ff.h"
 
 #include "config.h"
+#include "inflate.h"
 #include "storage.h"
 #include "tape.h"
+#include "uef.h"
 
 #define ATOM_DIR "/atom"
 #define TAPE_DIR "/atom/tapes"
@@ -27,22 +29,102 @@ static uint8_t s_buf[CHUNK];
 static char    s_path[ATOM_PATH_MAX];
 static char    s_inserted[ATOM_PATH_MAX];
 
-void tapeio_insert(const char *path) {
+/* The UEF in the deck, decompressed. Core 0 plays from it; core 1
+ * writes it only here, with core 0 parked (cassette.h). */
+static uint8_t s_uef[ATOM_UEF_MAX];
+static char    s_first[14];      /* the UEF's first file name, or "" */
+
+/* Neither a directory nor macOS's AppleDouble "._" shadow of a file,
+ * which a card written from a Mac carries beside every file. */
+static bool has_ext(const char *fname, const char *ext) {
+    if (fname[0] == '.') return false;
+    size_t n = strlen(fname);
+    return n > 4 && strcasecmp(fname + n - 4, ext) == 0;
+}
+
+static bool is_atm(const FILINFO *fi) {
+    return !(fi->fattrib & AM_DIR) && has_ext(fi->fname, ".atm");
+}
+
+static bool is_uef(const FILINFO *fi) {
+    return !(fi->fattrib & AM_DIR) && has_ext(fi->fname, ".uef");
+}
+
+/* gunzip's input: the file a sector at a time. A read that fails ends
+ * the input as the end of the file does, and says so in `failed`: a
+ * truncated chunk plays (uef.h), so a card error must not pass for EOF. */
+typedef struct { UINT n, at; bool eof, failed; } reader_t;
+
+static int next_byte(void *ctx) {
+    reader_t *r = ctx;
+    if (r->at == r->n) {
+        if (r->eof) return -1;
+        if (f_read(&s_file, s_buf, CHUNK, &r->n) != FR_OK) {
+            r->n = 0;
+            r->failed = true;
+        }
+        r->at = 0;
+        if (r->n < CHUNK) r->eof = true;
+        if (r->n == 0) return -1;
+    }
+    return s_buf[r->at++];
+}
+
+/* A UEF is almost always gzipped; one that is not is read as it is. */
+static const char *load_uef(atom_t *m, const char *path, size_t *len) {
+    if (f_open(&s_file, path, FA_READ) != FR_OK) return "CANNOT OPEN";
+    reader_t r = { 0, 0, false, false };
+    const char *err = NULL;
+    *len = 0;
+    int b0 = next_byte(&r), b1 = next_byte(&r);
+    r.at = 0;
+    if (b0 == 0x1F && b1 == 0x8B) {
+        gz_status_t st = gunzip(next_byte, &r, s_uef, sizeof s_uef, len);
+        if (st == GZ_TOO_BIG) err = "TOO BIG";
+        else if (st != GZ_OK) err = "BAD GZIP";
+        if (st != GZ_OK) printf("  tape         : %s: %s\n", path, gunzip_status_str(st));
+    } else if (f_size(&s_file) > sizeof s_uef) {
+        err = "TOO BIG";
+    } else {
+        int c;
+        while ((c = next_byte(&r)) >= 0) s_uef[(*len)++] = (uint8_t)c;
+    }
+    f_close(&s_file);
+    if (!err && r.failed) err = "READ ERROR";
+    if (!err && !atom_cassette_insert(m, s_uef, *len)) err = "NOT A UEF";
+    return err;
+}
+
+const char *tapeio_insert(atom_t *m, const char *path) {
     s_inserted[0] = 0;
-    if (path && strlen(path) < sizeof s_inserted) strcpy(s_inserted, path);
+    s_first[0] = 0;
+    atom_cassette_eject(m);
+    if (!path || !path[0] || strlen(path) >= sizeof s_inserted) return NULL;
+
+    if (has_ext(path, ".uef")) {
+        uint32_t t0 = time_us_32();
+        size_t len = 0;
+        const char *err = load_uef(m, path, &len);
+        if (err) {
+            atom_cassette_eject(m);
+            printf("  tape         : %s: not inserted: %s\n", path, err);
+            return err;
+        }
+        if (!uef_first_name(s_uef, len, s_first)) s_first[0] = 0;
+        printf("  tape         : %s: %u bytes of UEF in the deck, stopped, first file "
+               "\"%s\", %lu us\n", path, (unsigned)len, s_first,
+               (unsigned long)(time_us_32() - t0));
+    }
+    strcpy(s_inserted, path);
+    return NULL;
 }
 
 const char *tapeio_inserted(void) {
     return s_inserted;
 }
 
-/* Neither a directory nor macOS's AppleDouble "._" shadow of a file,
- * which a card written from a Mac carries beside every file. */
-static bool is_atm(const FILINFO *fi) {
-    if (fi->fattrib & AM_DIR) return false;
-    if (fi->fname[0] == '.') return false;
-    size_t n = strlen(fi->fname);
-    return n > 4 && strcasecmp(fi->fname + n - 4, ".atm") == 0;
+const char *tapeio_first_name(void) {
+    return s_first;
 }
 
 static bool stem_is(const char *fname, const char *want) {
@@ -90,7 +172,8 @@ static bool find(const char *want, atm_header_t *h) {
         memcpy(s_path, by_stem, sizeof s_path);
         found = true;
     }
-    if (!found && !want[0] && s_inserted[0] && read_header(s_inserted, h)) {
+    if (!found && !want[0] && s_inserted[0] && has_ext(s_inserted, ".atm") &&
+        read_header(s_inserted, h)) {
         memcpy(s_path, s_inserted, sizeof s_path);
         found = true;
     }
@@ -103,10 +186,23 @@ unsigned tapeio_list(tapeio_entry_t *out, unsigned max) {
     unsigned n = 0;
     if (f_opendir(&dir, TAPE_DIR) != FR_OK) return 0;
     while (n < max && f_readdir(&dir, &fi) == FR_OK && fi.fname[0]) {
-        if (!is_atm(&fi)) continue;
-        int len = snprintf(out[n].path, sizeof out[n].path, TAPE_DIR "/%s", fi.fname);
-        if (len < 0 || (size_t)len >= sizeof out[n].path) continue;
-        if (read_header(out[n].path, &out[n].hdr)) n++;
+        bool uef = is_uef(&fi);
+        if (!uef && !is_atm(&fi)) continue;
+        tapeio_entry_t *e = &out[n];
+        int len = snprintf(e->path, sizeof e->path, TAPE_DIR "/%s", fi.fname);
+        if (len < 0 || (size_t)len >= sizeof e->path) continue;
+        e->uef = uef;
+        e->size = (uint32_t)fi.fsize;
+        if (uef) {
+            /* A UEF carries no one name; the file's stands in for it. */
+            memset(&e->hdr, 0, sizeof e->hdr);
+            size_t stem = strlen(fi.fname) - 4;
+            if (stem > ATOM_ATM_NAME_LEN) stem = ATOM_ATM_NAME_LEN;
+            memcpy(e->hdr.name, fi.fname, stem);
+            n++;
+        } else if (read_header(e->path, &e->hdr)) {
+            n++;
+        }
     }
     f_closedir(&dir);
     return n;

@@ -89,6 +89,22 @@ The emulator boots straight to the Atom's `>` prompt.
 file called `NAME.atm`; `SAVE "NAME"` writes one. `LOAD ""` takes whichever
 tape the menu's *Tapes* page has inserted.
 
+`.uef` images, gzipped or not, go in the same folder. A UEF is played the way a
+real recorder plays it: the Atom reads the signal, so games with loaders of
+their own load too. Choose the UEF on the menu's *Tapes* page. It goes in
+stopped, and the menu says the name of its first file. Then type
+`LOAD "NAME"` or `*RUN "NAME"` with that name, as the game's instructions say.
+An empty name will not do: on an Atom, `LOAD ""` means a different, nameless
+kind of file. When the Atom says `PLAY TAPE`, press a key and the tape starts.
+The deck stops again when a `LOAD` finishes and starts at the next
+`PLAY TAPE`, which is what you would do by hand on a real Atom. A loader that
+reads the tape without going through the Atom's `LOAD` needs *Play* from the
+menu. While the tape plays, the Atom runs as fast as the PicoCalc allows,
+about 2.7× real time, and makes no sound. A UEF in the deck takes every load,
+so eject it to go back to `.atm` files. `SAVE` still writes `.atm` files.
+
+Games that need a 32 KB Atom have it: RAM runs from `#0000` to `#7FFF`.
+
 **Game keymaps** put a game's keys under one hand. Atom games scan the keyboard
 themselves, and many were laid out for keys that sit far apart on the PicoCalc.
 The menu's *Keys* item picks a layout. It lays a few keys over the standard map,

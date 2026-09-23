@@ -28,6 +28,10 @@ int main(void) {
         bus_write(m, 0x97FF, 0x44);   /* top of VRAM    */
         CHECK(bus_read(m, 0x0000) == 0x11, "#0000 should be RAM");
         CHECK(bus_read(m, 0x3FFF) == 0x22, "#3FFF should be RAM");
+        bus_write(m, 0x4000, 0x55);
+        bus_write(m, 0x7FFF, 0x66);
+        CHECK(bus_read(m, 0x4000) == 0x55 && bus_read(m, 0x7FFF) == 0x66,
+              "#4000-#7FFF should be RAM on the default, 32 KiB machine (§7.2)");
         CHECK(bus_read(m, 0x8000) == 0x33, "#8000 should be VRAM");
         CHECK(bus_read(m, 0x97FF) == 0x44, "#97FF should be VRAM");
         CHECK((m->page_flags[0x80] & PAGE_VRAM) != 0, "#8000 should be flagged VRAM");
@@ -36,9 +40,9 @@ int main(void) {
     /* ---- the video aperture is absent on a stock machine ------------- */
     {
         atom_t *m = machine(&cfg);
-        bus_write(m, 0x4000, 0x5A);            /* unpopulated  */
+        bus_write(m, 0x9C00, 0x5A);            /* unpopulated  */
         /* Open bus is the last value on the bus, not 0xFF (§7.2). */
-        CHECK(bus_read(m, 0x4000) == 0x5A, "an unpopulated read returns the open bus");
+        CHECK(bus_read(m, 0x9C00) == 0x5A, "an unpopulated read returns the open bus");
         bus_write(m, 0x0000, 0xA5);
         CHECK(bus_read(m, 0x9800) == 0xA5,
               "#9800 is unpopulated by default and follows the open bus");
@@ -120,12 +124,12 @@ int main(void) {
     /* ---- atom_map_ram rejects a zero length -------------------------- */
     {
         atom_t *m = machine(&cfg);
-        /* #4000 is unpopulated by default; a zero-length map at #0000
+        /* #9800 is unpopulated by default; a zero-length map at #0000
          * must not quietly populate it (or anything else). */
         atom_map_ram(m, 0x0000, 0);
-        CHECK(m->page[0x40].write == NULL,
+        CHECK(m->page[0x98].write == NULL,
               "atom_map_ram(m, 0, 0) must map nothing, not the whole address space");
-        CHECK((m->page_flags[0x40] & PAGE_OPEN) != 0, "#4000 should still be unpopulated");
+        CHECK((m->page_flags[0x98] & PAGE_OPEN) != 0, "#9800 should still be unpopulated");
 
         /* A length running off the top of the map is clamped, not wrapped. */
         m = machine(&cfg);
@@ -135,9 +139,9 @@ int main(void) {
 
         /* One page is one page. */
         m = machine(&cfg);
-        atom_map_ram(m, 0x4000, 1);
-        CHECK(m->page[0x40].write != NULL, "a one-byte map should cover its page");
-        CHECK(m->page[0x41].write == NULL, "a one-byte map must not spill into #4100");
+        atom_map_ram(m, 0x9800, 1);
+        CHECK(m->page[0x98].write != NULL, "a one-byte map should cover its page");
+        CHECK(m->page[0x99].write == NULL, "a one-byte map must not spill into #9900");
     }
 
     /* ---- the field rate is configuration, not a constant (§18) ------- */

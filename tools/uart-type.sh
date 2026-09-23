@@ -8,7 +8,9 @@
 # for it (PICO_ATOM_UART_KEYS in src/port/main.c), so a hardware run can be
 # driven from the machine capturing it. Upper case types Atom capitals,
 # lower case types Atom lower case, and ^A-^Z arrive as CTRL chords —
-# except ^J and ^M, which are LF and CR and type RETURN.
+# except ^J and ^M, which are LF and CR and type RETURN. \x1e is not a
+# key: it plays or stops the tape in the deck, as the menu does, and a
+# build with PICO_ATOM_BOOT_TAPE puts one there at boot.
 #
 # One character every 0.25 s: the MOS takes about eight fields a key
 # (config.h, ATOM_KEY_MIN_FIELDS + ATOM_KEY_GAP_FIELDS), and the firmware

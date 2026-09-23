@@ -50,6 +50,16 @@
 #define PICO_ATOM_UART_KEYS 1
 #endif
 
+/* Turbo: while a UEF plays, the guest runs unpaced (design.md §11.3).
+ * The tape is clocked in guest cycles, so a load finishes sooner by
+ * exactly the headroom (§6.3), and nothing the guest can observe
+ * changes. Its sound is dropped while it lasts — at twice the pitch it
+ * would be noise, and a loader is silent — and the PCM queue is kept
+ * topped up with silence instead, so the ring never runs dry. */
+#ifndef PICO_ATOM_TURBO
+#define PICO_ATOM_TURBO 1
+#endif
+
 /* M3's present-time measurement (design.md §8.4), kept for the perf pass
  * (M7) but not run on every boot: it holds the panel for seconds. */
 #ifndef PICO_ATOM_MEASURE_PRESENT
@@ -299,6 +309,13 @@ static void core1_main(void) {
      *    opens. */
     if (ok && storage_mount() == 0) {
         keymapio_scan();
+#ifdef PICO_ATOM_BOOT_TAPE
+        /* In the deck, stopped, for a run driven over the UART, where
+         * the menu cannot be reached. */
+        const char *err = tapeio_insert(&g_atom, PICO_ATOM_BOOT_TAPE);
+        printf("  tape         : boot tape %s: %s\n", PICO_ATOM_BOOT_TAPE,
+               err ? err : "in the deck");
+#endif
         storage_unmount();
     }
     g_c1.roms_ok = ok;
@@ -364,6 +381,14 @@ static void uart_keys(void) {
     if (ch == PICO_ERROR_TIMEOUT) return;
 
     uint8_t c = (uint8_t)ch;
+    if (c == 0x1Eu) {
+        /* RS: the deck's play/stop, as the menu's (§13), so a run driven
+         * from the workstation can play a tape. No key sends it. */
+        atom_cassette_play(&g_atom, !atom_cassette_playing(&g_atom));
+        log_printf("  cassette     : %s over the UART\n",
+                   atom_cassette_playing(&g_atom) ? "playing" : "stopped");
+        return;
+    }
     if (c == '\r') c = '\n';
     if (c == 0x1Bu) {
         /* ESC, so a run can stop one BASIC program and type the next. */
@@ -481,14 +506,19 @@ int main(void) {
     uint64_t hb_us = time_us_64(), hb_cycles = g_atom.cpu.cycles;
     uint64_t hb_insns = g_atom.instructions;
     uint32_t run_us = 0;   /* inside atom_run_field since the heartbeat */
+    uint32_t turbo_fields = 0;
     const uint32_t clk_mhz = clock_get_hz(clk_sys) / 1000000u;
     for (;;) {
 #if !PICO_ATOM_AUDIO
         /* Absolute, not incremental, so a late field does not accumulate
-         * (§12.2). */
-        next = delayed_by_us(next, field_us);
-        if (absolute_time_diff_us(get_absolute_time(), next) < 0) late++;
-        sleep_until(next);
+         * (§12.2). Turbo runs unpaced and restarts the schedule after. */
+        if (PICO_ATOM_TURBO && atom_cassette_playing(&g_atom)) {
+            next = get_absolute_time();
+        } else {
+            next = delayed_by_us(next, field_us);
+            if (absolute_time_diff_us(get_absolute_time(), next) < 0) late++;
+            sleep_until(next);
+        }
 #endif
 
 #if PICO_ATOM_UART_KEYS
@@ -525,10 +555,26 @@ int main(void) {
             pool_publish(i);
         }
 
+        bool turbo = PICO_ATOM_TURBO && atom_cassette_playing(&g_atom);
+        if (turbo) turbo_fields++;
 #if PICO_ATOM_AUDIO
-        /* Blocks while the queue is full: this is the throttle (§12.2). */
         size_t n = atom_audio_drain(&g_atom, pcm, ATOM_AUDIO_BUF_LEN);
-        audio_push(pcm, n);
+        if (turbo) {
+            /* Never block: keep the queue at its start depth with
+             * silence, a field's worth of slack above the low water
+             * that a paced field leaves (§12.2). */
+            static const int16_t silence[256];
+            size_t room = audio_room();
+            size_t keep = ATOM_PCM_QUEUE_LEN - ATOM_PCM_QUEUE_START;
+            while (room > keep) {
+                size_t k = room - keep < 256u ? room - keep : 256u;
+                audio_push(silence, k);
+                room -= k;
+            }
+        } else {
+            /* Blocks while the queue is full: this is the throttle (§12.2). */
+            audio_push(pcm, n);
+        }
 #else
         /* The core makes samples regardless; discard them, or its buffer
          * fills and every later one is counted as an overflow. */
@@ -589,6 +635,15 @@ int main(void) {
                    (unsigned long long)insns);
             hb_insns = g_atom.instructions;
             run_us = 0;
+            /* The deck: where the tape is, and how many of these fields
+             * ran unpaced. rt above is the turbo factor while it plays. */
+            if (g_atom.cas.loaded) {
+                log_printf("  cassette     : %s %u%%, %lu edges, %lu turbo fields\n",
+                           g_atom.cas.ended ? "end" : g_atom.cas.playing ? "playing" : "stopped",
+                           cassette_percent(&g_atom.cas), (unsigned long)g_atom.cas.edges,
+                           (unsigned long)turbo_fields);
+            }
+            turbo_fields = 0;
 #if PICO_ATOM_AUDIO
             /* The consumed-sample rate against the microsecond timer is
              * the control quantity: it is the PWM wrap, measured, and it
