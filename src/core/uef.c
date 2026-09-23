@@ -109,8 +109,11 @@ static bool chunk_step(uef_t *u) {
         if (u->at == 0) {
             u->fmt_bits = b[0] > 8 ? 8 : b[0];
             u->fmt_parity = b[1];
-            int8_t stop = (int8_t)b[2];            /* negative: an extra short wave */
+            /* A negative count is that many stop bits and then an extra
+             * short wave: one cycle at twice the base frequency. */
+            int8_t stop = (int8_t)b[2];
             u->fmt_stop = (uint8_t)(stop < 0 ? -stop : stop);
+            u->fmt_short = stop < 0;
             if (u->fmt_stop > 4) u->fmt_stop = 4;
             u->at = 3;
         }
@@ -129,6 +132,7 @@ static bool chunk_step(uef_t *u) {
         }
         for (unsigned i = 0; i < u->fmt_stop; i++) f |= (uint16_t)(1u << k++);
         frame(u, f, k);
+        u->frame_tail = u->fmt_short ? 2u : 0u;
         return true;
     }
 
@@ -224,6 +228,12 @@ bool uef_next(uef_t *u, uint32_t *units, bool *edge) {
             bit_wave(u, u->frame & 1u);
             u->frame >>= 1;
             u->frame_left--;
+            continue;
+        }
+        if (u->frame_tail) {
+            u->wave = UEF_WAVE_HIGH;
+            u->wave_left = u->frame_tail;
+            u->frame_tail = 0;
             continue;
         }
         if (u->id && chunk_step(u)) continue;

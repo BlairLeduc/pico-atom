@@ -50,14 +50,19 @@ static bool is_uef(const FILINFO *fi) {
     return !(fi->fattrib & AM_DIR) && has_ext(fi->fname, ".uef");
 }
 
-/* gunzip's input: the file a sector at a time. */
-typedef struct { UINT n, at; bool eof; } reader_t;
+/* gunzip's input: the file a sector at a time. A read that fails ends
+ * the input as the end of the file does, and says so in `failed`: a
+ * truncated chunk plays (uef.h), so a card error must not pass for EOF. */
+typedef struct { UINT n, at; bool eof, failed; } reader_t;
 
 static int next_byte(void *ctx) {
     reader_t *r = ctx;
     if (r->at == r->n) {
         if (r->eof) return -1;
-        if (f_read(&s_file, s_buf, CHUNK, &r->n) != FR_OK) r->n = 0;
+        if (f_read(&s_file, s_buf, CHUNK, &r->n) != FR_OK) {
+            r->n = 0;
+            r->failed = true;
+        }
         r->at = 0;
         if (r->n < CHUNK) r->eof = true;
         if (r->n == 0) return -1;
@@ -68,7 +73,7 @@ static int next_byte(void *ctx) {
 /* A UEF is almost always gzipped; one that is not is read as it is. */
 static const char *load_uef(atom_t *m, const char *path, size_t *len) {
     if (f_open(&s_file, path, FA_READ) != FR_OK) return "CANNOT OPEN";
-    reader_t r = { 0, 0, false };
+    reader_t r = { 0, 0, false, false };
     const char *err = NULL;
     *len = 0;
     int b0 = next_byte(&r), b1 = next_byte(&r);
@@ -85,6 +90,7 @@ static const char *load_uef(atom_t *m, const char *path, size_t *len) {
         while ((c = next_byte(&r)) >= 0) s_uef[(*len)++] = (uint8_t)c;
     }
     f_close(&s_file);
+    if (!err && r.failed) err = "READ ERROR";
     if (!err && !atom_cassette_insert(m, s_uef, *len)) err = "NOT A UEF";
     return err;
 }

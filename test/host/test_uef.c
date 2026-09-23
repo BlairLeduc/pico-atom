@@ -175,6 +175,8 @@ static int test_waveform(void) {
     chunk(0x0104, fmt, sizeof fmt);
     uint8_t sec[] = { 3, 0, 0, 'P', 'W', 0xA0 };   /* 1, 0, 1 */
     chunk(0x0114, sec, sizeof sec);
+    uint8_t neg[] = { 8, 'N', (uint8_t)-1, 0x00, 0xFF };  /* 8N1 + a short wave */
+    chunk(0x0104, neg, sizeof neg);
 
     n_want = 0;
     expect(20, 1);
@@ -190,6 +192,10 @@ static int test_waveform(void) {
     }
     /* Security cycles: the first a single pulse, then whole cycles. */
     expect(1, 1); expect(2, 2); expect(2, 1);
+    /* A stop count of -1: one stop bit, then one cycle at 2400 Hz, after
+     * every byte — MakeUEF writes the Atom's inter-byte cycle this way. */
+    expect_byte(0x00, 1); expect(2, 1);
+    expect_byte(0xFF, 1); expect(2, 1);
 
     uef_t u;
     CHECK(uef_open(&u, img, img_len), "a UEF header opens");

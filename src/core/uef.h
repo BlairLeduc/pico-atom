@@ -42,6 +42,7 @@ typedef struct {
     /* The frame being sent: its bits, LSB first, and how many are left. */
     uint16_t frame;
     uint8_t  frame_left;
+    uint8_t  frame_tail;   /* half-cycles of 2400 Hz after it (&0104)    */
 
     /* The wave being sent. */
     uint8_t  wave;         /* UEF_WAVE_*                                 */
@@ -49,8 +50,10 @@ typedef struct {
 
     uint32_t base_hz;      /* &0113                                      */
     uint16_t baud;         /* &0117                                      */
-    /* &0104's frame: data bits, parity 'N', 'E' or 'O', stop bits. */
+    /* &0104's frame: data bits, parity 'N', 'E' or 'O', stop bits, and
+     * whether a negative stop count asked for an extra short wave. */
     uint8_t  fmt_bits, fmt_parity, fmt_stop;
+    bool     fmt_short;
 } uef_t;
 
 #define UEF_WAVE_NONE 0u
