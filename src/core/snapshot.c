@@ -48,8 +48,8 @@ enum {
     S_BUDGET = 49,
     S_CFG = 53, S_FIELD_HZ = 54,
     S_ROMS = 56,                  /* SHA-1 of the ROM pages, 20 bytes  */
-    S_FDC = 76,                   /* mode, output, track 0, track 1, head 0, head 1 */
-    S_END = 82,                   /* the rest is reserved, written zero */
+    S_FDC = 76,                   /* mode, output, track 0, track 1, head 0, head 1, unload revs */
+    S_END = 83,                   /* the rest is reserved, written zero */
 };
 
 _Static_assert(S_END <= SNAP_STATE_LEN, "the state section has outgrown its length");
@@ -119,6 +119,7 @@ static void state_encode(const atom_t *m, uint8_t st[SNAP_STATE_LEN]) {
     *q++ = f->special[I8271_SR_MODE];   *q++ = f->special[I8271_SR_OUTPUT];
     *q++ = f->special[I8271_SR_TRACK0]; *q++ = f->special[I8271_SR_TRACK1];
     *q++ = f->drv[0].head;              *q++ = f->drv[1].head;
+    *q++ = f->unload_revs;
 }
 
 /* ---- the stream -------------------------------------------------------- */
@@ -129,7 +130,7 @@ static const uint8_t *page_out(const atom_t *m, unsigned p, uint8_t *scratch) {
     if (m->page[p].write && !(m->page_flags[p] & (PAGE_ROM | PAGE_IO))) {
         return &m->ram[p * ATOM_PAGE_SIZE];
     }
-    /* Page #0A under AtomDOS is RAM but for the FDC's four bytes. */
+    /* Page #0A under AtomDOS is RAM but for the FDC's eight bytes. */
     if (m->page_flags[p] & PAGE_IO && p < 0xB0u) {
         memcpy(scratch, &m->ram[p * ATOM_PAGE_SIZE], PIECE);
         return scratch;
@@ -287,6 +288,9 @@ snap_status_t snapshot_load(atom_t *m, snap_read_fn read, void *ctx) {
     f->special[I8271_SR_MODE] = *q++;   f->special[I8271_SR_OUTPUT] = *q++;
     f->special[I8271_SR_TRACK0] = *q++; f->special[I8271_SR_TRACK1] = *q++;
     f->drv[0].head = *q++;              f->drv[1].head = *q++;
+    /* SPECIFY's head unload, without which a disc change goes unseen
+     * (#E731). A snapshot from before it was saved reads zero: no unload. */
+    f->unload_revs = *q++;
     /* The head comes back unloaded, the drive not ready, so the DOS
      * reads the catalogue again: the disc may not be the one it was. */
     f->special[I8271_SR_OUTPUT] &= (uint8_t)~I8271_OUT_LOAD;

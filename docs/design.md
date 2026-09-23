@@ -569,7 +569,7 @@ Reads take the same shape, with a fast path for everything outside
 
 **A page-granular fast path cannot express a sub-page device, and the Atom has
 one.** With AtomDOS enabled the 8271 sits at `#0A00`–`#0A07` (§7.3), inside a
-page that is otherwise RAM. If page `#0A` keeps a non-NULL `write`, those four
+page that is otherwise RAM. If page `#0A` keeps a non-NULL `write`, those eight
 addresses take the fast RAM store and the FDC is never reached — silently, with
 the disc system simply not responding. So when AtomDOS is enabled, page `#0A` is
 marked `PAGE_IO` with `write = NULL`, and `bus_write_slow` splits it:

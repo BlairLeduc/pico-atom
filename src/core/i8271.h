@@ -151,8 +151,9 @@ static inline const i8271_req_t *i8271_request(const i8271_t *f) {
  * false if the card failed it. */
 void i8271_served(i8271_t *f, bool ok, uint64_t now);
 
-/* A disc in a drive, or none. Any command in progress on that drive
- * ends: a disc changed under a read is a read that fails. */
+/* A disc in a drive, or none. A command on that drive that has left
+ * the seek ends: a disc changed under a read is a read that fails. One
+ * still seeking finds whatever disc is there when the head settles. */
 void i8271_insert(i8271_t *f, unsigned drive, uint8_t tracks, uint8_t sides, bool protect);
 void i8271_eject(i8271_t *f, unsigned drive);
 

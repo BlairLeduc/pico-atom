@@ -309,6 +309,7 @@ int main(void) {
     atom_reset(&g.m);
     guest_fields(&g, 120);
     g.m.fdc.special[I8271_SR_MODE] = 0;
+    g.m.fdc.unload_revs = 0;
     snap_at = 0;
     CHECK(snapshot_load(&g.m, snap_get, NULL) == SNAP_OK, "the snapshot restores");
     CHECK(g.m.fdc.special[I8271_SR_MODE] == 0xC1, "with the chip in non-DMA mode");
@@ -316,6 +317,17 @@ int main(void) {
     command("*RUN\"HELLO\"\n");
     CHECK(screen_count("DISC OK") >= 1, "and the DOS reads the disc after it");
     if (test_failures) dump_screen();
+    /* SPECIFY's head unload came back with it: a disc changed now is
+     * still noticed (#E731). */
+    static uint8_t first[IMG_LEN];
+    memcpy(first, disc[0], IMG_LEN);
+    put_title(disc[0], "FOURTH");
+    atom_disc_eject(&g.m, 0);
+    atom_disc_insert(&g.m, 0, TRACKS, 1, false);
+    command("*CAT\n");
+    CHECK(screen_has("FOURTH"), "a disc changed after a restore is read afresh");
+    if (test_failures) dump_screen();
+    memcpy(disc[0], first, IMG_LEN);
 
     /* ---- a real disc, when one is named: PICO_ATOM_DISC=games1.40t --- */
     const char *real = getenv("PICO_ATOM_DISC");
