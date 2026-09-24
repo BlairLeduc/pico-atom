@@ -51,15 +51,16 @@
 
 #define ATOM_CPU_HZ       1000000u  /* stock 1 MHz; turbo is a multiplier */
 
-/* §16 lists the field rate as medium confidence (50 or 60 Hz on a UK
- * Atom). §18 says make it configuration, not a constant, so the default
- * lives here and the machine carries it in atom_t. */
-#define ATOM_FIELD_HZ_DEFAULT  60u
+/* 60 Hz on every Atom, UK machines included (§16, confirmed): the
+ * MC6847 is an NTSC part, and software times itself on it — BASIC's
+ * WAIT is one field sync, 1/60 s. A constant, not configuration. */
+#define ATOM_FIELD_HZ          60u
+#define ATOM_CYCLES_PER_FIELD  (ATOM_CPU_HZ / ATOM_FIELD_HZ)   /* 16666 */
 
 /* FS (port C bit 7) is low for the flyback interval, ~6 % of a field
- * (§12.1): 999 cycles at 60 Hz. §16 lists this as unconfirmed; it is a
- * percentage so that it follows the field rate if that changes. */
+ * (§12.1): 999 cycles. §16 lists the length as unconfirmed. */
 #define ATOM_FLYBACK_PERCENT    6u
+#define ATOM_FLYBACK_CYCLES    (ATOM_CYCLES_PER_FIELD * ATOM_FLYBACK_PERCENT / 100u)
 
 /* ---- Audio (design.md §9.2, §9.4) ------------------------------------ */
 
@@ -72,8 +73,8 @@
 #define ATOM_AUDIO_RATE_NUM  150000000u
 #define ATOM_AUDIO_RATE_DEN  ((ATOM_PWM_TOP + 1u) * ATOM_PWM_OVERSAMPLE)
 
-/* Samples the core holds between drains. One field is 611 at 60 Hz and
- * 733 at 50 Hz; the port drains after every field (§12.2). */
+/* Samples the core holds between drains. One field is 611; the port
+ * drains after every field (§12.2). */
 #define ATOM_AUDIO_BUF_LEN   1024u
 
 #define ATOM_PCM_QUEUE_LEN   1024u  /* SPSC, ~28 ms                       */
@@ -99,7 +100,7 @@
  * down at least seven fields after the previous release: MIN + GAP >= 7,
  * with GAP >= 1 so the MOS sees all keys up. test_boot measured the
  * edge — 4 + 3 types, 3 + 3 and 4 + 2 drop characters — and these
- * leave a field of margin. Counted in fields, so it holds at 50 Hz. */
+ * leave a field of margin. */
 #define ATOM_KEY_MIN_FIELDS     6u
 #define ATOM_KEY_GAP_FIELDS     2u
 
@@ -110,6 +111,9 @@
 #define ATOM_KEYMAP_TAPES       4u  /* ATM names on a layout's tapes line */
 #define ATOM_KEYMAP_NAME_LEN   16u  /* a layout's name, as the menu shows */
 #define ATOM_KEYMAP_FILE_MAX 1024u  /* the largest .map file read         */
+
+/* /atom/pico-atom.cfg (§11.7): a dozen settings and their comments. */
+#define ATOM_SETTINGS_FILE_MAX 2048u
 
 /* ---- Tape (design.md §11) -------------------------------------------- */
 

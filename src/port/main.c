@@ -34,6 +34,7 @@
 #include "mc6847.h"
 #include "menu.h"
 #include "roms.h"
+#include "settingsio.h"
 #include "snappool.h"
 #include "southbridge.h"
 #include "storage.h"
@@ -109,7 +110,7 @@ static volatile uint32_t g_handoff = HANDOFF_NONE;
 
 /* Written by the menu on core 1 while core 0 is parked, applied by core
  * 0 once it has the machine back. */
-static menu_settings_t g_settings = { .volume = 8 };
+static menu_settings_t g_settings = { .volume = 8, .turbo = true };
 
 /* ---- the snapshot handoff (§4.2): every transition under one lock ---- */
 
@@ -270,6 +271,46 @@ static void keys_for_tape(const char *name) {
     printf("  keymaps      : loading %s chose \"%s\"\n", name, l->name);
 }
 
+/* Core 0's: the settings file may turn turbo off (§11.3, §11.7). */
+static bool turbo_now(void) {
+    return PICO_ATOM_TURBO && g_settings.turbo && atom_cassette_playing(&g_atom);
+}
+
+/* A bare name in the settings file is in the card's own folder for it;
+ * a path from the root is taken as it stands (design.md §11.7). */
+static const char *card_path(char out[ATOM_PATH_MAX], const char *dir, const char *v) {
+    if (v[0] == '/') return v;
+    int n = snprintf(out, ATOM_PATH_MAX, "%s/%s", dir, v);
+    return n > 0 && n < (int)ATOM_PATH_MAX ? out : NULL;
+}
+
+/* What the settings file puts in the deck, the drives and the keys,
+ * once the ROMs and the card's layouts are in. Core 1, with core 0
+ * waiting and the card mounted. */
+static void boot_media(const settings_t *b) {
+    if (b->keys[0]) {
+        int i = keymapio_find(b->keys);
+        if (i >= 0) g_settings.layout = keymapio_get((unsigned)i);
+        else settingsio_fail("keys", "no such layout");
+    }
+    char buf[ATOM_PATH_MAX];
+    if (b->tape[0]) {
+        const char *p = card_path(buf, "/atom/tapes", b->tape);
+        const char *err = p ? tapeio_insert(&g_atom, p) : "path too long";
+        if (err) settingsio_fail("tape", err);
+        else printf("  tape         : %s in the deck\n", p);
+    }
+    for (unsigned d = 0; d < SETTINGS_DRIVES; d++) {
+        if (!b->drive[d][0]) continue;
+        const char *p = card_path(buf, "/atom/discs", b->drive[d]);
+        const char *err = p ? discio_insert(&g_atom, d, p) : "path too long";
+        char what[8];
+        snprintf(what, sizeof what, "drive%u", d);
+        if (err) settingsio_fail(what, err);
+        else printf("  disc         : %s in drive %u\n", p, d);
+    }
+}
+
 static void core1_main(void) {
     printf("  core 1       : up\n");
 
@@ -291,7 +332,24 @@ static void core1_main(void) {
     printf("  lcd          : spi1 configured at %lu Hz\n", (unsigned long)baud);
 
     display_init(FONT);
+
+    /* 3. The settings file, before the ROMs, because some of it is the
+     *    machine: RAM and AtomDOS decide what loads (design.md §11.7).
+     *    Core 0 is waiting, so the machine is core 1's to configure. */
+    static settings_t boot;
+    if (storage_mount() == 0) {
+        settingsio_load(&boot);
+        storage_unmount();
+    } else {
+        settings_default(&boot);
+    }
+    atom_init(&g_atom, &boot.machine);
+    g_settings.mono   = boot.mono;
+    g_settings.border = boot.border;
+    g_settings.volume = boot.volume;
+    g_settings.turbo  = boot.turbo;
     display_set_look(g_settings.mono, g_settings.border);
+    if (boot.backlight) (void)sb_write(SB_REG_BKL, (uint8_t)(boot.backlight * 16u), NULL);
 #if PICO_ATOM_MEASURE_PRESENT
     display_test_pattern();
     printf("  M3 pattern   : white border on (32,64)-(287,255); corners "
@@ -301,7 +359,7 @@ static void core1_main(void) {
 #endif
     display_invalidate();
 
-    /* 3. The card, while core 0 waits: loading writes the ROMs into the
+    /* 4. The ROMs, while core 0 waits: loading writes the ROMs into the
      *    machine, the one time core 1 touches atom_t (roms.h). */
     roms_report_t report;
     bool ok = roms_load(&g_atom, &report);
@@ -312,16 +370,17 @@ static void core1_main(void) {
      *    opens. */
     if (ok && storage_mount() == 0) {
         keymapio_scan();
+        boot_media(&boot);
 #ifdef PICO_ATOM_BOOT_TAPE
         /* In the deck, stopped, for a run driven over the UART, where
-         * the menu cannot be reached. */
+         * the menu cannot be reached. Over the settings file's. */
         const char *err = tapeio_insert(&g_atom, PICO_ATOM_BOOT_TAPE);
         printf("  tape         : boot tape %s: %s\n", PICO_ATOM_BOOT_TAPE,
                err ? err : "in the deck");
 #endif
 #ifdef PICO_ATOM_BOOT_DISC
         /* In drive 0, for a run driven over the UART, where the menu
-         * cannot be reached. */
+         * cannot be reached. Over the settings file's. */
         const char *derr = discio_insert(&g_atom, 0, PICO_ATOM_BOOT_DISC);
         printf("  disc         : boot disc %s: %s\n", PICO_ATOM_BOOT_DISC,
                derr ? derr : "in drive 0");
@@ -489,13 +548,11 @@ int main(void) {
                "will not be the ones this build assumes\n");
     }
 
+    /* Core 1 configures the machine from the settings file and loads
+     * the ROMs into it (settingsio.h, roms.h). */
     atom_config_t cfg;
     atom_config_default(&cfg);
     atom_init(&g_atom, &cfg);
-    printf("  guest        : %u cycles/field at %u Hz, flyback %u, %u KiB address space\n",
-           (unsigned)atom_cycles_per_field(&g_atom), g_atom.cfg.field_hz,
-           (unsigned)atom_flyback_cycles(&g_atom),
-           (unsigned)(ATOM_ADDR_SPACE / 1024u));
 #if !PICO_ATOM_HAVE_FONT
     printf("  WARNING: no MC6847 character ROM supplied; alpha mode will "
            "draw placeholder cells (design.md §16)\n");
@@ -511,6 +568,10 @@ int main(void) {
      * (design.md §1, §11.1). */
     while (!g_c1.ready) sleep_ms(1);
     __dmb();
+    printf("  guest        : %u cycles/field at %u Hz, flyback %u, %u KiB address space\n",
+           (unsigned)ATOM_CYCLES_PER_FIELD, ATOM_FIELD_HZ,
+           (unsigned)ATOM_FLYBACK_CYCLES,
+           (unsigned)(ATOM_ADDR_SPACE / 1024u));
     if (!g_c1.roms_ok) {
         printf("  guest        : not started — no ROMs (the panel says which)\n");
         for (;;) sleep_ms(1000);
@@ -529,9 +590,11 @@ int main(void) {
            (unsigned long)(rate_num / rate_den % 1000u / 10u),
            (unsigned)g_atom.beeper.num, (unsigned)g_atom.beeper.den,
            (unsigned)ATOM_DMA_RING_SLOTS);
+    audio_set_volume(g_settings.volume * 32u);   /* the settings file's */
 #else
     printf("  audio        : disabled; pacing on the microsecond timer\n");
 #endif
+    keymatrix_set_layout(&g_keys, g_settings.layout);
 
     atom_reset(&g_atom);   /* the vectors arrived with the kernel */
     printf("  guest        : started at #%04X; hot code in SRAM to tier %u "
@@ -543,7 +606,7 @@ int main(void) {
     audio_stats_t au_last = { 0 };
 #else
     uint32_t late = 0;
-    const uint32_t field_us = 1000000u / g_atom.cfg.field_hz;
+    const uint32_t field_us = 1000000u / ATOM_FIELD_HZ;
     absolute_time_t next = get_absolute_time();
 #endif
     uint64_t hb_us = time_us_64(), hb_cycles = g_atom.cpu.cycles;
@@ -555,7 +618,7 @@ int main(void) {
 #if !PICO_ATOM_AUDIO
         /* Absolute, not incremental, so a late field does not accumulate
          * (§12.2). Turbo runs unpaced and restarts the schedule after. */
-        if (PICO_ATOM_TURBO && atom_cassette_playing(&g_atom)) {
+        if (turbo_now()) {
             next = get_absolute_time();
         } else {
             next = delayed_by_us(next, field_us);
@@ -598,7 +661,7 @@ int main(void) {
             pool_publish(i);
         }
 
-        bool turbo = PICO_ATOM_TURBO && atom_cassette_playing(&g_atom);
+        bool turbo = turbo_now();
         if (turbo) turbo_fields++;
 #if PICO_ATOM_AUDIO
         size_t n = atom_audio_drain(&g_atom, pcm, ATOM_AUDIO_BUF_LEN);
@@ -638,7 +701,7 @@ int main(void) {
          * stands still while core 1 reads the card. */
         if (atom_disc_request(&g_atom)) park(HANDOFF_DISC);
 
-        if (++field % (g_atom.cfg.field_hz * 5u) == 0) {
+        if (++field % (ATOM_FIELD_HZ * 5u) == 0) {
             /* Real-time ratio, guest seconds per wall second, in
              * thousandths: the headline number (§12.3). */
             uint64_t now = time_us_64();

@@ -120,7 +120,7 @@ static void state_encode(const atom_t *m, uint8_t st[SNAP_STATE_LEN]) {
     st[S_OPEN_BUS] = m->open_bus;
     put32(st + S_BUDGET, (uint32_t)m->budget);
     st[S_CFG] = cfg_bits(&m->cfg);
-    put16(st + S_FIELD_HZ, (uint16_t)m->cfg.field_hz);
+    put16(st + S_FIELD_HZ, (uint16_t)ATOM_FIELD_HZ);   /* kept for the format */
     rom_hash(m, st + S_ROMS);
 
     /* The 8271's setup, which the DOS writes once at *DOS and a
@@ -201,7 +201,7 @@ static snap_status_t read_header(snap_read_fn read, void *ctx, uint32_t *crc) {
 /* Would this state resume on this machine? */
 static snap_status_t compatible(const atom_t *m, const uint8_t st[SNAP_STATE_LEN]) {
     if (st[S_CFG] != cfg_bits(&m->cfg)) return SNAP_OTHER_MACHINE;
-    if (get16(st + S_FIELD_HZ) != m->cfg.field_hz) return SNAP_OTHER_MACHINE;
+    if (get16(st + S_FIELD_HZ) != ATOM_FIELD_HZ) return SNAP_OTHER_MACHINE;
     uint8_t roms[SHA1_DIGEST_LEN];
     rom_hash(m, roms);
     if (memcmp(roms, st + S_ROMS, sizeof roms) != 0) return SNAP_OTHER_ROMS;

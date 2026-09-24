@@ -48,7 +48,6 @@ typedef struct {
     bool atomdos;         /* 8271 FDC at #0A00 — steals 8 bytes of page #0A */
     bool tape_traps;      /* serve OSLOAD/OSSAVE from files (tape.h, §11.2) */
     bool tape_cues;       /* the deck follows the MOS's PLAY TAPE (§11.3) */
-    unsigned field_hz;    /* 50 or 60; §16 medium confidence, so configurable */
 } atom_config_t;
 
 typedef struct atom_s {
@@ -210,18 +209,5 @@ void atom_audio_set_rate(atom_t *m, uint32_t rate_num, uint32_t rate_den);
  * guest cycles at the nominal rate; atom_run leaves every sample that
  * ended before its last instruction ready to drain (§4.1). */
 size_t atom_audio_drain(atom_t *m, int16_t *dst, size_t max);
-
-/* Cycles in one field, from the configured field rate (§12.1).
- * atom_init sanitises field_hz, but cfg is public and callers can reach
- * in afterwards, so the divide is guarded here too — it costs one
- * compare per field, not per instruction. */
-static inline uint32_t atom_cycles_per_field(const atom_t *m) {
-    unsigned hz = m->cfg.field_hz ? m->cfg.field_hz : ATOM_FIELD_HZ_DEFAULT;
-    return (uint32_t)(ATOM_CPU_HZ / hz);
-}
-
-static inline uint32_t atom_flyback_cycles(const atom_t *m) {
-    return atom_cycles_per_field(m) * ATOM_FLYBACK_PERCENT / 100u;
-}
 
 #endif /* PICO_ATOM_ATOM_H */

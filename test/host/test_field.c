@@ -58,7 +58,7 @@ int main(void) {
     /* ---- debt carries across both halves and across fields ----------- */
     {
         atom_t *m = machine();
-        uint64_t want = (uint64_t)fields * atom_cycles_per_field(m);
+        uint64_t want = (uint64_t)fields * ATOM_CYCLES_PER_FIELD;
         uint64_t start = m->cpu.cycles;   /* the reset sequence counts too */
         uint64_t ran = 0;
         for (unsigned f = 0; f < fields; f++) ran += atom_run_field(m);
@@ -78,7 +78,7 @@ int main(void) {
     {
         atom_t *m = machine();
         for (unsigned f = 0; f < fields; f++) {
-            m->budget += (int32_t)atom_cycles_per_field(m);
+            m->budget += (int32_t)ATOM_CYCLES_PER_FIELD;
             if (m->budget > 0) m->budget -= (int32_t)atom_run(m, (uint32_t)m->budget);
             atom_field_sync(m, true);
             atom_field_sync(m, false);
@@ -105,13 +105,10 @@ int main(void) {
     }
 
     /* ---- the flyback interval is the §12.1 figure -------------------- */
-    {
-        atom_t *m = machine();
-        /* 6 % of 16,666 truncates to 999. */
-        CHECK(atom_flyback_cycles(m) == 999u,
-              "flyback should be 6 %% of a 60 Hz field, got %u cycles",
-              (unsigned)atom_flyback_cycles(m));
-    }
+    /* 6 % of 16,666 truncates to 999. */
+    CHECK(ATOM_FLYBACK_CYCLES == 999u,
+          "flyback should be 6 %% of a 60 Hz field, got %u cycles",
+          (unsigned)ATOM_FLYBACK_CYCLES);
 
     TEST_DONE();
 }

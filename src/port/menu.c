@@ -14,6 +14,7 @@
 #include "keymapio.h"
 #include "keymatrix.h"
 #include "log.h"
+#include "settingsio.h"
 #include "snapio.h"
 #include "southbridge.h"
 #include "storage.h"
@@ -543,6 +544,8 @@ void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram) {
     /* A layout a tape chose says so (§10.5). */
     if (!s.status[0] && s.set->layout && s.set->keys_tape[0])
         snprintf(s.status, sizeof s.status, " KEYS CHOSEN BY %.16s", s.set->keys_tape);
+    /* The settings file's first problem (§11.7), each time it opens. */
+    if (!s.status[0] && settingsio_error()[0]) say(" %.30s", settingsio_error());
 
     uint8_t r[2] = { 0, 0 };
     s.backlight = sb_read(SB_REG_BKL, r) == SB_OK ? r[1] : 0u;

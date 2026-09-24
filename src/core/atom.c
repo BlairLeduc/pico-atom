@@ -18,7 +18,6 @@ void atom_config_default(atom_config_t *cfg) {
     cfg->atomdos        = true;    /* the 8271; harmless without dosrom.rom */
     cfg->tape_traps     = true;
     cfg->tape_cues      = true;
-    cfg->field_hz       = ATOM_FIELD_HZ_DEFAULT;
 }
 
 static void map_open(atom_t *m, unsigned first_page, unsigned last_page) {
@@ -55,11 +54,6 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
     memset(m, 0, sizeof(*m));
     m->cfg = *cfg;
 
-    /* The field rate is configuration rather than a constant (§16, §18),
-     * which means it can arrive wrong. Zero would divide by zero in
-     * atom_cycles_per_field, so it is sanitised once, here, rather than
-     * defended against at every use. */
-    if (m->cfg.field_hz == 0) m->cfg.field_hz = ATOM_FIELD_HZ_DEFAULT;
     m->open_bus = 0xFFu;
 
     map_open(m, 0x00u, 0xFFu);
@@ -222,10 +216,10 @@ static uint32_t run_budget(atom_t *m) {
 }
 
 uint32_t atom_run_field(atom_t *m) {
-    uint32_t flyback = atom_flyback_cycles(m);
+    uint32_t flyback = ATOM_FLYBACK_CYCLES;
     uint32_t done = 0;
 
-    m->budget += (int32_t)(atom_cycles_per_field(m) - flyback);
+    m->budget += (int32_t)(ATOM_CYCLES_PER_FIELD - flyback);
     done += run_budget(m);
 
     /* Guest instructions must execute while FS is low, or the flag is

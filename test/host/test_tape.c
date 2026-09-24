@@ -164,8 +164,8 @@ static bool call(atom_t *m, uint16_t entry, bool reference) {
     m->cpu.x = BLOCK;
     m->cpu.pc = entry;
 
-    uint32_t per_field = atom_cycles_per_field(m);
-    uint32_t flyback = atom_flyback_cycles(m);
+    uint32_t per_field = ATOM_CYCLES_PER_FIELD;
+    uint32_t flyback = ATOM_FLYBACK_CYCLES;
     for (int field = 0; field < 60 * 600; field++) {
         for (uint32_t done = 0; done < per_field;) {
             atom_field_sync(m, done >= per_field - flyback);
