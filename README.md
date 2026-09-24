@@ -168,7 +168,8 @@ PicoCalc starts, use the settings file below.
 
 **Settings** at power-on come from `/atom/pico-atom.cfg` on the card, if there
 is one. Each line sets one thing, and a setting the file leaves out keeps its
-default. This file sets every one of them to its default:
+default. This file shows every setting, at its default except the backlight,
+which is left alone unless the file sets it:
 
 ```
 # /atom/pico-atom.cfg
@@ -187,7 +188,8 @@ dos       = on         # the disc controller, for AtomDOS
 
 A name without a leading `/` is looked for in the tape or disc folder, and a
 path starting with `/` is used as written, spaces included. Upper and lower
-case are the same. A `#` starts a comment. If a line is wrong, the PicoCalc
+case are the same. A `#` at the start of a line or after a space starts a
+comment, so a file name may still contain one. If a line is wrong, the PicoCalc
 skips that line and still uses the rest. Something the card does not have, such
 as a layout, tape or disc, is skipped the same way. The menu's bottom row then
 names the first problem, for example `CFG LINE 3: NO SUCH SETTING`.

@@ -302,7 +302,7 @@ Following hardware notes §9.5 — core 1 owns the slow peripherals:
 | | Core 0 | Core 1 |
 |---|---|---|
 | Owns | 6502, 8255, VDG state, tape, audio synthesis, SD requests | LCD, southbridge I²C, SD transfers |
-| Per field | run ~16,667 guest cycles, emit PCM, snapshot VRAM | expand snapshot → RGB565 bands → DMA; poll keyboard |
+| Per field | run 16,666 guest cycles, emit PCM, snapshot VRAM | expand snapshot → RGB565 bands → DMA; poll keyboard |
 | Blocks on | audio ring fill level (§12.2) | DMA completion (polled), I²C |
 
 Handoff is an **immutable snapshot with explicit ownership**, over a pool of
@@ -1618,7 +1618,9 @@ the one accepted violator of it (hardware notes §5.4, §7.2).
 to. Every default the emulator has is in one place, `settings_default()`
 (`src/core/settings.c`), which takes the guest's from `atom_config_default()`
 (§7.2). The file names only what it changes, one `key = value` a line, in the
-same format as a `.map` file (§10.5):
+same format as a `.map` file (§10.5). A `#` at the start of a line or after
+white space starts a comment, so a value can be annotated and a file name can
+still hold a `#`:
 
 | Key | Values | Default |
 |---|---|---|
@@ -1673,7 +1675,7 @@ file.
 |---|---:|
 | Guest CPU | 1,000,000 cycles/s |
 | VDG field rate | 60 Hz (§16, confirmed) |
-| Guest cycles per field | 16,667 |
+| Guest cycles per field | 16,666 |
 | `FS` (port C bit 7) low for | the flyback interval, ~6 % of a field |
 
 Core 0 runs in **field-sized slices** with cycle-debt carry-forward. The slice

@@ -62,6 +62,18 @@ int main(void) {
     CHECK(parse(&s, "screen = color\n", &line) == SET_OK && !s.mono, "American colour");
     CHECK(parse(&s, "tape =\ndrive0 =   \n", &line) == SET_OK && !s.tape[0], "empty means none");
 
+    /* ---- comments after a value, as the README writes them ------------ */
+    CHECK(parse(&s, "screen = mono     # or colour\r\n"
+                    "volume = 3\t# 0-8\n"
+                    "tape   =          # none\n", &line) == SET_OK && line == 0,
+          "trailing comments: line %u", line);
+    CHECK(s.mono && s.volume == 3u && !s.tape[0], "trailing comments stripped");
+    CHECK(parse(&s, "drive0 = /atom/discs/side#2.ssd # the second\n", &line) == SET_OK &&
+          strcmp(s.drive[0], "/atom/discs/side#2.ssd") == 0,
+          "a # inside a path is kept: %s", s.drive[0]);
+    CHECK(parse(&s, "screen # = mono\n", &line) == SET_SYNTAX && line == 1,
+          "a comment before the = leaves no value");
+
     /* ---- a bad line changes nothing, and the rest still apply --------- */
     {
         static const struct { const char *text; settings_status_t st; } bad[] = {

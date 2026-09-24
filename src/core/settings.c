@@ -104,9 +104,21 @@ static settings_status_t apply(settings_t *s, unsigned k, const char *v) {
     return SET_UNKNOWN;
 }
 
+/* A `#` at the start of a line or after a space starts a comment, so a
+ * value may be annotated and a path may still hold a `#` (§11.7). */
+static void strip_comment(char *line) {
+    for (char *p = line; *p; p++) {
+        if (*p == '#' && (p == line || isspace((unsigned char)p[-1]))) {
+            *p = 0;
+            return;
+        }
+    }
+}
+
 static settings_status_t parse_line(settings_t *s, char *line, unsigned *seen) {
+    strip_comment(line);
     char *t = trim(line);
-    if (!*t || *t == '#') return SET_OK;
+    if (!*t) return SET_OK;
 
     char *eq = strchr(t, '=');
     if (!eq) return SET_SYNTAX;
