@@ -121,7 +121,7 @@ Atom: the archive's 5,610 files never enable it, and the AGD games' ACR `#E0`
 only needs the T1 frame clock M4 already had. The outside world is
 `via6522_set_ca1()` and its kind. The new state is in bytes the snapshot had
 reserved, encoded so that zero means reset. The menu's Display page switches a
-mono palette (the VDG's luminance levels, so blue and red are black) and the
+mono palette (the VDG's luminance levels, off the datasheet's figure 10) and the
 VDG border (black in text modes, green or buff in graphics). The presenter
 fills the border only when its colour changes; with the border off it never
 fills it. Verified on a Plus 2 W on 2026-09-23: both settings were switched from

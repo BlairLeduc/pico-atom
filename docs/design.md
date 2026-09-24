@@ -867,13 +867,13 @@ off by default.
 
 **Monochrome.** Most Atoms were sold without the colour board, and the stock
 machine shows only the VDG's luminance output. The mono palette is the
-datasheet's Y levels with no chroma. Lower voltage is brighter: 0.72 V for
-black, blue and red; 0.54 V for green, cyan, magenta and orange; 0.42 V for
-yellow and buff. They are scaled so black is black and 0.42 V is white, which
-gives three greys. So on a mono Atom, **blue and red are black**, and CG
-modes with CSS 0 show three levels, not four. Atomulator's mono palette keeps
-blue and red at mid-grey instead; §16 holds the levels until they are checked
-against the datasheet. The renderer takes the palette as a pointer, so the
+datasheet's Y levels with no chroma, read off its figure 10 (the video and
+chrominance waveforms), at the DC characteristics' typical voltages. Lower
+voltage is brighter: 0.72 V for black; 0.65 V (white low) for blue and red;
+0.54 V (white medium) for green, cyan, magenta and orange; 0.42 V (white
+high) for yellow and buff. They are scaled so black is black and 0.42 V is
+white, which gives black and three greys. So on a mono Atom blue and red are
+one dark grey, and CG modes with CSS 0 still show four levels. The renderer takes the palette as a pointer, so the
 switch rebuilds the LUT once and costs nothing per pixel.
 
 **The border.** The VDG draws a border around its 256×192 active area: black
@@ -1934,8 +1934,8 @@ class of bug in emulation.
 | VRAM byte wiring in alpha mode (§2.4) | the MOS and BASIC, executed | **confirmed** — bit 6 is `A/S` and `INT/EXT` (SG6), bit 7 is `INV`: the MOS's cursor is `#A0`, and `CLEAR 0` then `PLOT` writes `#40` plus one element bit per point; `test_boot` pins both |
 | SG6 colour from bits 7:6 (§2.4) | MC6847 datasheet; a reference emulator | **confirmed** — the datasheet's `C1:C0` = `D7:D6`, so yellow/red (cyan/orange with `CSS`); `CLEAR 0` + `PLOT` compared by eye against another Atom emulator on 2026-09-22 |
 | 2.4 kHz cassette reference period, port C bit 4 (§11.3) | Atom circuit diagram | **medium**: 416 cycles, 4 MHz ÷ 1664 = 2403.8 Hz, which MAME's Atom driver also uses. `ATOM_CASSETTE_REF_CYCLES`. The ROM reads a tape by its own loop timing, so only the speed of a signal-level save depends on it |
-| MC6847 luminance levels for the mono palette (§8.7) | MC6847 datasheet, composite output table | **medium**: 0.72 V for black, blue and red, 0.54 V for green, cyan, magenta and orange, 0.42 V for yellow and buff, written from memory of the table. Atomulator's mono palette disagrees for blue and red, which it draws mid-grey. `mc6847_palette_mono` |
-| 6522 shift rate under Φ2 (§7.4) | Rockwell R6522 datasheet, shift register timing | **medium**: a bit every two cycles, 16 for a byte, as b-em shifts. Nothing on the Atom uses these modes |
+| MC6847 luminance levels for the mono palette (§8.7) | MC6847 datasheet, figure 10 and the DC characteristics | **high**: 0.72 V for black, 0.65 V for blue and red, 0.54 V for green, cyan, magenta and orange, 0.42 V for yellow and buff (typical values). The first draft, from memory, had blue and red at black's level; figure 10 puts them at white low. `mc6847_palette_mono` |
+| 6522 shift rate under Φ2 (§7.4) | Rockwell R6522 datasheet, figure 23 (SR mode 2) | **high**: a bit every two cycles, 16 for a byte, as b-em shifts. The figure draws CB1's shift clock low for one Φ2 cycle and high for the next, eight pulses after the SR access; the text's "each Φ2 clock pulse" means those CB1 pulses. Nothing on the Atom uses these modes |
 | MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |
 
 The last one was settled the way this section asks. The table is XRoar's

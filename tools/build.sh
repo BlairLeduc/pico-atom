@@ -49,9 +49,29 @@ fi
 toolchain="$(dirname "$(dirname "$(command -v arm-none-eabi-gcc)")")"
 
 echo "build.sh: $PICO_SDK_PATH, $(basename "$toolchain") -> $dir"
-if [ ! -f "$dir/CMakeCache.txt" ] || [ ${#defs[@]} -gt 0 ]; then
-    cmake -S "$root" -B "$dir" -DPICO_BOARD=pico2 -DCMAKE_BUILD_TYPE=Release \
-        -DPICO_TOOLCHAIN_PATH="$toolchain" ${defs[@]+"${defs[@]}"}
+
+# A cache made with another SDK or compiler keeps them: CMake prefers the
+# cached PICO_SDK_PATH to the environment's and will not switch compilers
+# in place. Start that cache afresh, keeping the variant's PICO_ATOM_*
+# options, so a directory configured before an SDK update follows it.
+cache="$dir/CMakeCache.txt"
+fresh=()
+if [ -f "$cache" ]; then
+    cached() { sed -n "s/^$1:[A-Z]*=//p" "$cache"; }
+    if [ "$(cached PICO_SDK_PATH)" != "$PICO_SDK_PATH" ] ||
+       [ "$(cached CMAKE_C_COMPILER)" != "$toolchain/bin/arm-none-eabi-gcc" ]; then
+        echo "build.sh: $dir was configured with another SDK or toolchain; reconfiguring"
+        fresh=(--fresh)
+        while IFS= read -r opt; do
+            defs=("-D$opt" ${defs[@]+"${defs[@]}"})
+        done < <(sed -n 's/^\(PICO_ATOM_[A-Z0-9_]*\):[A-Z]*=/\1=/p' "$cache")
+    fi
+fi
+if [ ! -f "$cache" ] || [ ${#fresh[@]} -gt 0 ] || [ ${#defs[@]} -gt 0 ]; then
+    cmake ${fresh[@]+"${fresh[@]}"} -S "$root" -B "$dir" \
+        -DPICO_BOARD=pico2 -DCMAKE_BUILD_TYPE=Release \
+        -DPICO_SDK_PATH="$PICO_SDK_PATH" -DPICO_TOOLCHAIN_PATH="$toolchain" \
+        ${defs[@]+"${defs[@]}"}
 fi
 cmake --build "$dir" -j
 

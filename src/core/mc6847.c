@@ -26,18 +26,18 @@ const uint16_t mc6847_palette[VDG_COLOUR_COUNT] = {
 };
 
 /* A monochrome Atom: the VDG's luminance output alone, with no colour
- * board to add chroma (§8.7). The datasheet's Y levels are 0.72 V for
- * black, and for blue and red too, 0.54 V for green, cyan, magenta and
- * orange, and 0.42 V for yellow and buff; lower is brighter. Scaled so
- * that black is black and 0.42 V is white, that is three greys. §16
- * holds these levels as unconfirmed. */
+ * board to add chroma (§8.7). The datasheet's Y levels (figure 10, and
+ * the DC characteristics' typical values) are 0.72 V for black, 0.65 V
+ * for blue and red, 0.54 V for green, cyan, magenta and orange, and
+ * 0.42 V for yellow and buff; lower is brighter. Scaled so that black
+ * is black and 0.42 V is white, that is black and three greys. */
 #define GREY(y_mv) RGB565((720u - (y_mv)) * 255u / 300u, (720u - (y_mv)) * 255u / 300u, \
                           (720u - (y_mv)) * 255u / 300u)
 const uint16_t mc6847_palette_mono[VDG_COLOUR_COUNT] = {
     [VDG_GREEN]   = GREY(540u),
     [VDG_YELLOW]  = GREY(420u),
-    [VDG_BLUE]    = GREY(720u),
-    [VDG_RED]     = GREY(720u),
+    [VDG_BLUE]    = GREY(650u),
+    [VDG_RED]     = GREY(650u),
     [VDG_BUFF]    = GREY(420u),
     [VDG_CYAN]    = GREY(540u),
     [VDG_MAGENTA] = GREY(540u),

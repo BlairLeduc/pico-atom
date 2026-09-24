@@ -149,7 +149,7 @@ ROMs.
 
 The menu's *Display* page switches the screen between colour and **mono**,
 which is how most Atoms looked without the colour board. In mono, blue and red
-are as dark as black. It also turns the **border** on or off. The border is
+are the darkest grey. It also turns the **border** on or off. The border is
 the colour the video chip draws around its picture: black in text modes, and
 green or buff in the graphics modes. The backlight is on the same page.
 Neither setting is remembered across a power cycle yet.

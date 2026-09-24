@@ -415,9 +415,11 @@ int main(void) {
         mc6847_set_mono(&g_vdg, true);
         mc6847_render_row(&g_vdg, g_vram, 0, g_row);
         uint16_t black = mc6847_palette_mono[VDG_BLACK];
-        CHECK(g_row[4] == black && g_row[6] == black, "in mono, blue and red are black's level");
+        CHECK(g_row[4] == g_row[6], "in mono, blue and red are one level");
         CHECK(g_row[2] == 0xFFFFu, "yellow, at 0.42 V, is white: %04X", g_row[2]);
-        CHECK(g_row[0] != black && g_row[0] != g_row[2], "green is the grey between");
+        CHECK(g_row[4] != black && g_row[4] < g_row[0], "blue, at 0.65 V, is dark grey: %04X",
+              g_row[4]);
+        CHECK(g_row[0] != black && g_row[0] < g_row[2], "green, at 0.54 V, is the grey between");
         for (unsigned i = 0; i < VDG_COLOUR_COUNT; i++) {
             uint16_t c = mc6847_palette_mono[i];
             CHECK((c >> 11) == (c & 0x1Fu) && ((c >> 5) & 0x3Fu) >> 1 == (c & 0x1Fu),

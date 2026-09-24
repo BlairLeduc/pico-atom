@@ -43,7 +43,7 @@ static uint8_t port_in(uint8_t out, uint8_t ddr, uint8_t pins) {
 /* ---- the shift register ------------------------------------------------ */
 
 /* CB1 half-cycles take T2's low latch + 2 cycles, or one cycle of Φ2
- * (§16: the rate of the Φ2 modes). */
+ * (R6522 datasheet figure 23; §16). */
 static int16_t sr_half_period(const via6522_t *v) {
     uint8_t mode = via6522_sr_mode(v);
     return (mode == VIA_SR_IN_PHI2 || mode == VIA_SR_OUT_PHI2)

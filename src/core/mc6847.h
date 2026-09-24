@@ -69,7 +69,7 @@ typedef enum {
 extern const uint16_t mc6847_palette[VDG_COLOUR_COUNT];
 
 /* The same nine through a monochrome Atom's luminance alone (§8.7):
- * blue and red are as dark as black, and there are three greys. */
+ * black and three greys, blue and red the darkest of them. */
 extern const uint16_t mc6847_palette_mono[VDG_COLOUR_COUNT];
 
 /* The border the VDG draws around the active area (§8.7): black in the
