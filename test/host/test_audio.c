@@ -142,7 +142,7 @@ int main(void) {
     {
         atom_t *m = machine(toggle, sizeof(toggle));
         size_t ns = 0;
-        for (unsigned f = 0; f < m->cfg.field_hz; f++) {
+        for (unsigned f = 0; f < ATOM_FIELD_HZ; f++) {
             atom_run_field(m);
             ns += atom_audio_drain(m, samples + ns, MAX_SAMPLES - ns);
         }

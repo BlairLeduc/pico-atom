@@ -25,6 +25,7 @@ set(PICO_ATOM_CORE_SOURCES
     src/core/m6502.c
     src/core/mc6847.c
     src/core/romset.c
+    src/core/settings.c
     src/core/sha1.c
     src/core/snappool.c
     src/core/snapshot.c
@@ -113,6 +114,7 @@ else()
         src/port/display.c
         src/port/kbd.c
         src/port/keymapio.c
+        src/port/settingsio.c
         src/port/lcd.c
         src/port/log.c
         src/port/roms.c

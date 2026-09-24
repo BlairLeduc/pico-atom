@@ -60,8 +60,8 @@ static void fields_recorded(int n) {
     atom_t *m = &g.m;
     for (int i = 0; i < n; i++) {
         keymatrix_field(&g.k, m);
-        uint32_t fly = atom_flyback_cycles(m);
-        run_recorded(m, atom_cycles_per_field(m) - fly);
+        uint32_t fly = ATOM_FLYBACK_CYCLES;
+        run_recorded(m, ATOM_CYCLES_PER_FIELD - fly);
         atom_field_sync(m, true);
         run_recorded(m, fly);
         atom_field_sync(m, false);

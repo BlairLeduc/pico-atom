@@ -114,6 +114,12 @@ const char *tapeio_insert(atom_t *m, const char *path) {
         printf("  tape         : %s: %u bytes of UEF in the deck, stopped, first file "
                "\"%s\", %lu us\n", path, (unsigned)len, s_first,
                (unsigned long)(time_us_32() - t0));
+    } else {
+        /* The menu lists only files that are there; a settings file or a
+         * build's boot tape may name anything (§11.7). */
+        FILINFO fi;
+        if (!has_ext(path, ".atm")) return "NOT A TAPE";
+        if (f_stat(path, &fi) != FR_OK || (fi.fattrib & AM_DIR)) return "CANNOT OPEN";
     }
     strcpy(s_inserted, path);
     return NULL;

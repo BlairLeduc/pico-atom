@@ -302,7 +302,7 @@ Following hardware notes §9.5 — core 1 owns the slow peripherals:
 | | Core 0 | Core 1 |
 |---|---|---|
 | Owns | 6502, 8255, VDG state, tape, audio synthesis, SD requests | LCD, southbridge I²C, SD transfers |
-| Per field | run ~16,667 guest cycles, emit PCM, snapshot VRAM | expand snapshot → RGB565 bands → DMA; poll keyboard |
+| Per field | run 16,666 guest cycles, emit PCM, snapshot VRAM | expand snapshot → RGB565 bands → DMA; poll keyboard |
 | Blocks on | audio ring fill level (§12.2) | DMA completion (polled), I²C |
 
 Handoff is an **immutable snapshot with explicit ownership**, over a pool of
@@ -1581,7 +1581,8 @@ file saved before M10 still loads, as a VIA with idle lines.
 
 **ROM bytes are not in it.** ROM pages go out as zeros and the SHA-1 of every ROM
 page goes in instead; a snapshot loads only into a machine whose ROMs hash the
-same, and only into the same memory map and field rate. Acorn's images are the
+same, and only into the same memory map. The field rate is still written,
+now always 60 (§16), so that files saved before it became a constant load. Acorn's images are the
 user's to supply (§1), and a program resumed over different ROMs is §16's worst
 kind of bug.
 
@@ -1611,6 +1612,59 @@ writes inside the frame loop, ever: erase takes tens of milliseconds with XIP
 offline and interrupts masked, which is longer than the audio deadline and is
 the one accepted violator of it (hardware notes §5.4, §7.2).
 
+### 11.7 The settings file
+
+`/atom/pico-atom.cfg` (§11.1) is how the user chooses the machine they power up
+to. Every default the emulator has is in one place, `settings_default()`
+(`src/core/settings.c`), which takes the guest's from `atom_config_default()`
+(§7.2). The file names only what it changes, one `key = value` a line, in the
+same format as a `.map` file (§10.5). A `#` at the start of a line or after
+white space starts a comment, so a value can be annotated and a file name can
+still hold a `#`:
+
+| Key | Values | Default |
+|---|---|---|
+| `screen` | `colour`, `mono` (§8.7) | `colour` |
+| `border` | `on`, `off` (§8.7) | `off` |
+| `backlight` | 1–15, the menu's steps of 16 (hardware notes §4.11) | the southbridge's own |
+| `volume` | 0–8 | 8 |
+| `keys` | `standard` or a layout's name (§10.5) | `standard` |
+| `tape` | a tape in the deck at boot, stopped (§11.2, §11.3) | none |
+| `turbo` | `on`, `off`: unpaced while a UEF plays (§11.3) | `on` |
+| `drive0`, `drive1` | a disc image in the drive at boot (§11.4) | none |
+| `upper_ram` | `on`, `off`: RAM at `#4000`–`#7FFF` (§7.2) | `on` |
+| `dos` | `on`, `off`: the 8271 at `#0A00` (§11.4) | `on` |
+
+A bare file name is looked for in `/atom/tapes/` or `/atom/discs/`, and a path
+from the root is taken as it stands. The VIA, the tape trap and the deck's cues
+are not settings, although `atom_config_t` has flags for them. The MOS hangs
+without the VIA, and without the trap or the cues a tape does not load. The
+field rate is not a setting either. Every Atom runs at 60 Hz (§16), and
+software counts on it.
+
+**Read once, at boot, by core 1, before the ROMs.** Some of the file is the
+machine's configuration. With `dos = off`, `dosrom.rom` is not loaded, so core 1
+runs `atom_init()` with the file's `atom_config_t` while core 0 waits. That is
+the same window in which `roms_load` writes the machine (§4.2). The layout, the
+tape and the discs are applied after the ROMs and the card's layouts are in,
+before `ready`. A build's `PICO_ATOM_BOOT_TAPE` or `PICO_ATOM_BOOT_DISC` wins
+over the file, because a run driven over the UART must know what it booted with.
+
+**A wrong line changes nothing, and the lines after it still apply.** A `.map`
+file is refused whole, because a partly applied layout is a different layout.
+A settings line stands alone, so one typing mistake should not cost the rest of
+the file. The same goes for a line that parses but names something the card
+does not have: an unknown layout, or a tape or disc that will not go in. In each
+case the first problem is logged and kept for the menu's status row
+(`settingsio.c`). A duplicate key is an error, not last-one-wins, so that
+nothing about the file depends on the order of its lines. The parser is tested
+on the host (`test_settings`).
+
+**The emulator never writes the file.** It is the user's text, with the user's
+comments, and a menu change lasts until power-off. Persisting menu changes is
+still §11.6's job, and when that exists it must decide how it relates to this
+file.
+
 ---
 
 ## 12. Timing and synchronisation
@@ -1620,8 +1674,8 @@ the one accepted violator of it (hardware notes §5.4, §7.2).
 | | |
 |---|---:|
 | Guest CPU | 1,000,000 cycles/s |
-| VDG field rate | 60 Hz nominal (§16 — confirm) |
-| Guest cycles per field | 16,667 |
+| VDG field rate | 60 Hz (§16, confirmed) |
+| Guest cycles per field | 16,666 |
 | `FS` (port C bit 7) low for | the flyback interval, ~6 % of a field |
 
 Core 0 runs in **field-sized slices** with cycle-debt carry-forward. The slice
@@ -1750,7 +1804,8 @@ at the new level: core 0, parked, plays 120 ms of the bell's pitch at the
 guest's own loudness in place of the silence it feeds the queue.
 The table below is the full intent; machine and display settings wait
 for the milestones that give them something to set, and settings are not yet
-persisted to flash (§11.6).
+persisted to flash (§11.6). What the machine powers up with comes from the
+settings file (§11.7), and the menu's status row names the file's first problem.
 
 | Menu | Does |
 |---|---|
@@ -1807,6 +1862,7 @@ pico-atom/
 │   │   ├── uef.c/.h            # phase 2: a UEF image as half-cycles (§11.3)
 │   │   ├── cassette.c/.h       # the half-cycles on port C, in guest cycles
 │   │   ├── inflate.c/.h        # gzip, for UEF images
+│   │   ├── settings.c/.h       # every default, and /atom/pico-atom.cfg (§11.7)
 │   │   └── snapshot.c/.h
 │   ├── port/                   # PicoCalc + SDK
 │   │   ├── main.c              # bring-up order per hardware notes §10
@@ -1831,6 +1887,7 @@ pico-atom/
 │   │   ├── test_field.c        # §12.1: a guest polling FS sees it low and escapes
 │   │   ├── test_present.c      # §8.4 dirty bands by execution; §4.2 snapshot pool
 │   │   ├── test_keymap.c
+│   │   ├── test_settings.c     # §11.7's parser and the defaults
 │   │   ├── test_tape.c
 │   │   ├── test_uef.c          # inflate against gzip; the waveform to the cycle
 │   │   └── test_cassette.c     # the ROM's own SAVE recorded, decoded, loaded back
@@ -1927,7 +1984,7 @@ class of bug in emulation.
 | VDG mode bit order in port A bits 7–4 | Atom circuit diagram | **confirmed** — `A/G` is bit 4, `GM0`–`GM2` bits 5–7, read off the schematic. §2.3 had this right; an earlier §2.4 had `A/G` at bit 7 and has been corrected |
 | Keyboard matrix cell assignments (10×6) | the kernel ROM's scan at `#FE71`, executed | **confirmed** — every cell pressed at the `>` prompt with and without SHIFT and the MOS's output read from VRAM; the table is in `keymap_picocalc.c` and `test_boot` re-checks it against the ROM |
 | `OSLOAD`/`OSSAVE` entry addresses and page-2 vectors (§11.2) | the kernel ROM, disassembled and executed | **confirmed** — `#FFE0` is `JMP (#020C)`, `#FFDD` is `JMP (#020E)`, and reset points them at `#F96E` and `#FAE5`; `test_tape` runs both routines and holds the trap to what they leave |
-| VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source | **medium** — affects §12.1 throughout |
+| VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source; owners' accounts | **confirmed** — 60 Hz on every Atom, UK machines included: the MC6847 is an NTSC part, and UK owners had to adjust their TV's vertical hold to lock to it. Software times itself on it (BASIC's `WAIT` is one field sync, 1/60 s), so it is `ATOM_FIELD_HZ`, a constant; it was `atom_config_t.field_hz` while unverified |
 | `FS` low interval, ~6 % of a field (§12.1) | MC6847 datasheet, `FS` timing | **low** — `ATOM_FLYBACK_PERCENT`; software polls the edge, so the length matters less than that it exists |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
 | 8271 base address `#0A00` (§7.3) | the DOS ROM, disassembled and executed | **confirmed** — `#0A00`–`#0A02` and data at `#0A04` (`#E84F`), not `#0A00`–`#0A03` as first written; INT on NMI through `#0200` (`#EEEF`); `test_disc` runs the DOS against the model |
@@ -1990,7 +2047,7 @@ everything after it is refinement.
 | **Core 1 saturates during full-screen scrolling** (§8.4) | visible stutter in the most common BASIC operation | 30 Hz presentation decimation is designed in from M3, not retrofitted; measure at M3 before M4 depends on it |
 | **Keyboard chords the southbridge cannot deliver** (§10.3) | some Atom keys unreachable | keymap is a data table validated by a host test that knows the swallowed-chord list; Alt layer as the escape hatch |
 | **Wrong keyboard matrix transcription** (§16) | machine types the wrong characters; looks like a CPU bug | transcribe from the service manual, test against a reference emulator's matrix, verify on hardware at M4 |
-| **Field rate 50 vs 60 Hz** (§16) | timing-sensitive software runs at the wrong speed; audio pitch is wrong | make it a configuration value from the start rather than a constant |
+| **Field rate 50 vs 60 Hz** (§16) | timing-sensitive software runs at the wrong speed | was configuration while unverified; settled at 60 Hz and now a constant |
 | **MOS vector addresses wrong** (§11.2) | tape loading silently fails or corrupts | phase 2 signal-level tape does not depend on them at all — which is the real argument for doing phase 2 |
 | **Tearing on full-screen change** (§8.5) | cosmetic | accepted; band presents localise it. No TE line exists to fix it with |
 | **SRAM growth past budget** | link failure, or worse, a heap that fails at runtime | `config.h` plus a linker-map check in CI; §5 has 70 % headroom to start |

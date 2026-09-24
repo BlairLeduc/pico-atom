@@ -31,6 +31,10 @@ typedef struct {
     bool     mono;
     bool     border;
 
+    /* Run unpaced while a UEF plays (§11.3); the settings file's, and
+     * not on the menu. */
+    bool     turbo;
+
     /* The game keymap, NULL for the standard map (§10.5), and the ATM
      * name of the tape whose load chose it, "" if the user did. Core 0
      * applies it once it has the machine back. */

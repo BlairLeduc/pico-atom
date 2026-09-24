@@ -151,30 +151,9 @@ int main(void) {
         CHECK(m->page[0x99].write == NULL, "a one-byte map must not spill into #9900");
     }
 
-    /* ---- the field rate is configuration, not a constant (§18) ------- */
-    {
-        atom_config_t fifty = cfg;
-        fifty.field_hz = 50;
-        atom_t *m = machine(&fifty);
-        CHECK(atom_cycles_per_field(m) == 20000, "50 Hz should give 20000 cycles per field");
-        m = machine(&cfg);
-        CHECK(atom_cycles_per_field(m) == 16666, "60 Hz should give 16666 cycles per field");
-
-        /* field_hz is public configuration, so it can arrive as zero.
-         * That must not divide by zero — atom_init sanitises it, and the
-         * accessor guards the divide for anything that reaches into cfg
-         * afterwards. */
-        atom_config_t zero = cfg;
-        zero.field_hz = 0;
-        m = machine(&zero);
-        CHECK(m->cfg.field_hz == ATOM_FIELD_HZ_DEFAULT,
-              "atom_init should sanitise a zero field rate, got %u", m->cfg.field_hz);
-        CHECK(atom_cycles_per_field(m) == 16666, "a sanitised field rate should still divide");
-
-        m->cfg.field_hz = 0;   /* reached in behind atom_init's back */
-        CHECK(atom_cycles_per_field(m) == 16666,
-              "atom_cycles_per_field must not divide by zero");
-    }
+    /* ---- the field rate is a constant, 60 Hz (§16) ------------------- */
+    CHECK(ATOM_CYCLES_PER_FIELD == 16666, "60 Hz should give 16666 cycles per field, got %u",
+          (unsigned)ATOM_CYCLES_PER_FIELD);
 
     TEST_DONE();
 }

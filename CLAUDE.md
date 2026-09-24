@@ -133,8 +133,17 @@ events; call `via6522_sync()` before reading them from outside. M10 now runs
 
 Nothing after M10 is named in design.md §17 yet.
 
+The settings file (design.md §11.7): `/atom/pico-atom.cfg` sets what the
+machine powers up with: screen, border, backlight, volume, keys, tape, turbo,
+drives 0 and 1, upper RAM and AtomDOS. `settings_default()` is
+where every default lives. Core 1 reads the file once, before the ROMs, and
+re-runs `atom_init` with its machine configuration while core 0 waits. A wrong
+line is skipped, and the first problem goes to the menu's status row. The
+emulator never writes the file. On a Plus 2 W on 2026-09-24 a card without the
+file booted on the defaults; a card with one has not been tried on the board yet.
+
 What does not exist: recording at signal level
-(saves still go to `.atm` files), the status band, settings persisted to
+(saves still go to `.atm` files), the status band, menu changes persisted to
 flash (§11.6).
 
 ## The two documents
@@ -232,6 +241,7 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/keymatrix.*` | held-key set, paced replay of southbridge events into the matrix (§10.2) |
 | `src/core/keymap_picocalc.c` | PicoCalc code -> Atom cell; the cells are the kernel ROM's, by execution; the built-in game layouts and the names a `.map` file may use |
 | `src/core/keylayout.c` | §10.5's `.map` parser and tape matching |
+| `src/core/settings.*` | every default, host and guest, and §11.7's parser for `/atom/pico-atom.cfg` |
 | `src/core/sha1.*`, `romset.*` | identify ROM images by hash; the slot table from §11.1 |
 | `src/port/board.*` | clocks and board identification |
 | `src/port/southbridge.*` | i2c1 register layer; refuses to read `RST` (`0x08`), which resets the MCU |
@@ -246,6 +256,7 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/port/tapeio.*` | serves a stalled tape call from `/atom/tapes/`; the tape list and the inserted tape; a `.uef` decompressed into the deck's 64 KiB buffer |
 | `src/port/discio.*` | serves the FDC's sector requests from `/atom/discs/` images (`.ssd`, `.dsk`, `.40t`, `.dsd`); the menu's disc list; the image in each drive |
 | `src/port/snapio.*` | snapshot slots in `/atom/snaps/`: temp file, publish, recovery on load |
+| `src/port/settingsio.*` | reads `/atom/pico-atom.cfg` at boot; the first problem for the menu's status row |
 | `src/port/keymapio.*` | the layouts the menu offers: built-in, then `/atom/keymaps/`; the first parse error for the status row |
 | `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer |
 | `src/port/main.c` | core 0's field loop, turbo while a tape plays, core 1's bring-up and live present; the park/handoff that gives core 1 the machine for tape calls and the menu; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
@@ -379,6 +390,11 @@ time. They apply to every driver in `src/port/`:
   primary sources before they become `#define`s; do not treat the document
   as authoritative for them. The keyboard matrix and the `OSLOAD`/`OSSAVE`
   entry points were settled that way, by executing the kernel ROM.
+- **The field rate is settled: 60 Hz, `ATOM_FIELD_HZ`.** Every Atom, UK ones
+  included, sent 60 Hz; owners adjusted their TV's vertical hold to lock to
+  it, and BASIC's `WAIT` is one field, 1/60 s. It was `atom_config_t.field_hz`
+  while unverified and is a constant now, like the port A bits below. Do not
+  make it configurable again.
 - **The port A mode bits are settled: `A/G` is bit 4**, `GM0`–`GM2` are bits
   5–7, read off the Atom circuit diagram. §2.3 had this right and §2.4 had it
   backwards; §2.4 has been corrected and §16's row now records the answer. The
