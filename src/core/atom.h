@@ -112,8 +112,9 @@ void atom_reset(atom_t *m);
 /* Seed BASIC's RND, #08-#0C (§7.2). atom_init zero-fills RAM, and RND
  * is a 33-bit shift register (#C986) that never leaves zero, where a
  * real Atom powers up with whatever its RAM held. The port passes the
- * board's entropy after atom_init; a host test passes a constant. A
- * seed whose 33 bits are all zero is made non-zero. */
+ * board's entropy after atom_init; a host test passes a constant. Only
+ * the register's 33 bits are written, and a seed whose 33 bits are all
+ * zero is made non-zero. */
 void atom_seed_rnd(atom_t *m, uint64_t seed);
 
 /* Run at least `cycles` guest cycles, finishing whole instructions.

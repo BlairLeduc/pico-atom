@@ -1734,8 +1734,10 @@ ASTEROI was played with its rocks drawn whole, and `RND` gave different
 numbers after a power cycle; idle, the guest took 43 % of core 0 with 2.30×
 headroom, inside §6.3's range.
 
-The line counts are XRoar's (§16): `FS` falls after the last active line and
-rises 32 lines later, and the first active line is 38 lines after that. A line
+The line counts are the MC6847 datasheet's (§16). Figure 8 has `FS` low for
+32 lines of a 262-line field. Figure 13 has it fall at the end of the 192
+active lines, with 26 of bottom border and 6 of retrace after them, and 13 of
+vertical blanking and 25 of top border before the next active line. A line
 is 63.6 cycles, so `config.h` scales each part from the 16,666-cycle field.
 
 Within a slice, the audio integrator emits a sample every 27.31 guest cycles via
@@ -2015,7 +2017,7 @@ class of bug in emulation.
 | Keyboard matrix cell assignments (10×6) | the kernel ROM's scan at `#FE71`, executed | **confirmed** — every cell pressed at the `>` prompt with and without SHIFT and the MOS's output read from VRAM; the table is in `keymap_picocalc.c` and `test_boot` re-checks it against the ROM |
 | `OSLOAD`/`OSSAVE` entry addresses and page-2 vectors (§11.2) | the kernel ROM, disassembled and executed | **confirmed** — `#FFE0` is `JMP (#020C)`, `#FFDD` is `JMP (#020E)`, and reset points them at `#F96E` and `#FAE5`; `test_tape` runs both routines and holds the trap to what they leave |
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source; owners' accounts | **confirmed** — 60 Hz on every Atom, UK machines included: the MC6847 is an NTSC part, and UK owners had to adjust their TV's vertical hold to lock to it. Software times itself on it (BASIC's `WAIT` is one field sync, 1/60 s), so it is `ATOM_FIELD_HZ`, a constant; it was `atom_config_t.field_hz` while unverified |
-| `FS` low interval, and the lines from `FS` to the first active line (§12.1) | MC6847 datasheet, `FS` timing | **medium** — XRoar's `mc6847.h`: 262 lines, 192 active, `FS` low for the 32 after them, 38 more before the next active line (`ATOM_FS_LOW_LINES`, `ATOM_BLANK_LINES`); not yet checked against the datasheet. It was ~6 % of a field, a guess, and that length did matter: ending the field at `FS`'s rise caught games mid-redraw |
+| `FS` low interval, and the lines from `FS` to the first active line (§12.1) | MC6847 datasheet, `FS` timing | **confirmed** — the datasheet's figure 8: `tWFS` is 32 lines, `tPFS` 262. Figure 13: `FS` falls at the end of the 192 active lines, and the next active line is 13 blank and 25 top-border lines after the 26 + 6 it is low for (`ATOM_FS_LOW_LINES`, `ATOM_BLANK_LINES`). XRoar's `mc6847.h` agrees. It was ~6 % of a field, a guess, and that length did matter: ending the field at `FS`'s rise caught games mid-redraw |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
 | 8271 base address `#0A00` (§7.3) | the DOS ROM, disassembled and executed | **confirmed** — `#0A00`–`#0A02` and data at `#0A04` (`#E84F`), not `#0A00`–`#0A03` as first written; INT on NMI through `#0200` (`#EEEF`); `test_disc` runs the DOS against the model |
 | VRAM byte wiring in alpha mode (§2.4) | the MOS and BASIC, executed | **confirmed** — bit 6 is `A/S` and `INT/EXT` (SG6), bit 7 is `INV`: the MOS's cursor is `#A0`, and `CLEAR 0` then `PLOT` writes `#40` plus one element bit per point; `test_boot` pins both |

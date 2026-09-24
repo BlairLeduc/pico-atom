@@ -306,8 +306,14 @@ int main(void) {
     {
         uint64_t seed = 0;
         for (unsigned i = 0; i < 5; i++) seed |= (uint64_t)booted.ram[0x08u + i] << (8u * i);
-        CHECK(seed == GUEST_RND_SEED, "the seed should survive the reset, #08-#0C hold %010llX",
-              (unsigned long long)seed);
+        CHECK(seed == (GUEST_RND_SEED & 0x1FFFFFFFFull),
+              "the seed should survive the reset, #08-#0C hold %010llX", (unsigned long long)seed);
+
+        /* Only the 33 bits are the register's; #0C bits 1-7 stay zero. */
+        static atom_t s;
+        atom_seed_rnd(&s, ~0ull);
+        CHECK(s.ram[0x0B] == 0xFF && s.ram[0x0C] == 0x01, "a seed writes 33 bits, #0C = %02X",
+              s.ram[0x0C]);
 
         long a = 0, b = 0;
         restore();

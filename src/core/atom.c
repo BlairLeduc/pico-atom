@@ -111,8 +111,10 @@ void atom_reset(atom_t *m) {
 
 void atom_seed_rnd(atom_t *m, uint64_t seed) {
     /* The register is #08-#0B and bit 0 of #0C; the rest of #0C is
-     * shifted in from it (#C990). */
-    if ((seed & 0x1FFFFFFFFull) == 0) seed |= 1u;
+     * shifted in from it (#C998) and never read, so it keeps its
+     * zero like the rest of RAM. */
+    seed &= 0x1FFFFFFFFull;
+    if (seed == 0) seed = 1u;
     for (unsigned i = 0; i < 5; i++) m->ram[0x08u + i] = (uint8_t)(seed >> (8u * i));
 }
 

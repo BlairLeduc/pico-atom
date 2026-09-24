@@ -60,8 +60,9 @@
 /* A field is the MC6847's 262 lines (§12.1): 192 active; then FS (port
  * C bit 7) low for 32, the bottom border and retrace; then 38 more with
  * FS high, vertical blank and the top border, before the next active
- * line. The line counts are XRoar's (§16). A line is 63.6 cycles, so
- * each part is scaled from the field, not counted in whole lines. */
+ * line. The line counts are the datasheet's, figures 8 and 13 (§16). A
+ * line is 63.6 cycles, so each part is scaled from the field, not
+ * counted in whole lines. */
 #define ATOM_FIELD_LINES      262u
 #define ATOM_ACTIVE_LINES     192u
 #define ATOM_FS_LOW_LINES      32u
