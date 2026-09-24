@@ -62,7 +62,11 @@ static bool same(const atom_t *a, const atom_t *b, const char *what) {
                 (unsigned long long)x->cycles, (unsigned long long)y->cycles);
         return false;
     }
-    return memcmp(&a->via, &b->via, sizeof a->via) == 0 &&
+    /* T2 and the shift clock lag between their events (via6522.h). */
+    via6522_t va, vb;
+    memcpy(&va, &a->via, sizeof va); via6522_sync(&va);
+    memcpy(&vb, &b->via, sizeof vb); via6522_sync(&vb);
+    return memcmp(&va, &vb, sizeof va) == 0 &&
            memcmp(&a->ppi, &b->ppi, sizeof a->ppi) == 0;
 }
 

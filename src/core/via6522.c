@@ -33,6 +33,7 @@ void via6522_reset(via6522_t *v) {
     v->t1 = v->t2 = 0xFFFF;
     v->pb7 = true;
     v->ca1 = v->ca2 = v->cb1 = v->cb2 = true;
+    via6522_rearm(v);
 }
 
 static uint8_t port_in(uint8_t out, uint8_t ddr, uint8_t pins) {
@@ -85,6 +86,64 @@ static void sr_run(via6522_t *v, uint32_t cycles) {
         t += sr_half_period(v);
     }
     v->sr_timer = (int16_t)(t > 0 ? t : sr_half_period(v));
+}
+
+/* ---- the countdown ------------------------------------------------------- */
+
+/* The shift register is on the countdown only while it makes its own
+ * clock; from CB1 it moves when via6522_set_cb1 says. */
+static bool sr_timed(const via6522_t *v) {
+    return v->sr_halves && sr_clocks_cb1(via6522_sr_mode(v));
+}
+
+void via6522_rearm(via6522_t *v) {
+    int32_t ev = 0x3FFFFFFF;       /* nothing due: sync again in 18 minutes */
+    if (!(v->acr & VIA_ACR_T2_PULSES)) ev = v->t2;
+    if (sr_timed(v) && v->sr_timer - 1 < ev) ev = v->sr_timer - 1;
+    v->ev = v->ev_span = ev;
+}
+
+/* The cycles since the last sync, to T2 and the shift register as the
+ * tick used to give them an instruction at a time. Nothing they do in
+ * between is visible, so the flags come out on the same instruction. */
+void via6522_sync(via6522_t *v) {
+    int32_t elapsed = v->ev_span - v->ev;
+    if (!(v->acr & VIA_ACR_T2_PULSES)) {
+        v->t2 -= elapsed;
+        while (v->t2 < 0) {
+            if (v->t2_armed) v->ifr |= VIA_INT_T2;
+            v->t2_armed = false;
+            v->t2 += 0x10000;
+        }
+    }
+    if (sr_timed(v)) sr_run(v, (uint32_t)elapsed);
+    via6522_rearm(v);
+}
+
+/* T1 ran out, or the countdown did. Out of line, so that the tick is a
+ * leaf that saves nothing (§6.3). */
+__attribute__((noinline, cold)) static void due(via6522_t *v) {
+    while (v->t1 < 0) {
+        if (v->acr & VIA_ACR_T1_FREERUN) {
+            /* The counter holds -1 for a cycle and reloads on the next,
+             * so the period is latch + 2 (6522 data sheet, T1 free-run),
+             * and PB7 is a square wave of twice that. */
+            if (v->t1_armed) v->ifr |= VIA_INT_T1;
+            v->pb7 = !v->pb7;
+            v->t1 += (int32_t)v->t1_latch + 2;
+        } else {
+            if (v->t1_armed) { v->ifr |= VIA_INT_T1; v->pb7 = true; }
+            v->t1_armed = false;
+            v->t1 += 0x10000;      /* one-shot keeps counting, silently */
+        }
+    }
+    if (v->ev < 0) via6522_sync(v);
+}
+
+void ATOM_HOT1(via6522_tick)(via6522_t *v, uint32_t cycles) {
+    v->t1 -= (int32_t)cycles;
+    v->ev -= (int32_t)cycles;
+    if (__builtin_expect((v->t1 | v->ev) < 0, 0)) due(v);
 }
 
 /* ---- the control lines --------------------------------------------------- */
@@ -194,12 +253,17 @@ uint8_t ATOM_HOT1(via6522_read)(via6522_t *v, uint8_t reg) {
     case VIA_T1LL:   return (uint8_t)v->t1_latch;
     case VIA_T1LH:   return (uint8_t)(v->t1_latch >> 8);
     case VIA_T2CL:
+        via6522_sync(v);
         v->ifr = (uint8_t)(v->ifr & ~VIA_INT_T2);
         return (uint8_t)v->t2;
-    case VIA_T2CH:   return (uint8_t)((uint16_t)v->t2 >> 8);
+    case VIA_T2CH:
+        via6522_sync(v);
+        return (uint8_t)((uint16_t)v->t2 >> 8);
     case VIA_SR: {
+        via6522_sync(v);
         uint8_t r = v->sr;
         sr_start(v);
+        via6522_rearm(v);
         return r;
     }
     case VIA_ACR:    return v->acr;
@@ -233,18 +297,29 @@ void ATOM_HOT1(via6522_write)(via6522_t *v, uint8_t reg, uint8_t val) {
         v->t1_latch = (uint16_t)((v->t1_latch & 0x00FFu) | (val << 8));
         v->ifr = (uint8_t)(v->ifr & ~VIA_INT_T1);
         break;
+    /* The shift clock's next half-cycle takes the new latch. No sync:
+     * every edge is on the countdown, so none is pending here. */
     case VIA_T2CL:   v->t2_latch_lo = val; break;
     case VIA_T2CH:
+        via6522_sync(v);
         v->t2 = (int32_t)(v->t2_latch_lo | (val << 8));
         v->t2_armed = true;
         v->ifr = (uint8_t)(v->ifr & ~VIA_INT_T2);
+        via6522_rearm(v);
         break;
-    case VIA_SR:     v->sr = val; sr_start(v); break;
+    case VIA_SR:
+        via6522_sync(v);
+        v->sr = val;
+        sr_start(v);
+        via6522_rearm(v);
+        break;
     case VIA_ACR:
+        via6522_sync(v);
         v->acr = val;
         /* Turned off, the shift register stops where it is. */
         if (via6522_sr_mode(v) == VIA_SR_OFF) v->sr_halves = 0;
         c2_outputs(v);
+        via6522_rearm(v);
         break;
     case VIA_PCR:    v->pcr = val; c2_outputs(v); break;
     case VIA_IFR:
@@ -257,35 +332,4 @@ void ATOM_HOT1(via6522_write)(via6522_t *v, uint8_t reg, uint8_t val) {
         else             v->ier = (uint8_t)(v->ier & ~val);
         break;
     }
-}
-
-void ATOM_HOT1(via6522_tick)(via6522_t *v, uint32_t cycles) {
-    v->t1 -= (int32_t)cycles;
-    while (v->t1 < 0) {
-        if (v->acr & VIA_ACR_T1_FREERUN) {
-            /* The counter holds -1 for a cycle and reloads on the next,
-             * so the period is latch + 2 (6522 data sheet, T1 free-run),
-             * and PB7 is a square wave of twice that. */
-            if (v->t1_armed) v->ifr |= VIA_INT_T1;
-            v->pb7 = !v->pb7;
-            v->t1 += (int32_t)v->t1_latch + 2;
-        } else {
-            if (v->t1_armed) { v->ifr |= VIA_INT_T1; v->pb7 = true; }
-            v->t1_armed = false;
-            v->t1 += 0x10000;      /* one-shot keeps counting, silently */
-        }
-    }
-
-    /* Counting pulses on PB6 is via6522_set_pb's. */
-    if (!(v->acr & VIA_ACR_T2_PULSES)) {
-        v->t2 -= (int32_t)cycles;
-        if (v->t2 < 0) {
-            if (v->t2_armed) v->ifr |= VIA_INT_T2;
-            v->t2_armed = false;
-            v->t2 += 0x10000;
-        }
-    }
-
-    if (__builtin_expect(v->sr_halves != 0, 0) && sr_clocks_cb1(via6522_sr_mode(v)))
-        sr_run(v, cycles);
 }

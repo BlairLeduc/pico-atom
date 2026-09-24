@@ -19,6 +19,13 @@
  * level on a pin, and the outputs are fields to read (`pa_out()`,
  * `pb_out()`, `ca2`, `cb1`, `cb2`). Timing is to the instruction: the
  * machine ticks the chip once per instruction with its cycle count.
+ *
+ * The tick costs M9's or less whatever the chip is doing (§6.3): it
+ * counts T1 and one countdown to the next thing T2 or the shift
+ * register will do, and does the rest out of line when either runs
+ * out. So `t2` and `sr_timer` lag between those events; the register
+ * reads that show them bring them up to date, and anything else that
+ * looks at them calls via6522_sync() first.
  */
 #ifndef PICO_ATOM_VIA6522_H
 #define PICO_ATOM_VIA6522_H
@@ -85,6 +92,11 @@ typedef struct {
     uint8_t  sr_halves;
     int16_t  sr_timer;
 
+    /* Cycles, less one, to T2's underflow or the shift clock's next
+     * edge, whichever is sooner; the tick counts it down. `ev_span` is
+     * what it was set to, so the cycles since are ev_span - ev. */
+    int32_t  ev, ev_span;
+
     /* Pulses put out on CA2 and CB2 in pulse mode; a pulse lasts one
      * cycle, which is shorter than anything here can see as a level. */
     uint16_t ca2_pulses, cb2_pulses;
@@ -98,6 +110,12 @@ void    via6522_write(via6522_t *v, uint8_t reg, uint8_t val);
  * instruction with its cycle count, so an interrupt is seen at the next
  * instruction boundary, which is when the 6502 samples IRQ anyway. */
 void    via6522_tick(via6522_t *v, uint32_t cycles);
+
+/* Bring `t2` and `sr_timer` up to date, for a reader of the struct. */
+void    via6522_sync(via6522_t *v);
+
+/* After storing the fields directly (a snapshot load): count from them. */
+void    via6522_rearm(via6522_t *v);
 
 /* The outside world. A level that does not change does nothing; an
  * active edge sets its flag, latches its port, ends a handshake, or

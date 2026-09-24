@@ -130,6 +130,39 @@ int main(void) {
         CHECK(v.ifr == 0 && !via6522_irq(&v), "writing IFR clears flags");
     }
 
+    /* ---- T2 and the shift clock between their events ------------------ */
+    {
+        /* The tick leaves them behind (via6522.h); a read catches up. */
+        via6522_t v; fresh(&v);
+        via6522_write(&v, VIA_T2CL, 0xE8);
+        via6522_write(&v, VIA_T2CH, 0x03);                 /* 1000 */
+        for (unsigned c = 0; c < 300; c++) via6522_tick(&v, 1);
+        CHECK(via6522_read(&v, VIA_T2CL) == 0xBC && via6522_read(&v, VIA_T2CH) == 0x02,
+              "T2 reads 700 after 300 cycles a tick at a time");
+        for (unsigned c = 0; c < 700; c++) via6522_tick(&v, 1);
+        CHECK(!(v.ifr & VIA_INT_T2), "not at zero");
+        via6522_tick(&v, 1);
+        CHECK(v.ifr & VIA_INT_T2, "flags on the cycle past zero");
+        via6522_tick(&v, 3 * 0x10000 + 5);
+        CHECK(via6522_read(&v, VIA_T2CL) == 0xFA && via6522_read(&v, VIA_T2CH) == 0xFF,
+              "and counts on through its wraps: #%02X%02X",
+              via6522_read(&v, VIA_T2CH), via6522_read(&v, VIA_T2CL));
+
+        /* Mode 5 at T2 latch 3 is a half-cycle every 5. A new latch
+         * written mid-byte takes effect from the next edge: the fifth, at
+         * 25, then eleven more of 10 put the flag at 135. */
+        fresh(&v);
+        via6522_write(&v, VIA_T2CL, 3);
+        via6522_write(&v, VIA_ACR, VIA_SR_OUT_T2 << VIA_ACR_SR_SHIFT);
+        via6522_write(&v, VIA_SR, 0x55);
+        for (unsigned c = 0; c < 22; c++) via6522_tick(&v, 1);
+        via6522_write(&v, VIA_T2CL, 8);
+        for (unsigned c = 22; c < 134; c++) via6522_tick(&v, 1);
+        CHECK(!(v.ifr & VIA_INT_SR), "not done at 134");
+        via6522_tick(&v, 1);
+        CHECK(v.ifr & VIA_INT_SR, "done at 135");
+    }
+
     /* ---- T1 on PB7 ---------------------------------------------------- */
     {
         via6522_t v; fresh(&v);
@@ -384,6 +417,7 @@ int main(void) {
         bus_write(m, 0xB80A, 0xC3);
         via6522_tick(v, 50);                               /* mid-byte */
         via6522_t before = *v;
+        via6522_sync(&before);
         snap.pos = 0;
         CHECK(snapshot_save(m, mem_write, NULL) == SNAP_OK, "save");
 

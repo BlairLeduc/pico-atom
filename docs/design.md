@@ -521,6 +521,30 @@ from 2.40× to 2.32×. The first version cost 18 %, three calls on every
 port C read. Turbo while a tape plays measured 2.7–2.8×, the headroom of the
 MOS's tape loops.
 
+**At M10** the whole VIA (§7.4) first cost 2.5–4 % on every workload, against
+a control build of M9 run in the same sitting: the shift register, inlined
+into the per-instruction tick, grew its prologue, and the tick checked the
+shift register after every instruction. Moving the shift register out of line
+recovered half. Then the tick became a countdown. It subtracts from T1 and
+from one counter to whatever T2 or the shift register does next, and calls
+out of line only when one of them runs out. That made it nine instructions
+with no stack frame, shorter than M9's, which tested the ACR every time:
+
+| Workload | M9 | M10 first built | M10 shipped |
+|---|---:|---:|---:|
+| idle | 214.9 | 221.0 | 204.2 (−5.0 %) |
+| compute | 171.7 | 177.8 | 161.7 (−5.8 %) |
+| scroll | 233.0 | 238.9 | 224.5 (−3.6 %) |
+| bell | 155.3 | 161.7 | 145.7 (−6.2 %) |
+
+Host cycles per instruction on a Plus 2 W, 2026-09-23. Each build was run
+twice, and so was M9, four times across the sitting, reading within 0.1 every
+time. Headroom is now 2.31–3.15×. The control read 36,620 Hz in every row,
+with no underruns and no late refills. Removing only the PB7 lines from the
+first build recovered another 1 %, but a build with M9's tick shape still
+stayed about 1 % above M9, so part of what the countdown won is outside the
+tick.
+
 ### 6.4 Interrupts and reset
 
 - `RES` — the Atom's **BREAK key is wired to reset**, so the UI maps a host key
@@ -665,7 +689,10 @@ user-port device would use the same calls. Timing is to the instruction, like
 the rest of the machine. The new state is in the snapshot (§11.5). A
 free-running shift under Φ2 is the only mode that has to be ticked
 cycle-exactly, and even then it is 16 steps a byte, out of line from the timers'
-per-instruction path.
+per-instruction path. That path counts T1 and a single countdown to T2's next
+underflow or the shift clock's next edge, and nothing else (§6.3). So T2's
+count and the shift clock lag between those events; a read of T2 or SR brings
+them up to date, and so does the snapshot.
 
 ---
 
@@ -1945,7 +1972,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M7** | Perf pass | real-time ratio measured and reported; SRAM placement of hot code measured per hardware notes §9.2, tier by tier, stopping where returns say to — **done** 2026-09-23 on a Plus 2 W: headroom 2.2–2.9× real time, 158–218 host cycles per guest instruction (§6.3); tier 2 ships, 1.12–1.19× for 25 KiB; tier 3 measured nothing; core 1's `sleep_us` was interrupting core 0, and fixing it was worth 1.11× |
 | **M8** | Tape phase 2 (UEF at signal level), turbo clock | a UEF image that phase 1 cannot load, loads — **done** 2026-09-23 on a Plus 2 W: Chuckie Egg's two-part UEF, 45 blocks through its own BASIC loader, loaded at 2.7–2.8× under turbo and was played (§11.3). On the host, the kernel's own `SAVE`, recorded at signal level, loads back through its own `LOAD`, and a headerless block loads through a loader phase 1 never sees |
 | **M9** | AtomDOS + 8271, 6522 VIA | an `.ssd` boots — **done** 2026-09-23 on a Plus 2 W: `*DOS`, `*CAT` off a 40-track image, `LOAD"INVADER"` read 19 sectors over tracks 35–37 and ran; `*SAVE` wrote the catalogue and two sectors and `*CAT` then listed the file; a disc changed from the menu was noticed and its catalogue read; Galaxians loaded off `games1.dsk` and was played. A track off the card takes 17–19 ms to read and 25–27 ms to write, with the guest parked; underruns and late refills stayed at zero. The VIA was fitted at M4 (§7.3); its shift register and handshake lines were completed at M10 |
-| **M10** | The whole 6522 (§7.4); monochrome and the VDG border (§8.7) | every VIA mode driven through its pins on the host, and the new state through a snapshot; the mono palette and the border colour asserted by execution; on a Plus 2 W, both settings switched from the menu and seen on the panel, and the perf workloads measured against M9 |
+| **M10** | The whole 6522 (§7.4); monochrome and the VDG border (§8.7) | every VIA mode driven through its pins on the host, and the new state through a snapshot; the mono palette and the border colour asserted by execution; on a Plus 2 W, both settings switched from the menu and seen on the panel, and the perf workloads measured against M9 — **done** 2026-09-23 on a Plus 2 W: both settings switched from the menu and seen on the panel; the perf workloads 3.6–6.2 % faster than M9, after the first build measured 2.5–4 % slower (§6.3) |
 
 M4 is the milestone that matters; everything before it is scaffolding and
 everything after it is refinement.

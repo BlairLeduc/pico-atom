@@ -92,7 +92,10 @@ static void state_encode(const atom_t *m, uint8_t st[SNAP_STATE_LEN]) {
     *q++ = ppi->out_a; *q++ = ppi->out_b; *q++ = ppi->out_c; *q++ = ppi->control;
     *q++ = ppi->in_c;
 
-    const via6522_t *v = &m->via;
+    /* T2 and the shift clock as of now, not as of their last event. */
+    via6522_t via_now = m->via;
+    via6522_sync(&via_now);
+    const via6522_t *v = &via_now;
     q = st + S_VIA;
     *q++ = v->orb; *q++ = v->ora; *q++ = v->ddrb; *q++ = v->ddra;
     *q++ = v->in_a; *q++ = v->in_b; *q++ = v->sr; *q++ = v->acr; *q++ = v->pcr;
@@ -282,6 +285,7 @@ snap_status_t snapshot_load(atom_t *m, snap_read_fn read, void *ctx) {
     v->sr_halves = halves > 16u ? 16u : halves;
     v->sr_timer = (int16_t)get16(q);
     v->ca2_pulses = v->cb2_pulses = 0;
+    via6522_rearm(v);
 
     m->in_flyback = st[S_FLYBACK] != 0;
     m->open_bus = st[S_OPEN_BUS];

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M9 are done; M10 is built and passes on the host, not yet checked on hardware** (`docs/design.md` §17).
+**Implementation status: M0–M10 are done** (`docs/design.md` §17).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -113,7 +113,7 @@ changed from the menu noticed, Galaxians played off `games1.dsk`. A track takes
 17–19 ms to read off the card and 25–27 ms to write, with zero underruns.
 `PICO_ATOM_BOOT_DISC` puts an image in drive 0 for a UART-driven run.
 
-M10 is built and passes on the host: the whole 6522 (`via6522.c`, design.md §7.4) and
+M10 is done: the whole 6522 (`via6522.c`, design.md §7.4) and
 the display's look (§8.7). The VIA gained both ports' input latches, CA1/CA2/
 CB1/CB2 in every PCR mode, T1's PB7 output, T2 counting PB6 pulses, and the
 shift register in all eight modes. None of that is wired to anything on an
@@ -124,7 +124,12 @@ reserved, encoded so that zero means reset. The menu's Display page switches a
 mono palette (the VDG's luminance levels, so blue and red are black) and the
 VDG border (black in text modes, green or buff in graphics). The presenter
 fills the border only when its colour changes; with the border off it never
-fills it.
+fills it. Verified on a Plus 2 W on 2026-09-23: both settings were switched from
+the menu and seen on the panel. As first built, the VIA cost 2.5–4 % on every
+perf workload against an M9 control. Its tick now counts T1 and one countdown
+to T2's or the shift register's next event, so `t2` and `sr_timer` lag between
+events; call `via6522_sync()` before reading them from outside. M10 now runs
+3.6–6.2 % faster than M9 (§6.3).
 
 Nothing after M10 is named in design.md §17 yet.
 
@@ -317,7 +322,7 @@ a plausible-looking change silently breaks:
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
   in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
-  at M10 `.bss` is ~219 KiB, of which 64 KiB is the UEF deck, and `.data`
+  at M10 `.bss` is ~222 KiB, of which 64 KiB is the UEF deck, and `.data`
   ~27 KiB (the SRAM-resident interpreter) of the 520 KiB budget.
 - **Copy a machine with `atom_copy`, never `=`.** The page table points into
   `ram[]`, so a struct assignment leaves the copy reading and writing the
