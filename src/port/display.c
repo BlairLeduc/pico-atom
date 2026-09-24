@@ -20,6 +20,13 @@ static uint8_t  s_shadow[ATOM_VRAM_SIZE];
 static uint8_t  s_presented_mode;
 static bool     s_valid;
 
+/* §8.7's settings, and the colour the border was last filled with:
+ * black to begin with, since lcd_init clears the panel. Nothing else
+ * draws outside the rectangle, so an invalidate leaves it be, and with
+ * the border off it is never filled at all. */
+static bool     s_border;
+static uint16_t s_border_rgb = 0x0000u;
+
 /* DMA ping-pong (§4.6); sized for the full panel width so the status
  * band can use them too. */
 static uint16_t s_line[ATOM_LINEBUF_COUNT][ATOM_LINEBUF_PIXELS];
@@ -32,6 +39,28 @@ void display_init(const uint8_t *font) {
 
 void display_invalidate(void) {
     s_valid = false;
+}
+
+void display_set_look(bool mono, bool border) {
+    mc6847_set_mono(&s_vdg, mono);
+    s_border = border;
+    display_invalidate();
+}
+
+/* The panel around the Atom's rectangle, in four fills: 53,248 pixels,
+ * about as many as the rectangle itself, so it goes only when its
+ * colour changes, a mode change between alpha and graphics or of CSS in
+ * graphics (§8.7). */
+static bool fill_border(uint8_t mode) {
+    uint16_t rgb = s_border ? s_vdg.pal[mc6847_border(mode)] : 0x0000u;
+    if (rgb == s_border_rgb) return false;
+    const unsigned x1 = ATOM_SCREEN_X + ATOM_SCREEN_W, y1 = ATOM_SCREEN_Y + ATOM_SCREEN_H;
+    lcd_fill(0, 0, ATOM_PANEL_W, ATOM_SCREEN_Y, rgb);
+    lcd_fill(0, y1, ATOM_PANEL_W, ATOM_PANEL_H - y1, rgb);
+    lcd_fill(0, ATOM_SCREEN_Y, ATOM_SCREEN_X, ATOM_SCREEN_H, rgb);
+    lcd_fill(x1, ATOM_SCREEN_Y, ATOM_PANEL_W - x1, ATOM_SCREEN_H, rgb);
+    s_border_rgb = rgb;
+    return true;
 }
 
 /* Send display rows [y0, y0+h) of columns [x0..x1] as one window.
@@ -65,10 +94,12 @@ void display_present(const uint8_t *vram, uint8_t mode, display_stats_t *st) {
     if (!s_valid || mode != s_presented_mode) {
         /* §8.4 step 1: a correctness requirement, not an optimisation. */
         mc6847_set_mode(&s_vdg, mode);
+        s.border = fill_border(mode);
         send_rows(vram, mode, 0, ATOM_SCREEN_H, 0, ATOM_SCREEN_W - 1u);
         s.full = true;
         s.bands = ATOM_BAND_COUNT;
-        s.pixels = ATOM_SCREEN_W * ATOM_SCREEN_H;
+        s.pixels = ATOM_SCREEN_W * ATOM_SCREEN_H +
+                   (s.border ? ATOM_PANEL_W * ATOM_PANEL_H - ATOM_SCREEN_W * ATOM_SCREEN_H : 0u);
     } else {
         for (unsigned band = 0; band < ATOM_BAND_COUNT; band++) {
             uint16_t x0, x1;

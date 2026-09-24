@@ -68,6 +68,15 @@ typedef enum {
 
 extern const uint16_t mc6847_palette[VDG_COLOUR_COUNT];
 
+/* The same nine through a monochrome Atom's luminance alone (§8.7):
+ * black and three greys, blue and red the darkest of them. */
+extern const uint16_t mc6847_palette_mono[VDG_COLOUR_COUNT];
+
+/* The border the VDG draws around the active area (§8.7): black in the
+ * alphanumeric and semigraphics modes, green or buff by CSS in the
+ * graphics modes. */
+vdg_colour_t mc6847_border(uint8_t mode);
+
 /* ---- the character ROM ---------------------------------------------- */
 
 #define MC6847_FONT_GLYPHS ATOM_FONT_GLYPHS   /* 64 */
@@ -131,6 +140,7 @@ typedef struct {
     uint8_t mode;          /* packed; VDG_MODE_MASK                     */
     bool    lut_valid;
     uint8_t lut_px;        /* pixels per LUT entry for the current mode */
+    const uint16_t *pal;   /* mc6847_palette, or the mono one           */
 
     /* One entry per byte value, already horizontally stretched (§8.3).
      * Worst case 16 pixels x 2 B x 256 = 8 KiB, which is ATOM_LUT_SIZE. */
@@ -152,6 +162,9 @@ void mc6847_set_mode(mc6847_t *v, uint8_t mode);
  * carry a guess: with no font set, alpha mode renders a placeholder that
  * is obviously wrong rather than subtly wrong. */
 void mc6847_set_font(mc6847_t *v, const uint8_t *font);
+
+/* Colour or monochrome (§8.7). Rebuilds the LUT when it changes. */
+void mc6847_set_mono(mc6847_t *v, bool mono);
 static inline bool mc6847_has_font(const mc6847_t *v) { return v->font != NULL; }
 
 /* Generate one display row (0..191) as ATOM_SCREEN_W RGB565 pixels.

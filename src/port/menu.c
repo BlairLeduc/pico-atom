@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "hardware/sync.h"
 #include "pico/stdlib.h"
 
 #include "discio.h"
@@ -38,10 +39,15 @@
 #define BKL_MAX   240u
 
 enum {
-    I_RESUME, I_SAVE, I_LOAD, I_DELETE, I_TAPES, I_DISCS, I_KEYS, I_RESET, I_VOLUME,
-    I_BACKLIGHT,
+    I_RESUME, I_DISCS, I_TAPES, I_SNAPS, I_DISPLAY, I_KEYS, I_VOLUME, I_RESET,
     I_COUNT
 };
+
+/* The snapshot page: left and right choose the slot on any row (§11.5). */
+enum { S_SLOT, S_SAVE, S_LOAD, S_DELETE, S_COUNT };
+
+/* The display page (§8.7). */
+enum { D_COLOUR, D_BORDER, D_BACKLIGHT, D_COUNT };
 
 #define TAPE_ROWS 11
 
@@ -66,6 +72,14 @@ static struct {
     unsigned         n_tapes;
     int              tape_sel, tape_top;
 
+    /* The snapshot page. */
+    bool             snaps;
+    int              snap_sel;
+
+    /* The display page. */
+    bool             display;
+    int              display_sel;
+
     /* The disc page: row 0 empties the drive, the images follow. */
     bool             discs;
     unsigned         n_discs;
@@ -84,14 +98,11 @@ static void say(const char *fmt, const char *arg) {
 
 static void draw_main(void) {
     char line[TEXT_COLS + 1];
-    const char *slot_state = !s.card ? "NO CARD" : s.used[s.slot] ? "SAVED" : "EMPTY";
 
     for (int i = 0; i < I_COUNT; i++) {
         switch (i) {
         case I_RESUME: snprintf(line, sizeof line, " RESUME"); break;
-        case I_SAVE:   snprintf(line, sizeof line, " SAVE SNAPSHOT   < SLOT %u >", s.slot + 1u); break;
-        case I_LOAD:   snprintf(line, sizeof line, " LOAD SNAPSHOT   < SLOT %u >", s.slot + 1u); break;
-        case I_DELETE: snprintf(line, sizeof line, " DELETE SNAPSHOT < SLOT %u >", s.slot + 1u); break;
+        case I_SNAPS:  snprintf(line, sizeof line, " SNAPSHOTS..."); break;
         case I_TAPES:  snprintf(line, sizeof line, " TAPES..."); break;
         case I_DISCS:  snprintf(line, sizeof line, " DISCS..."); break;
         case I_KEYS:
@@ -99,16 +110,11 @@ static void draw_main(void) {
                      s.set->layout ? s.set->layout->name : "STANDARD");
             break;
         case I_RESET:  snprintf(line, sizeof line, " RESET (BREAK)"); break;
-        case I_VOLUME: snprintf(line, sizeof line, " VOLUME          < %u >", s.set->volume); break;
-        case I_BACKLIGHT:
-            snprintf(line, sizeof line, " BACKLIGHT       < %u >", s.backlight / BKL_STEP);
-            break;
+        case I_VOLUME: snprintf(line, sizeof line, " VOLUME < %u >", s.set->volume); break;
+        case I_DISPLAY: snprintf(line, sizeof line, " DISPLAY..."); break;
         }
-        textpage_line(s.vram, 1 + i, line, i == s.item);
+        textpage_line(s.vram, 2 + i, line, i == s.item);
     }
-
-    snprintf(line, sizeof line, " SLOT %u: %s", s.slot + 1u, slot_state);
-    textpage_line(s.vram, 11, line, false);
 
     const char *ins = tapeio_inserted();
     const char *base = strrchr(ins, '/');
@@ -166,6 +172,43 @@ static void draw_tapes(void) {
     }
 }
 
+static void draw_snaps(void) {
+    char line[TEXT_COLS + 1];
+    for (int i = 0; i < S_COUNT; i++) {
+        switch (i) {
+        case S_SLOT:   snprintf(line, sizeof line, " SLOT            < %u >", s.slot + 1u); break;
+        case S_SAVE:   snprintf(line, sizeof line, " SAVE"); break;
+        case S_LOAD:   snprintf(line, sizeof line, " LOAD"); break;
+        case S_DELETE: snprintf(line, sizeof line, " DELETE"); break;
+        }
+        textpage_line(s.vram, 2 + i, line, i == s.snap_sel);
+    }
+    /* Every slot's state, the chosen one marked. */
+    for (unsigned i = 0; i < SNAPIO_SLOTS; i++) {
+        snprintf(line, sizeof line, "%cSLOT %u: %s", i == s.slot ? '*' : ' ', i + 1u,
+                 !s.card ? "NO CARD" : s.used[i] ? "SAVED" : "EMPTY");
+        textpage_line(s.vram, 3 + S_COUNT + (int)i, line, false);
+    }
+}
+
+static void draw_display(void) {
+    char line[TEXT_COLS + 1];
+    for (int i = 0; i < D_COUNT; i++) {
+        switch (i) {
+        case D_COLOUR:
+            snprintf(line, sizeof line, " SCREEN          < %s >", s.set->mono ? "MONO" : "COLOUR");
+            break;
+        case D_BORDER:
+            snprintf(line, sizeof line, " BORDER          < %s >", s.set->border ? "ON" : "OFF");
+            break;
+        case D_BACKLIGHT:
+            snprintf(line, sizeof line, " BACKLIGHT       < %u >", s.backlight / BKL_STEP);
+            break;
+        }
+        textpage_line(s.vram, 2 + i, line, i == s.display_sel);
+    }
+}
+
 static void draw_discs(void) {
     char line[TEXT_COLS + 1];
     snprintf(line, sizeof line, " DRIVE < %c >%.20s", (char)('0' + s.drive % 10u),
@@ -193,13 +236,18 @@ static void draw_discs(void) {
 static void draw(void) {
     textpage_clear(s.vram);
     textpage_line(s.vram, 0, s.tapes ? " PICO-ATOM: TAPES" : s.discs ? " PICO-ATOM: DISCS"
-                                                                     : " PICO-ATOM", true);
+                             : s.snaps ? " PICO-ATOM: SNAPSHOTS"
+                             : s.display ? " PICO-ATOM: DISPLAY" : " PICO-ATOM", true);
     if (s.tapes) draw_tapes();
     else if (s.discs) draw_discs();
+    else if (s.snaps) draw_snaps();
+    else if (s.display) draw_display();
     else draw_main();
     textpage_line(s.vram, 14, s.status, false);
     textpage_line(s.vram, 15, s.tapes ? " ENTER INSERTS  ESC BACK"
                               : s.discs ? " < > DRIVE  ENTER INSERTS  ESC"
+                              : s.snaps ? " < > SLOT  ENTER  ESC BACK"
+                              : s.display ? " < > CHANGES  ESC BACK"
                                         : " ARROWS  ENTER  ESC RESUMES", true);
     display_present(s.vram, 0, NULL);
 }
@@ -305,15 +353,13 @@ static void key_main(uint8_t c) {
     case PC_LEFT:
     case PC_RIGHT: {
         int dir = c == PC_RIGHT ? 1 : -1;
-        if (s.item == I_SAVE || s.item == I_LOAD || s.item == I_DELETE) {
-            s.slot = (s.slot + SNAPIO_SLOTS + (unsigned)dir) % SNAPIO_SLOTS;
-        } else if (s.item == I_KEYS) {
+        if (s.item == I_KEYS) {
             cycle_keys(dir);
         } else if (s.item == I_VOLUME) {
             int v = (int)s.set->volume + dir;
             s.set->volume = (unsigned)(v < 0 ? 0 : v > 8 ? 8 : v);
-        } else if (s.item == I_BACKLIGHT) {
-            set_backlight(dir);
+            __dmb();           /* the volume before the request for it */
+            s.set->beep++;
         }
         break;
     }
@@ -321,16 +367,65 @@ static void key_main(uint8_t c) {
         s.status[0] = 0;
         switch (s.item) {
         case I_RESUME: s.done = true; break;
-        case I_SAVE:   say(" SAVING...", ""); draw(); do_save(); break;
-        case I_LOAD:   say(" LOADING...", ""); draw(); do_load(); break;
-        case I_DELETE: do_delete(); break;
+        case I_SNAPS:  s.snaps = true; s.snap_sel = S_SAVE; break;
         case I_TAPES:  open_tapes(); break;
         case I_DISCS:  open_discs(); break;
+        case I_DISPLAY: s.display = true; s.display_sel = D_COLOUR; break;
         case I_RESET:  s.m->cpu.reset_pending = true; s.done = true; break;
         }
         break;
     case PC_ESC:
         s.done = true;
+        break;
+    }
+}
+
+static void key_snaps(uint8_t c) {
+    switch (c) {
+    case PC_UP:   s.snap_sel = (s.snap_sel + S_COUNT - 1) % S_COUNT; break;
+    case PC_DOWN: s.snap_sel = (s.snap_sel + 1) % S_COUNT; break;
+    case PC_LEFT:
+    case PC_RIGHT:
+        s.slot = (s.slot + (c == PC_RIGHT ? 1u : SNAPIO_SLOTS - 1u)) % SNAPIO_SLOTS;
+        break;
+    case PC_ENTER:
+        s.status[0] = 0;
+        switch (s.snap_sel) {
+        case S_SAVE:   say(" SAVING...", ""); draw(); do_save(); break;
+        case S_LOAD:   say(" LOADING...", ""); draw(); do_load(); break;
+        case S_DELETE: do_delete(); break;
+        }
+        break;
+    case PC_ESC:
+        s.snaps = false;
+        break;
+    }
+}
+
+/* Each change shows at once: the page itself is drawn through the
+ * renderer it changes. */
+static void key_display(uint8_t c) {
+    switch (c) {
+    case PC_UP:   s.display_sel = (s.display_sel + D_COUNT - 1) % D_COUNT; break;
+    case PC_DOWN: s.display_sel = (s.display_sel + 1) % D_COUNT; break;
+    case PC_LEFT:
+    case PC_RIGHT:
+    case PC_ENTER:
+        if (s.display_sel == D_BACKLIGHT) {
+            if (c != PC_ENTER) set_backlight(c == PC_RIGHT ? 1 : -1);
+            break;
+        }
+        if (s.display_sel == D_COLOUR) {
+            s.set->mono = !s.set->mono;
+        } else {
+            s.set->border = !s.set->border;
+            /* This page is text, and the VDG's text border is black. */
+            say(s.set->border ? " GREEN OR BUFF IN GRAPHICS MODES" : "", "");
+        }
+        display_set_look(s.set->mono, s.set->border);
+        break;
+    case PC_ESC:
+        s.display = false;
         break;
     }
 }
@@ -426,6 +521,8 @@ static void keys(void) {
         if (s.alt && (c == 'm' || c == 'M')) { s.done = true; break; }
         if (s.tapes) key_tapes(c);
         else if (s.discs) key_discs(c);
+        else if (s.snaps) key_snaps(c);
+        else if (s.display) key_display(c);
         else key_main(c);
         draw();
     }

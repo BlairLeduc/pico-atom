@@ -49,7 +49,8 @@ enum {
     S_CFG = 53, S_FIELD_HZ = 54,
     S_ROMS = 56,                  /* SHA-1 of the ROM pages, 20 bytes  */
     S_FDC = 76,                   /* mode, output, track 0, track 1, head 0, head 1, unload revs */
-    S_END = 83,                   /* the rest is reserved, written zero */
+    S_VIA2 = 83,                  /* ira irb lines sr_halves, sr_timer (M10) */
+    S_END = 89,                   /* the rest is reserved, written zero */
 };
 
 _Static_assert(S_END <= SNAP_STATE_LEN, "the state section has outgrown its length");
@@ -91,7 +92,10 @@ static void state_encode(const atom_t *m, uint8_t st[SNAP_STATE_LEN]) {
     *q++ = ppi->out_a; *q++ = ppi->out_b; *q++ = ppi->out_c; *q++ = ppi->control;
     *q++ = ppi->in_c;
 
-    const via6522_t *v = &m->via;
+    /* T2 and the shift clock as of now, not as of their last event. */
+    via6522_t via_now = m->via;
+    via6522_sync(&via_now);
+    const via6522_t *v = &via_now;
     q = st + S_VIA;
     *q++ = v->orb; *q++ = v->ora; *q++ = v->ddrb; *q++ = v->ddra;
     *q++ = v->in_a; *q++ = v->in_b; *q++ = v->sr; *q++ = v->acr; *q++ = v->pcr;
@@ -102,6 +106,15 @@ static void state_encode(const atom_t *m, uint8_t st[SNAP_STATE_LEN]) {
     put32(st + S_T2, (uint32_t)v->t2);
     st[S_T1_ARMED] = v->t1_armed;
     st[S_T2_ARMED] = v->t2_armed;
+    /* The rest of the part, from M10 (§7.4), written so that zero is
+     * the state after a reset: a file from before M10 loads as a VIA
+     * with idle lines and a stopped shift register. */
+    q = st + S_VIA2;
+    *q++ = v->ira; *q++ = v->irb;
+    *q++ = (uint8_t)((v->pb7 ? 0 : 0x01u) | (v->ca1 ? 0 : 0x02u) | (v->ca2 ? 0 : 0x04u) |
+                     (v->cb1 ? 0 : 0x08u) | (v->cb2 ? 0 : 0x10u));
+    *q++ = v->sr_halves;
+    put16(q, (uint16_t)v->sr_timer);
 
     st[S_FLYBACK] = m->in_flyback;
     st[S_OPEN_BUS] = m->open_bus;
@@ -263,6 +276,16 @@ snap_status_t snapshot_load(atom_t *m, snap_read_fn read, void *ctx) {
     v->t2 = (int32_t)get32(st + S_T2);
     v->t1_armed = st[S_T1_ARMED] != 0;
     v->t2_armed = st[S_T2_ARMED] != 0;
+    q = st + S_VIA2;
+    v->ira = *q++; v->irb = *q++;
+    uint8_t lines = *q++;
+    v->pb7 = !(lines & 0x01u); v->ca1 = !(lines & 0x02u); v->ca2 = !(lines & 0x04u);
+    v->cb1 = !(lines & 0x08u); v->cb2 = !(lines & 0x10u);
+    uint8_t halves = *q++;
+    v->sr_halves = halves > 16u ? 16u : halves;
+    v->sr_timer = (int16_t)get16(q);
+    v->ca2_pulses = v->cb2_pulses = 0;
+    via6522_rearm(v);
 
     m->in_flyback = st[S_FLYBACK] != 0;
     m->open_bus = st[S_OPEN_BUS];

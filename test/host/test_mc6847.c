@@ -400,5 +400,53 @@ int main(void) {
         }
     }
 
+    /* ---- monochrome: luminance alone (§8.7) --------------------------- */
+    {
+        /* CG6, CSS 0, one byte of each colour: green yellow blue red. */
+        uint8_t mode = mode_of(true, 6, false);
+        memset(g_vram, 0, sizeof g_vram);
+        g_vram[0] = 0x1B;
+        mc6847_init(&g_vdg);
+        mc6847_set_mode(&g_vdg, mode);
+        mc6847_render_row(&g_vdg, g_vram, 0, g_row);
+        uint16_t colour[4] = { g_row[0], g_row[2], g_row[4], g_row[6] };
+        CHECK(colour[2] != colour[3], "in colour, blue and red differ");
+
+        mc6847_set_mono(&g_vdg, true);
+        mc6847_render_row(&g_vdg, g_vram, 0, g_row);
+        uint16_t black = mc6847_palette_mono[VDG_BLACK];
+        CHECK(g_row[4] == g_row[6], "in mono, blue and red are one level");
+        CHECK(g_row[2] == 0xFFFFu, "yellow, at 0.42 V, is white: %04X", g_row[2]);
+        CHECK(g_row[4] != black && g_row[4] < g_row[0], "blue, at 0.65 V, is dark grey: %04X",
+              g_row[4]);
+        CHECK(g_row[0] != black && g_row[0] < g_row[2], "green, at 0.54 V, is the grey between");
+        for (unsigned i = 0; i < VDG_COLOUR_COUNT; i++) {
+            uint16_t c = mc6847_palette_mono[i];
+            CHECK((c >> 11) == (c & 0x1Fu) && ((c >> 5) & 0x3Fu) >> 1 == (c & 0x1Fu),
+                  "mono colour %u is a grey: %04X", i, c);
+        }
+
+        /* Text too, and back to colour gives back the colour row. */
+        mc6847_set_mode(&g_vdg, mode_of(false, 0, false));
+        g_vram[0] = 0xA0;                            /* an inverse space: all ink */
+        mc6847_render_row(&g_vdg, g_vram, 1, g_row); /* blank with or without a font */
+        CHECK(g_row[2] == mc6847_palette_mono[VDG_GREEN], "alpha ink in mono: %04X", g_row[2]);
+        mc6847_set_mono(&g_vdg, false);
+        mc6847_set_mode(&g_vdg, mode);
+        g_vram[0] = 0x1B;
+        mc6847_render_row(&g_vdg, g_vram, 0, g_row);
+        CHECK(g_row[0] == colour[0] && g_row[6] == colour[3], "colour again");
+    }
+
+    /* ---- the border (§8.7) -------------------------------------------- */
+    {
+        CHECK(mc6847_border(mode_of(false, 0, false)) == VDG_BLACK &&
+              mc6847_border(mode_of(false, 0, true)) == VDG_BLACK, "alpha: black");
+        for (unsigned gm = 0; gm < 8u; gm++) {
+            CHECK(mc6847_border(mode_of(true, gm, false)) == VDG_GREEN, "GM %u CSS 0: green", gm);
+            CHECK(mc6847_border(mode_of(true, gm, true)) == VDG_BUFF, "GM %u CSS 1: buff", gm);
+        }
+    }
+
     TEST_DONE();
 }

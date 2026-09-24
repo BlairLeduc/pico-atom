@@ -22,6 +22,15 @@
 typedef struct {
     unsigned volume;      /* 0-8; core 0 applies it as volume * 32      */
 
+    /* Bumped by the menu after it changes `volume`: core 0, parked,
+     * applies the volume and plays a short beep at it (main.c). */
+    volatile uint32_t beep;
+
+    /* The display page's (design.md §8.7). The menu applies them
+     * itself, since the presenter is core 1's too. */
+    bool     mono;
+    bool     border;
+
     /* The game keymap, NULL for the standard map (§10.5), and the ATM
      * name of the tape whose load chose it, "" if the user did. Core 0
      * applies it once it has the machine back. */
