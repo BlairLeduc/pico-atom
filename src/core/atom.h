@@ -109,15 +109,25 @@ void atom_config_default(atom_config_t *cfg);
 void atom_init(atom_t *m, const atom_config_t *cfg);
 void atom_reset(atom_t *m);
 
+/* Seed BASIC's RND, #08-#0C (§7.2). atom_init zero-fills RAM, and RND
+ * is a 33-bit shift register (#C986) that never leaves zero, where a
+ * real Atom powers up with whatever its RAM held. The port passes the
+ * board's entropy after atom_init; a host test passes a constant. Only
+ * the register's 33 bits are written, and a seed whose 33 bits are all
+ * zero is made non-zero. */
+void atom_seed_rnd(atom_t *m, uint64_t seed);
+
 /* Run at least `cycles` guest cycles, finishing whole instructions.
  * Returns the cycles actually run, which the caller carries as debt. */
 uint32_t atom_run(atom_t *m, uint32_t cycles);
 
-/* Run one field, split at the flyback boundary (§12.1): the active part
- * with FS high, then FS low and the flyback part, then FS high again.
- * The guest executes on both sides of the edge, so a program polling
- * #B002 bit 7 sees the low state and escapes. Debt carries in
- * m->budget across both halves and across fields. Returns the cycles
+/* Run one field in the MC6847's three parts (§12.1): the active lines
+ * with FS high, the bottom border and retrace with FS low, then vertical
+ * blank and the top border with FS high again. The guest executes on
+ * both sides of each edge, so a program polling #B002 bit 7 sees the
+ * low state and escapes. The field ends where the next active line
+ * begins, which is when the caller should snapshot VRAM. Debt carries
+ * in m->budget across the parts and across fields. Returns the cycles
  * actually run. */
 uint32_t atom_run_field(atom_t *m);
 

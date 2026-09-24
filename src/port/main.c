@@ -18,6 +18,7 @@
 #include "hardware/clocks.h"
 #include "hardware/sync.h"
 #include "pico/multicore.h"
+#include "pico/rand.h"
 #include "pico/stdlib.h"
 
 #include "atom.h"
@@ -568,9 +569,9 @@ int main(void) {
      * (design.md §1, §11.1). */
     while (!g_c1.ready) sleep_ms(1);
     __dmb();
-    printf("  guest        : %u cycles/field at %u Hz, flyback %u, %u KiB address space\n",
+    printf("  guest        : %u cycles/field at %u Hz, FS low %u, %u KiB address space\n",
            (unsigned)ATOM_CYCLES_PER_FIELD, ATOM_FIELD_HZ,
-           (unsigned)ATOM_FLYBACK_CYCLES,
+           (unsigned)ATOM_FS_LOW_CYCLES,
            (unsigned)(ATOM_ADDR_SPACE / 1024u));
     if (!g_c1.roms_ok) {
         printf("  guest        : not started — no ROMs (the panel says which)\n");
@@ -596,6 +597,7 @@ int main(void) {
 #endif
     keymatrix_set_layout(&g_keys, g_settings.layout);
 
+    atom_seed_rnd(&g_atom, get_rand_64());   /* power-on RAM is not zero (§7.2) */
     atom_reset(&g_atom);   /* the vectors arrived with the kernel */
     printf("  guest        : started at #%04X; hot code in SRAM to tier %u "
            "(hot.h)\n", g_atom.cpu.pc, (unsigned)PICO_ATOM_RAM_TIER);

@@ -50,7 +50,8 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
      * uninitialised RAM and shows a checkerboard of 0x00 and 0xFF whose
      * pattern depends on the RAM chips fitted; that is deliberately not
      * modelled, because it is per-machine noise rather than behaviour
-     * any software can depend on. */
+     * any software can depend on. The exception is BASIC's RND seed,
+     * which must not be zero; that is atom_seed_rnd's (§7.2). */
     memset(m, 0, sizeof(*m));
     m->cfg = *cfg;
 
@@ -106,6 +107,15 @@ void atom_reset(atom_t *m) {
     i8271_reset(&m->fdc);
     m6502_set_nmi(&m->cpu, false);
     m6502_reset(&m->cpu, m);
+}
+
+void atom_seed_rnd(atom_t *m, uint64_t seed) {
+    /* The register is #08-#0B and bit 0 of #0C; the rest of #0C is
+     * shifted in from it (#C998) and never read, so it keeps its
+     * zero like the rest of RAM. */
+    seed &= 0x1FFFFFFFFull;
+    if (seed == 0) seed = 1u;
+    for (unsigned i = 0; i < 5; i++) m->ram[0x08u + i] = (uint8_t)(seed >> (8u * i));
 }
 
 void atom_copy(atom_t *dst, const atom_t *src) {
@@ -216,19 +226,26 @@ static uint32_t run_budget(atom_t *m) {
 }
 
 uint32_t atom_run_field(atom_t *m) {
-    uint32_t flyback = ATOM_FLYBACK_CYCLES;
     uint32_t done = 0;
 
-    m->budget += (int32_t)(ATOM_CYCLES_PER_FIELD - flyback);
+    m->budget += (int32_t)ATOM_ACTIVE_CYCLES;
     done += run_budget(m);
 
     /* Guest instructions must execute while FS is low, or the flag is
      * unobservable and the MOS's screen-writing loops spin for ever
      * (§12.1). */
     atom_field_sync(m, true);
-    m->budget += (int32_t)flyback;
+    m->budget += (int32_t)ATOM_FS_LOW_CYCLES;
     done += run_budget(m);
     atom_field_sync(m, false);
+
+    /* Vertical blank and the top border: the beam shows nothing yet, so
+     * a game that redraws after FS falls is finished before the first
+     * active line. The field ends there, where the caller snapshots
+     * VRAM, and not at FS's rising edge, which would catch that redraw
+     * half done (§12.1). */
+    m->budget += (int32_t)ATOM_BLANK_CYCLES;
+    done += run_budget(m);
 
     /* A playing tape moves whether or not the guest reads it; keep its
      * position current for the menu and for turbo (§11.3). And keep bit

@@ -142,6 +142,12 @@ line is skipped, and the first problem goes to the menu's status row. The
 emulator never writes the file. On a Plus 2 W on 2026-09-24 a card without the
 file booted on the defaults; a card with one has not been tried on the board yet.
 
+The field follows the VDG's 262 lines and ends where the next active line
+begins, and BASIC's `RND` is seeded from the board (design.md §12.1, §7.2).
+On a Plus 2 W on 2026-09-24 ASTEROI showed its rocks, which it had not with
+a zero seed and a snapshot at `FS`'s rise, and `RND` differed across power
+cycles.
+
 What does not exist: recording at signal level
 (saves still go to `.atm` files), the status band, menu changes persisted to
 flash (§11.6).
@@ -329,7 +335,10 @@ a plausible-looking change silently breaks:
   hardware comes up with uninitialised RAM showing a checkerboard of `0x00`
   and `0xFF` whose pattern depends on the RAM chips fitted. That is
   per-machine noise no software can depend on, so `atom_init` zero-fills and
-  leaves it there.
+  leaves it there. **The exception is BASIC's `RND` seed** at `#08`–`#0C`: a
+  shift register that never leaves zero, so the firmware seeds it from
+  `get_rand_64()` with `atom_seed_rnd` and `guest_boot` seeds a constant
+  (design.md §7.2). Without it `RND` is 0 for ever.
 - **Core 0 owns the 6502, 8255 and audio; core 1 owns the LCD, I²C and SD.**
   Handoff is an immutable snapshot with explicit ownership — core 1 never reads
   guest RAM while the 6502 runs.
@@ -390,6 +399,10 @@ time. They apply to every driver in `src/port/`:
   primary sources before they become `#define`s; do not treat the document
   as authoritative for them. The keyboard matrix and the `OSLOAD`/`OSSAVE`
   entry points were settled that way, by executing the kernel ROM.
+- **The field is the VDG's 262 lines, and it ends where the next active line
+  begins**: 192 active, `FS` low for 32, 38 blank (`config.h`, design.md
+  §12.1). The snapshot is taken there, not at `FS`'s rising edge; games
+  redraw after `FS` falls, and a snapshot at the rise catches them half done.
 - **The field rate is settled: 60 Hz, `ATOM_FIELD_HZ`.** Every Atom, UK ones
   included, sent 60 Hz; owners adjusted their TV's vertical hold to lock to
   it, and BASIC's `WAIT` is one field, 1/60 s. It was `atom_config_t.field_hz`
