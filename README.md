@@ -103,6 +103,17 @@ menu. While the tape plays, the Atom runs as fast as the PicoCalc allows,
 about 2.7× real time, and makes no sound. A UEF in the deck takes every load,
 so eject it to go back to `.atm` files. `SAVE` still writes `.atm` files.
 
+For example, Chuckie Egg's `cchuck.uef` names `CHUCKIE` as its first file:
+
+```
+LOAD "CHUCKIE"      press a key at PLAY TAPE; about 20 seconds
+RUN                 the loader fetches the game itself; about 3½ minutes more
+```
+
+If a load never finishes and the tape plays on to its end, the name was wrong
+or empty. The Atom passes over every file whose name does not match, without
+saying so.
+
 Games that need a 32 KB Atom have it: RAM runs from `#0000` to `#7FFF`.
 
 **Discs** are Acorn disc images in `/atom/discs/`: `.ssd`, `.dsk` or `.40t` for
