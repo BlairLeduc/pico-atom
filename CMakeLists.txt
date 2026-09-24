@@ -172,6 +172,7 @@ else()
         pico_atom_fatfs
         pico_stdlib
         pico_multicore
+        pico_rand
         pico_unique_id
         hardware_clocks
         hardware_dma

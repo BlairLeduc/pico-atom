@@ -57,10 +57,18 @@
 #define ATOM_FIELD_HZ          60u
 #define ATOM_CYCLES_PER_FIELD  (ATOM_CPU_HZ / ATOM_FIELD_HZ)   /* 16666 */
 
-/* FS (port C bit 7) is low for the flyback interval, ~6 % of a field
- * (§12.1): 999 cycles. §16 lists the length as unconfirmed. */
-#define ATOM_FLYBACK_PERCENT    6u
-#define ATOM_FLYBACK_CYCLES    (ATOM_CYCLES_PER_FIELD * ATOM_FLYBACK_PERCENT / 100u)
+/* A field is the MC6847's 262 lines (§12.1): 192 active; then FS (port
+ * C bit 7) low for 32, the bottom border and retrace; then 38 more with
+ * FS high, vertical blank and the top border, before the next active
+ * line. The line counts are XRoar's (§16). A line is 63.6 cycles, so
+ * each part is scaled from the field, not counted in whole lines. */
+#define ATOM_FIELD_LINES      262u
+#define ATOM_ACTIVE_LINES     192u
+#define ATOM_FS_LOW_LINES      32u
+#define ATOM_BLANK_LINES     (ATOM_FIELD_LINES - ATOM_ACTIVE_LINES - ATOM_FS_LOW_LINES)
+#define ATOM_FS_LOW_CYCLES   (ATOM_CYCLES_PER_FIELD * ATOM_FS_LOW_LINES / ATOM_FIELD_LINES) /* 2035 */
+#define ATOM_BLANK_CYCLES    (ATOM_CYCLES_PER_FIELD * ATOM_BLANK_LINES / ATOM_FIELD_LINES)  /* 2417 */
+#define ATOM_ACTIVE_CYCLES   (ATOM_CYCLES_PER_FIELD - ATOM_FS_LOW_CYCLES - ATOM_BLANK_CYCLES)
 
 /* ---- Audio (design.md §9.2, §9.4) ------------------------------------ */
 

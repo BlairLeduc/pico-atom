@@ -299,6 +299,29 @@ int main(void) {
         keymatrix_set_layout(&g.k, NULL);
     }
 
+    /* ---- RND runs from the seed (§7.2) -------------------------------- *
+     * BASIC's RND is a shift register at #08-#0C (#C986). The seed must
+     * survive the reset to the prompt, and a zero seed, which is what a
+     * zero-filled machine had, must be the control that gives 0 for ever. */
+    {
+        uint64_t seed = 0;
+        for (unsigned i = 0; i < 5; i++) seed |= (uint64_t)booted.ram[0x08u + i] << (8u * i);
+        CHECK(seed == GUEST_RND_SEED, "the seed should survive the reset, #08-#0C hold %010llX",
+              (unsigned long long)seed);
+
+        long a = 0, b = 0;
+        restore();
+        type("P.RND,RND\n");
+        CHECK(sscanf(row_text(3), "%ld %ld", &a, &b) == 2 && a != 0 && b != 0 && a != b,
+              "RND from the seed: '%s'", row_text(3));
+
+        restore();
+        memset(&g.m.ram[0x08], 0, 5);
+        type("P.RND,RND\n");
+        CHECK(sscanf(row_text(3), "%ld %ld", &a, &b) == 2 && a == 0 && b == 0,
+              "RND from a zero seed should be 0: '%s'", row_text(3));
+    }
+
     /* ---- the bell (§17 M5) ------------------------------------------- *
      * CTRL-G reaches the kernel's bell at #FD18, which toggles PC2 through
      * the 8255's BSR path: STA #B003 (4), DEX/BNE over X = 0, so 256 turns

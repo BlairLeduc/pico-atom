@@ -70,6 +70,9 @@ void guest_boot(guest_t *g) {
     for (int s = 0; s < ROM_SLOT_COUNT; s++) {
         if (have[s]) atom_load_rom(&g->m, romset_slots[s].addr, images[s], ROM_IMAGE_SIZE);
     }
+    /* A constant where the device takes the board's entropy (§7.2), so
+     * a test run is repeatable. */
+    atom_seed_rnd(&g->m, GUEST_RND_SEED);
     atom_reset(&g->m);
     guest_fields(g, 120);
 }

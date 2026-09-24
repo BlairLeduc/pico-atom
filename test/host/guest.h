@@ -30,8 +30,11 @@ typedef struct {
 bool guest_find_roms(const char **dir);
 bool guest_have_rom(rom_slot_t s);
 
-/* Build the machine, install every image found, reset, and run two
- * seconds to the prompt. AtomDOS is in, and dormant until *DOS. */
+/* BASIC's RND seed after guest_boot; the device seeds from the board. */
+#define GUEST_RND_SEED 0x5EED0A7031ull
+
+/* Build the machine, install every image found, seed RND, reset, and run
+ * two seconds to the prompt. AtomDOS is in, and dormant until *DOS. */
 void guest_boot(guest_t *g);
 
 void guest_fields(guest_t *g, int n);

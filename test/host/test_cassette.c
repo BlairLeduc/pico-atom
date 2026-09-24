@@ -60,11 +60,11 @@ static void fields_recorded(int n) {
     atom_t *m = &g.m;
     for (int i = 0; i < n; i++) {
         keymatrix_field(&g.k, m);
-        uint32_t fly = ATOM_FLYBACK_CYCLES;
-        run_recorded(m, ATOM_CYCLES_PER_FIELD - fly);
+        run_recorded(m, ATOM_ACTIVE_CYCLES);
         atom_field_sync(m, true);
-        run_recorded(m, fly);
+        run_recorded(m, ATOM_FS_LOW_CYCLES);
         atom_field_sync(m, false);
+        run_recorded(m, ATOM_BLANK_CYCLES);
         int16_t discard[ATOM_AUDIO_BUF_LEN];
         (void)atom_audio_drain(m, discard, ATOM_AUDIO_BUF_LEN);
     }

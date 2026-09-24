@@ -627,6 +627,17 @@ fell back into BASIC as `ERROR 5`. Atomulator fits the same 32 KiB. A
 snapshot records the block in its configuration byte, so one saved before
 M8 is refused as another machine (§11.5).
 
+**Power-on RAM is zero-filled** (`atom_init`); a real Atom's comes up holding
+whatever its chips settled to, which no program can depend on. One program
+state does depend on it: BASIC's `RND` is a 33-bit shift register in `#08`–`#0B`
+and bit 0 of `#0C` (`#C986`), and the reset to the prompt leaves it alone. From
+zero it stays at zero, so `RND` returned 0 for ever and ASTEROI put every rock
+at one position, where their XOR images cancelled. `atom_seed_rnd` writes those
+five bytes. The firmware seeds them from the board's `get_rand_64()` before
+the first reset; the host tests seed `GUEST_RND_SEED`, so a run repeats.
+`test_boot` checks that the seed survives the reset and drives `RND`, with a
+zero seed as the control.
+
 Unpopulated pages read as open bus. Modelling open bus as "last value on the
 bus" rather than `0xFF` costs one field in the struct and occasionally matters;
 do it.
@@ -1676,19 +1687,24 @@ file.
 | Guest CPU | 1,000,000 cycles/s |
 | VDG field rate | 60 Hz (§16, confirmed) |
 | Guest cycles per field | 16,666 |
-| `FS` (port C bit 7) low for | the flyback interval, ~6 % of a field |
+| VDG lines per field | 262: 192 active, 32 with `FS` low, 38 blank (§16) |
+| `FS` (port C bit 7) low for | 2,035 cycles, the bottom border and retrace |
+| Then, before the next active line | 2,417 cycles, vertical blank and the top border |
 
 Core 0 runs in **field-sized slices** with cycle-debt carry-forward. The slice
-is **split at the flyback boundary**, and that split is the whole point:
+is **split where `FS` falls and where it rises**, and that split is the whole
+point:
 
 ```c
-budget += ACTIVE_CYCLES;            /* the field less the flyback interval */
+budget += ACTIVE_CYCLES;            /* 192 lines, FS high */
 budget -= atom_run(&m, budget);     /* returns true cycles; debt carries */
 atom_field_sync(&m, true);          /* FS low */
-budget += FLYBACK_CYCLES;
+budget += FS_LOW_CYCLES;            /* 32 lines */
 budget -= atom_run(&m, budget);     /* the guest runs while FS is low */
 atom_field_sync(&m, false);         /* FS high */
-snapshot_publish();
+budget += BLANK_CYCLES;             /* 38 lines */
+budget -= atom_run(&m, budget);
+snapshot_publish();                 /* where the next active line begins */
 ```
 
 **Guest instructions must execute while `FS` is low**, or the flag is
@@ -1705,8 +1721,22 @@ field, since asserting that the accessor flips the bit does not catch this. It
 also runs the old M0 shape — pulse `FS` after the whole field — as a control
 that must see nothing, so the test is known to be able to tell the two apart.
 
-The flyback interval is `ATOM_FLYBACK_PERCENT` of a field: 999 cycles at
-60 Hz. The ~6 % figure is itself unconfirmed (§16).
+**The field ends where the next active line begins**, and that is where the
+snapshot is taken. The beam shows nothing for 70 lines after `FS` falls, about
+4,450 cycles, and games spend that time on the screen: ASTEROI waits for `FS`
+low, XOR-erases every rock and draws them all again, which takes it about
+2,000 cycles. Until the line counts were taken, `FS` was low for an estimated
+6 % of a field, 999 cycles, and the field ended when it rose. Every snapshot
+caught the redraw half done, and on alternate fields the rocks were missing.
+`test_field` runs a guest frame of that shape and requires every field to end
+with it finished, with the old split as the control that tears. On a Plus 2 W on 2026-09-24
+ASTEROI was played with its rocks drawn whole, and `RND` gave different
+numbers after a power cycle; idle, the guest took 43 % of core 0 with 2.30×
+headroom, inside §6.3's range.
+
+The line counts are XRoar's (§16): `FS` falls after the last active line and
+rises 32 lines later, and the first active line is 38 lines after that. A line
+is 63.6 cycles, so `config.h` scales each part from the 16,666-cycle field.
 
 Within a slice, the audio integrator emits a sample every 27.31 guest cycles via
 a fixed-point accumulator, so audio and CPU share one clock by construction and
@@ -1884,7 +1914,7 @@ pico-atom/
 │   │   ├── test_mc6847_golden.c  # golden images, all nine modes
 │   │   ├── vdg_scenes.c/.h     # the VRAM behind them, shared with vdg-ppm
 │   │   ├── test_i8255.c
-│   │   ├── test_field.c        # §12.1: a guest polling FS sees it low and escapes
+│   │   ├── test_field.c        # §12.1: a guest polling FS sees it low and escapes; a redraw after FS finishes by the field's end
 │   │   ├── test_present.c      # §8.4 dirty bands by execution; §4.2 snapshot pool
 │   │   ├── test_keymap.c
 │   │   ├── test_settings.c     # §11.7's parser and the defaults
@@ -1985,7 +2015,7 @@ class of bug in emulation.
 | Keyboard matrix cell assignments (10×6) | the kernel ROM's scan at `#FE71`, executed | **confirmed** — every cell pressed at the `>` prompt with and without SHIFT and the MOS's output read from VRAM; the table is in `keymap_picocalc.c` and `test_boot` re-checks it against the ROM |
 | `OSLOAD`/`OSSAVE` entry addresses and page-2 vectors (§11.2) | the kernel ROM, disassembled and executed | **confirmed** — `#FFE0` is `JMP (#020C)`, `#FFDD` is `JMP (#020E)`, and reset points them at `#F96E` and `#FAE5`; `test_tape` runs both routines and holds the trap to what they leave |
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source; owners' accounts | **confirmed** — 60 Hz on every Atom, UK machines included: the MC6847 is an NTSC part, and UK owners had to adjust their TV's vertical hold to lock to it. Software times itself on it (BASIC's `WAIT` is one field sync, 1/60 s), so it is `ATOM_FIELD_HZ`, a constant; it was `atom_config_t.field_hz` while unverified |
-| `FS` low interval, ~6 % of a field (§12.1) | MC6847 datasheet, `FS` timing | **low** — `ATOM_FLYBACK_PERCENT`; software polls the edge, so the length matters less than that it exists |
+| `FS` low interval, and the lines from `FS` to the first active line (§12.1) | MC6847 datasheet, `FS` timing | **medium** — XRoar's `mc6847.h`: 262 lines, 192 active, `FS` low for the 32 after them, 38 more before the next active line (`ATOM_FS_LOW_LINES`, `ATOM_BLANK_LINES`); not yet checked against the datasheet. It was ~6 % of a field, a guess, and that length did matter: ending the field at `FS`'s rise caught games mid-redraw |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
 | 8271 base address `#0A00` (§7.3) | the DOS ROM, disassembled and executed | **confirmed** — `#0A00`–`#0A02` and data at `#0A04` (`#E84F`), not `#0A00`–`#0A03` as first written; INT on NMI through `#0200` (`#EEEF`); `test_disc` runs the DOS against the model |
 | VRAM byte wiring in alpha mode (§2.4) | the MOS and BASIC, executed | **confirmed** — bit 6 is `A/S` and `INT/EXT` (SG6), bit 7 is `INV`: the MOS's cursor is `#A0`, and `CLEAR 0` then `PLOT` writes `#40` plus one element bit per point; `test_boot` pins both |

@@ -153,8 +153,8 @@ static void set_block(atom_t *m, const char *name, const uint16_t *words, int nw
 }
 
 /* JSR entry from RET - 1, with X at the block, and run until it returns:
- * whole fields split at flyback, like atom_run_field, but a boundary at a
- * time so the hooks see every one. */
+ * whole fields split where FS falls and rises, like atom_run_field, but
+ * a boundary at a time so the hooks see every one. */
 static bool call(atom_t *m, uint16_t entry, bool reference) {
     m->cfg.tape_traps = !reference;
     m->cpu.s--;
@@ -165,10 +165,10 @@ static bool call(atom_t *m, uint16_t entry, bool reference) {
     m->cpu.pc = entry;
 
     uint32_t per_field = ATOM_CYCLES_PER_FIELD;
-    uint32_t flyback = ATOM_FLYBACK_CYCLES;
     for (int field = 0; field < 60 * 600; field++) {
         for (uint32_t done = 0; done < per_field;) {
-            atom_field_sync(m, done >= per_field - flyback);
+            atom_field_sync(m, done >= ATOM_ACTIVE_CYCLES &&
+                               done < ATOM_ACTIVE_CYCLES + ATOM_FS_LOW_CYCLES);
             if (m->cpu.pc == RET) {
                 atom_field_sync(m, false);
                 m->cfg.tape_traps = true;
