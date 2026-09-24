@@ -1743,7 +1743,11 @@ page names each drive's image, and the keys-chosen note moved to the status row.
 added a Display page. It holds the screen, colour or mono, the VDG border
 on or off (§8.7), and the backlight, which moved there from the main page. A
 change shows at once, because the page itself is drawn through the renderer it
-changes.
+changes. Snapshots moved to their own page at the same time, to shorten the
+main page: left and right choose the slot on any row, and the page lists all
+four slots, saved or empty. A volume change takes effect at once and beeps
+at the new level: core 0, parked, plays 120 ms of the bell's pitch at the
+guest's own loudness in place of the silence it feeds the queue.
 The table below is the full intent; machine and display settings wait
 for the milestones that give them something to set, and settings are not yet
 persisted to flash (§11.6).

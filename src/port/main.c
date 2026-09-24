@@ -429,13 +429,44 @@ static void uart_keys(void) {
 }
 #endif
 
-/* Hand the machine to core 1 and wait for it back (g_handoff). */
+#if PICO_ATOM_AUDIO
+/* The menu's volume beep: the MOS bell's pitch and a guest square
+ * wave's swing after the DC blocker (BEEPER_FULL_SCALE / 2), so it is
+ * as loud as the guest will be. */
+#define BEEP_HZ  388u
+#define BEEP_MS  120u
+#define BEEP_AMP (BEEPER_FULL_SCALE / 2)
+#endif
+
+/* Hand the machine to core 1 and wait for it back (g_handoff). While
+ * it is away the PCM queue is fed silence, or the menu's beep. */
 static void park(uint32_t why) {
     __dmb();
     g_handoff = why;
 #if PICO_ATOM_AUDIO
     static const int16_t silence[128];
-    while (g_handoff != HANDOFF_NONE) audio_push(silence, 128u);
+    uint32_t num, den;
+    audio_rate(&num, &den);
+    const uint32_t half = num / (den * 2u * BEEP_HZ);
+    uint32_t beeps = g_settings.beep, left = 0, phase = 0;
+    while (g_handoff != HANDOFF_NONE) {
+        if (g_settings.beep != beeps) {
+            beeps = g_settings.beep;
+            __dmb();
+            audio_set_volume(g_settings.volume * 32u);
+            left = (uint32_t)((uint64_t)num * BEEP_MS / (1000u * (uint64_t)den));
+            phase = 0;
+        }
+        if (!left) { audio_push(silence, 128u); continue; }
+        int16_t tone[128];
+        size_t n = left < 128u ? left : 128u;
+        for (size_t i = 0; i < n; i++, phase++) {
+            if (phase == 2u * half) phase = 0;
+            tone[i] = phase < half ? BEEP_AMP : -BEEP_AMP;
+        }
+        audio_push(tone, n);
+        left -= (uint32_t)n;
+    }
 #else
     while (g_handoff != HANDOFF_NONE) sleep_us(100);
 #endif

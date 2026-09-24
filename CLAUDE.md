@@ -166,6 +166,8 @@ ctest --test-dir build/host --output-on-failure
 # firmware: needs PICO_SDK_PATH and arm-none-eabi-gcc on PATH
 cmake -S . -B build/pico -DPICO_BOARD=pico2 -DCMAKE_BUILD_TYPE=Release
 cmake --build build/pico -j          # -> build/pico/pico-atom.uf2
+
+tools/build.sh                       # the same, finding the SDK and toolchain itself
 ```
 
 On hardware, with the Debug Probe's SWD and UART both connected:
@@ -256,6 +258,7 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` |
 | `tools/mkfont.py` | character ROM -> `mc6847_font.h`, and `--dump` to proof it |
 | `tools/vdg-ppm.c` | renders the scenes to PPM; `vdg-ppm test/golden` regenerates the goldens |
+| `tools/build.sh`, `flash.sh` | build the firmware with the newest SDK and toolchain under `~/.pico-sdk/` when `PICO_SDK_PATH` is stale; program it over SWD |
 | `tools/uart-log.sh`, `uart-type.sh` | capture UART1 to a file; type at the guest over it |
 | `tools/perf-run.sh`, `perf-summary.sh` | M7's measurement: one boot per workload, then one line per workload from the heartbeats |
 
