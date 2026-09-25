@@ -173,8 +173,8 @@ which is left alone unless the file sets it:
 
 ```
 # /atom/pico-atom.cfg
-screen    = colour     # or mono
-border    = off        # or on
+screen    = mono       # or colour
+border    = on         # or off
 backlight = 8          # 1-15, as the menu shows it; leave out to keep the last
 volume    = 8          # 0-8
 keys      = standard   # or a layout's name, as the menu shows it

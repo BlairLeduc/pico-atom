@@ -873,8 +873,8 @@ well-behaved software behaves. Reproducing the *interference* is a v3 option
 
 ### 8.7 Monochrome and the border
 
-**Built at M10**, as two settings on the menu's Display page (§13), both
-off by default.
+**Built at M10**, as two settings on the menu's Display page (§13). Both
+are on by default (§11.7), as the stock machine most owners had.
 
 **Monochrome.** Most Atoms were sold without the colour board, and the stock
 machine shows only the VDG's luminance output. The mono palette is the
@@ -1635,8 +1635,8 @@ still hold a `#`:
 
 | Key | Values | Default |
 |---|---|---|
-| `screen` | `colour`, `mono` (§8.7) | `colour` |
-| `border` | `on`, `off` (§8.7) | `off` |
+| `screen` | `colour`, `mono` (§8.7) | `mono` |
+| `border` | `on`, `off` (§8.7) | `on` |
 | `backlight` | 1–15, the menu's steps of 16 (hardware notes §4.11) | the southbridge's own |
 | `volume` | 0–8 | 8 |
 | `keys` | `standard` or a layout's name (§10.5) | `standard` |

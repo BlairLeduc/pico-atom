@@ -22,7 +22,7 @@ int main(void) {
         atom_config_t cfg;
         atom_config_default(&cfg);
         CHECK(memcmp(&d.machine, &cfg, sizeof cfg) == 0, "machine defaults are atom_config_default's");
-        CHECK(!d.mono && !d.border && d.volume == 8u && d.backlight == 0u && d.turbo,
+        CHECK(d.mono && d.border && d.volume == 8u && d.backlight == 0u && d.turbo,
               "host defaults");
         CHECK(!d.keys[0] && !d.tape[0] && !d.drive[0][0] && !d.drive[1][0], "nothing inserted");
     }
@@ -37,8 +37,8 @@ int main(void) {
     {
         const char *all =
             "# the README's example\r\n"
-            "screen    = mono\r\n"
-            "BORDER    = On\r\n"
+            "screen    = colour\r\n"
+            "BORDER    = Off\r\n"
             "backlight = 12\r\n"
             "volume    = 0\r\n"
             "keys      = cursor games\r\n"
@@ -49,7 +49,7 @@ int main(void) {
             "upper_ram = off\r\n"
             "dos       = off\r\n";
         CHECK(parse(&s, all, &line) == SET_OK && line == 0, "every setting: line %u", line);
-        CHECK(s.mono && s.border && s.backlight == 12u && s.volume == 0u && !s.turbo, "host");
+        CHECK(!s.mono && !s.border && s.backlight == 12u && s.volume == 0u && !s.turbo, "host");
         CHECK(strcmp(s.keys, "CURSOR GAMES") == 0, "keys uppercased, spaces kept: %s", s.keys);
         CHECK(strcmp(s.tape, "cchuck.uef") == 0, "tape: %s", s.tape);
         CHECK(strcmp(s.drive[0], "games1.dsk") == 0, "drive0: %s", s.drive[0]);
@@ -57,17 +57,17 @@ int main(void) {
         CHECK(!s.machine.upper_ram && !s.machine.atomdos, "machine");
         CHECK(s.machine.via_fitted && s.machine.text_space, "the rest of the machine kept");
     }
-    CHECK(parse(&s, "screen = colour\nkeys = Standard\n", &line) == SET_OK, "colour, standard");
-    CHECK(!s.mono && !s.keys[0], "colour, standard");
+    CHECK(parse(&s, "screen = mono\nkeys = Standard\n", &line) == SET_OK, "mono, standard");
+    CHECK(s.mono && !s.keys[0], "mono, standard");
     CHECK(parse(&s, "screen = color\n", &line) == SET_OK && !s.mono, "American colour");
     CHECK(parse(&s, "tape =\ndrive0 =   \n", &line) == SET_OK && !s.tape[0], "empty means none");
 
     /* ---- comments after a value, as the README writes them ------------ */
-    CHECK(parse(&s, "screen = mono     # or colour\r\n"
+    CHECK(parse(&s, "screen = colour   # or mono\r\n"
                     "volume = 3\t# 0-8\n"
                     "tape   =          # none\n", &line) == SET_OK && line == 0,
           "trailing comments: line %u", line);
-    CHECK(s.mono && s.volume == 3u && !s.tape[0], "trailing comments stripped");
+    CHECK(!s.mono && s.volume == 3u && !s.tape[0], "trailing comments stripped");
     CHECK(parse(&s, "drive0 = /atom/discs/side#2.ssd # the second\n", &line) == SET_OK &&
           strcmp(s.drive[0], "/atom/discs/side#2.ssd") == 0,
           "a # inside a path is kept: %s", s.drive[0]);
@@ -99,9 +99,9 @@ int main(void) {
         }
     }
     {
-        const char *mixed = "volume = 3\nvolume = 5\nscreen = sepia\nborder = on\n";
+        const char *mixed = "volume = 3\nvolume = 5\nscreen = sepia\nborder = off\n";
         CHECK(parse(&s, mixed, &line) == SET_DUPLICATE && line == 2, "first problem: line %u", line);
-        CHECK(s.volume == 3u && !s.mono && s.border, "good lines apply around the bad ones");
+        CHECK(s.volume == 3u && s.mono && !s.border, "good lines apply around the bad ones");
     }
     {
         /* A value refused does not count as given, so a later line may
@@ -122,10 +122,10 @@ int main(void) {
         CHECK(parse(&s, huge, &line) == SET_TOO_LONG && line == 1, "line too long");
     }
     {
-        const char nul[] = "screen = mono\0\nborder = on\n";
+        const char nul[] = "screen = colour\0\nborder = off\n";
         settings_default(&s);
         CHECK(settings_parse(&s, nul, sizeof nul - 1, &line) == SET_SYNTAX && line == 1, "NUL");
-        CHECK(!s.mono && s.border, "the NUL line is refused, the next applies");
+        CHECK(s.mono && !s.border, "the NUL line is refused, the next applies");
     }
 
     TEST_DONE();

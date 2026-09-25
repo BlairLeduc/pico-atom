@@ -11,8 +11,8 @@
 void settings_default(settings_t *s) {
     memset(s, 0, sizeof *s);
     atom_config_default(&s->machine);
-    s->mono      = false;
-    s->border    = false;
+    s->mono      = true;
+    s->border    = true;
     s->volume    = 8u;
     s->backlight = 0u;
     s->turbo     = true;
