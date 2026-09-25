@@ -27,6 +27,15 @@ static bool     s_valid;
 static bool     s_border;
 static uint16_t s_border_rgb = 0x0000u;
 
+#define ATOM_BORDER_PIXELS \
+    ((ATOM_SCREEN_W + 2u * ATOM_BORDER_X) * (ATOM_SCREEN_H + 2u * ATOM_BORDER_Y) - \
+     ATOM_SCREEN_W * ATOM_SCREEN_H)
+
+_Static_assert(ATOM_SCREEN_X >= ATOM_BORDER_X && ATOM_SCREEN_Y >= ATOM_BORDER_Y &&
+               ATOM_SCREEN_X + ATOM_SCREEN_W + ATOM_BORDER_X <= ATOM_PANEL_W &&
+               ATOM_SCREEN_Y + ATOM_SCREEN_H + ATOM_BORDER_Y <= ATOM_PANEL_H,
+               "the border must fit on the panel");
+
 /* DMA ping-pong (§4.6); sized for the full panel width so the status
  * band can use them too. */
 static uint16_t s_line[ATOM_LINEBUF_COUNT][ATOM_LINEBUF_PIXELS];
@@ -47,18 +56,20 @@ void display_set_look(bool mono, bool border) {
     display_invalidate();
 }
 
-/* The panel around the Atom's rectangle, in four fills: 53,248 pixels,
- * about as many as the rectangle itself, so it goes only when its
- * colour changes, a mode change between alpha and graphics or of CSS in
- * graphics (§8.7). */
+/* A frame ATOM_BORDER_X wide and ATOM_BORDER_Y tall around the Atom's
+ * rectangle, in four fills: 43,008 pixels, seven eighths of the
+ * rectangle, so it goes only when its colour changes, a mode change
+ * between alpha and graphics or of CSS in graphics (§8.7). */
 static bool fill_border(uint8_t mode) {
     uint16_t rgb = s_border ? s_vdg.pal[mc6847_border(mode)] : 0x0000u;
     if (rgb == s_border_rgb) return false;
+    const unsigned bx = ATOM_BORDER_X, by = ATOM_BORDER_Y;
+    const unsigned x0 = ATOM_SCREEN_X - bx, w = ATOM_SCREEN_W + 2u * bx;
     const unsigned x1 = ATOM_SCREEN_X + ATOM_SCREEN_W, y1 = ATOM_SCREEN_Y + ATOM_SCREEN_H;
-    lcd_fill(0, 0, ATOM_PANEL_W, ATOM_SCREEN_Y, rgb);
-    lcd_fill(0, y1, ATOM_PANEL_W, ATOM_PANEL_H - y1, rgb);
-    lcd_fill(0, ATOM_SCREEN_Y, ATOM_SCREEN_X, ATOM_SCREEN_H, rgb);
-    lcd_fill(x1, ATOM_SCREEN_Y, ATOM_PANEL_W - x1, ATOM_SCREEN_H, rgb);
+    lcd_fill(x0, ATOM_SCREEN_Y - by, w, by, rgb);
+    lcd_fill(x0, y1, w, by, rgb);
+    lcd_fill(x0, ATOM_SCREEN_Y, bx, ATOM_SCREEN_H, rgb);
+    lcd_fill(x1, ATOM_SCREEN_Y, bx, ATOM_SCREEN_H, rgb);
     s_border_rgb = rgb;
     return true;
 }
@@ -99,7 +110,7 @@ void display_present(const uint8_t *vram, uint8_t mode, display_stats_t *st) {
         s.full = true;
         s.bands = ATOM_BAND_COUNT;
         s.pixels = ATOM_SCREEN_W * ATOM_SCREEN_H +
-                   (s.border ? ATOM_PANEL_W * ATOM_PANEL_H - ATOM_SCREEN_W * ATOM_SCREEN_H : 0u);
+                   (s.border ? ATOM_BORDER_PIXELS : 0u);
     } else {
         for (unsigned band = 0; band < ATOM_BAND_COUNT; band++) {
             uint16_t x0, x1;

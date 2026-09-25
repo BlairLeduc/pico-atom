@@ -890,13 +890,15 @@ switch rebuilds the LUT once and costs nothing per pixel.
 **The border.** The VDG draws a border around its 256×192 active area: black
 in the alphanumeric and semigraphics modes, and green or buff (by CSS) in
 the graphics modes (`mc6847_border()`). With the setting on, the presenter
-fills the panel around the Atom rectangle with it. That is the top and
-status bands of §8.2 and the side strips, 53,248 pixels, about as many as the
-rectangle itself. So it is filled **only when its colour changes**: a mode
+draws it as a frame around the Atom rectangle, `ATOM_BORDER_X` (32) wide at
+the sides and `ATOM_BORDER_Y` (48) tall above and below: the side strips of
+§8.2, and the 48 rows of the top and status bands next to the rectangle. The
+panel's outer 16 rows, top and bottom, stay black. That is 43,008 pixels,
+seven eighths of the rectangle, so it is filled **only when its colour changes**: a mode
 change between text and graphics, or of CSS in graphics. It is not filled on
 every full redraw. With the setting off, the border is never filled, and
 the panel around the rectangle stays black from `lcd_init`, as before M10. A
-future status band will take its band back from the border.
+future status band will take its rows back from the border.
 
 ---
 
