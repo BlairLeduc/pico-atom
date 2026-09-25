@@ -105,6 +105,16 @@ void atom_reset(atom_t *m) {
     m->cpu.reset_pending = false;
     /* BREAK resets the disc card with the CPU; the discs stay in. */
     i8271_reset(&m->fdc);
+    /* And the VIA: the kernel never writes it, yet it CLIs at #FF80 with
+     * IRQVEC back at #A000 and BASIC's BRK vector and line number still
+     * the old program's, so an interrupt left enabled across BREAK runs
+     * open bus into an ERROR (§6.4). The pins are the machine's, not the
+     * chip's, and keep their levels. */
+    uint8_t in_a = m->via.in_a, in_b = m->via.in_b;
+    via6522_reset(&m->via);
+    m->via.in_a = in_a;
+    m->via.in_b = in_b;
+    m6502_set_irq(&m->cpu, M6502_IRQ_VIA, false);
     m6502_set_nmi(&m->cpu, false);
     m6502_reset(&m->cpu, m);
 }

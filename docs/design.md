@@ -548,7 +548,14 @@ tick.
 ### 6.4 Interrupts and reset
 
 - `RES` — the Atom's **BREAK key is wired to reset**, so the UI maps a host key
-  to `reset_pending` rather than synthesising anything cleverer.
+  to `reset_pending` rather than synthesising anything cleverer. The line
+  resets the 6522 and the 8271 with the CPU (`atom_reset`); the tape request
+  goes too. The VIA's reset is inferred from the kernel, not read off the
+  circuit diagram: the reset routine never writes the VIA, yet it `CLI`s at
+  `#FF80` with IRQVEC just restored to `#A000`, an empty socket, and BASIC's
+  BRK vector and line number (`#01`/`#02`) still the old program's. A T1
+  interrupt left enabled across BREAK would run open bus into
+  `ERROR n LINE <old line>`, and did before the VIA was reset.
 - `IRQ` — level-sensitive, from the 6522 VIA (if fitted). Modelled as a bitmask
   so sources compose correctly; an `irq_lines` of zero deasserts.
 - `NMI` — edge-triggered, latched. The 8271's INT drives it (§11.4): AtomDOS

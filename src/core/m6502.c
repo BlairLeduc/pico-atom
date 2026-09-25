@@ -237,7 +237,7 @@ uint32_t ATOM_HOT2(m6502_step)(atom_t *m) {
 
     if (__builtin_expect(c->reset_pending, 0)) {
         uint64_t before = c->cycles;
-        m6502_reset(c, m);
+        atom_reset(m);   /* BREAK is the whole machine's reset line (§6.4) */
         return (uint32_t)(c->cycles - before);
     }
     if (__builtin_expect(c->nmi_pending, 0)) {
