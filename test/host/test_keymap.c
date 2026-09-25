@@ -221,6 +221,48 @@ int main(void) {
         keymatrix_event(&k, KEY_EV_PRESSED, ':');
         keymatrix_field(&k, &m);
         CHECK(cell_down(2, 3) && !m.key_shift, ": is unshifted on the Atom");
+        keymatrix_event(&k, KEY_EV_RELEASED, ':');
+        for (int f = 0; f < 10; f++) keymatrix_field(&k, &m);
+        CHECK(k.n == 0 && m.key_shift, "Shift still held once : is up");
+    }
+
+    /* ---- the host's Shift is the SHIFT line (§10.3) ------------------- */
+    {
+        /* Games read SHIFT on its own: Hard Hat Harry jumps on it. */
+        fresh();
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_SHIFT_L);
+        keymatrix_field(&k, &m);
+        CHECK(m.key_shift && (m.ppi.in_b & 0x80u) == 0,
+              "Shift alone pulls port B bit 7 low");
+        keymatrix_event(&k, KEY_EV_RELEASED, PICOCALC_KEY_SHIFT_L);
+        keymatrix_field(&k, &m);
+        CHECK(!m.key_shift && (m.ppi.in_b & 0x80u) != 0, "and lets it go");
+
+        /* A letter held first, then Shift: running, then jumping. */
+        fresh();
+        keymatrix_event(&k, KEY_EV_PRESSED, 'z');
+        keymatrix_field(&k, &m);
+        CHECK(cell_down(5, 1) && !m.key_shift, "z is Z unshifted");
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_SHIFT_R);
+        keymatrix_event(&k, KEY_EV_PRESSED, 'Z');   /* the MCU's repeat */
+        keymatrix_field(&k, &m);
+        CHECK(cell_down(5, 1) && m.key_shift, "Z held with Shift");
+
+        /* Both Shifts: letting one go keeps the line. */
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_SHIFT_L);
+        keymatrix_event(&k, KEY_EV_RELEASED, PICOCALC_KEY_SHIFT_R);
+        keymatrix_field(&k, &m);
+        CHECK(m.key_shift, "the other Shift is still down");
+
+        /* A layout's cell takes SHIFT as it finds it. The chord is made up:
+         * the MCU sends no Shift+Left (§10.3), but Games has no other cell. */
+        fresh();
+        keymatrix_set_layout(&k, &keylayout_builtin[0]);
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_SHIFT_L);
+        keymatrix_event(&k, KEY_EV_PRESSED, 0xB4u);   /* Left: UPDOWN */
+        keymatrix_field(&k, &m);
+        CHECK(cell_down(0, 2) && m.key_shift, "a layout cell under Shift");
+        keymatrix_set_layout(&k, NULL);
     }
 
     /* ---- modifiers, the Alt layer and the lines that are not cells --- */

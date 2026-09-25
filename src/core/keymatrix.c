@@ -63,11 +63,15 @@ static int find_held(const keymatrix_t *k, uint8_t canon) {
  * BREAK or COPY away; an Alt chord with no binding maps to nothing, so
  * the layer never leaks a shifted letter. Otherwise the layout comes
  * first, by physical key, then the plain table (§10.5). */
-static const keymap_t *lookup(const keymatrix_t *k, uint8_t code) {
+static const keymap_t *lookup(const keymatrix_t *k, uint8_t code, bool *from_layout) {
+    *from_layout = false;
     if (!k->alt && k->layout) {
         uint8_t canon = keymap_picocalc_canonical(code);
         for (unsigned i = 0; i < k->layout->n; i++) {
-            if (k->layout->bind[i].code == canon) return &k->layout->bind[i];
+            if (k->layout->bind[i].code == canon) {
+                *from_layout = true;
+                return &k->layout->bind[i];
+            }
         }
     }
     uint8_t want = k->alt ? KM_ALT : 0;
@@ -89,12 +93,15 @@ static bool apply_head(keymatrix_t *k) {
     bool down = (ev.state == KEY_EV_PRESSED || ev.state == KEY_EV_HELD);
 
     if (is_modifier(ev.code)) {
-        /* The MCU has already applied Shift to the code, and the keymap
-         * says per key whether the Atom's SHIFT goes with it, so the
-         * host's Shift is not tracked. Modifiers report held events
-         * while down (hardware-notes.md §6.2). */
+        /* Modifiers report held events while down (hardware-notes.md
+         * §6.2). The host's Shift is the Atom's SHIFT line, which games
+         * read on its own (§10.3); a character decides for itself. */
         if (ev.code == PICOCALC_KEY_ALT)  k->alt  = down;
         if (ev.code == PICOCALC_KEY_CTRL) k->ctrl = down;
+        if (ev.code == PICOCALC_KEY_SHIFT_L || ev.code == PICOCALC_KEY_SHIFT_R) {
+            uint8_t bit = ev.code == PICOCALC_KEY_SHIFT_L ? 1u : 2u;
+            k->shift = down ? (uint8_t)(k->shift | bit) : (uint8_t)(k->shift & ~bit);
+        }
         return true;
     }
 
@@ -115,12 +122,19 @@ static bool apply_head(keymatrix_t *k) {
     if (h >= 0) return true;
     if (k->gap > 0) return false;
 
-    const keymap_t *e = lookup(k, ev.code);
+    bool from_layout;
+    const keymap_t *e = lookup(k, ev.code, &from_layout);
     if (!e) return true;
     if (e->flags & KM_MENU) k->menu_request = true;
     if (k->n >= ATOM_KEY_HELD_MAX) return true;  /* more keys than fingers */
 
-    k->held[k->n++] = (keymatrix_held_t){ .canon = canon, .map = *e };
+    /* The MCU applied the host's Shift to the code, and a character
+     * from the standard map that the Atom types unshifted must keep
+     * SHIFT up. A layout's cell is a key, not a character, and takes
+     * SHIFT as it finds it, like CTRL (§10.5). */
+    bool unshift = k->shift && !from_layout &&
+                   !(e->flags & (KM_SHIFT | KM_NOCELL | KM_ALT));
+    k->held[k->n++] = (keymatrix_held_t){ .canon = canon, .map = *e, .unshift = unshift };
     return true;
 }
 
@@ -130,7 +144,7 @@ void keymatrix_field(keymatrix_t *k, atom_t *m) {
         k->q_len--;
     }
 
-    bool shift = false, ctrl = k->ctrl, rept = false, brk = false;
+    bool shift = false, ctrl = k->ctrl, rept = false, brk = false, unshift = false;
     memset(m->key_col, 0, sizeof(m->key_col));
     for (uint8_t i = 0; i < k->n; i++) {
         keymatrix_held_t *h = &k->held[i];
@@ -139,12 +153,14 @@ void keymatrix_field(keymatrix_t *k, atom_t *m) {
 
         /* A layout's CTRL is OR-ed with the host's own (§10.5). */
         if (e->flags & KM_SHIFT) shift = true;
+        if (h->unshift)          unshift = true;
         if (e->flags & KM_CTRL)  ctrl = true;
         if (e->flags & KM_REPT)  rept = true;
         if (e->flags & KM_BREAK) brk = true;
         if (e->flags & KM_NOCELL) continue;
         m->key_col[e->col] |= (uint8_t)(1u << e->row);
     }
+    if (k->shift && !unshift) shift = true;
     if (k->gap > 0) k->gap--;
 
     /* BREAK is the 6502's reset line (§6.4): while it is held the machine

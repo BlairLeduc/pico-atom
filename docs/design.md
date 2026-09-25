@@ -1106,6 +1106,13 @@ chosen because the Atom has no Alt key, so nothing is stolen from the guest:
 | `@` `[` `\` `]` `^` | direct where present, `Alt` layer otherwise | confirm against the installed keymap |
 | Emulator menu | `Alt`+`M` | §13 |
 
+**`Shift` on its own is the Atom's `SHIFT` line.** Games read port B bit 7 by
+itself (Hard Hat Harry jumps on it), so the host's `Shift` asserts the line
+while it is down, whatever else is held. The one exception is a character from
+the standard map that the MCU sent shifted and the Atom types unshifted, such as
+`:`: while that key is down, `SHIFT` stays up. A layout's cell (§10.5) takes the
+host's `Shift` as it finds it, as it does `CTRL`.
+
 Three constraints from hardware notes §6.3 bind this table and must be checked
 before it is written:
 
