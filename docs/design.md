@@ -466,7 +466,7 @@ Two observations:
 
 - There is enough slack to hold a **second 64 KiB guest image** for instant
   snapshot restore, and still be under 62 %.
-- An RP2040's 264 KiB would hold the measured image with ~5 KiB to spare, not
+- An RP2040's 256 KiB of main SRAM would hold the measured image with ~5 KiB to spare, not
   at the ~58 % first written here, which predated the UEF deck and the SRAM
   tier. §3.1 has what a port would need.
 
