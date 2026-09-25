@@ -323,7 +323,7 @@ a plausible-looking change silently breaks:
   keeps SDK dependencies from leaking down, so run the host build too, not just
   the firmware one. `src/port/` is the only place SDK headers belong.
 - **The SPI wire is the bottleneck, not the 6502.** A 1 MHz Atom costs a
-  measured 35–46% of core 0, about 2× headroom (§6.3); a full-screen redraw is ~12.3 ms against a
+  measured 35–46% of core 0, about 2× headroom (§6.3); a full-screen redraw measures 11.5 ms against a
   16.7 ms field. Optimisation effort belongs on pixels transmitted, not on the
   interpreter.
 - **There is no decoded framebuffer, by design.** The MC6847 image is a pure
@@ -460,9 +460,10 @@ time. They apply to every driver in `src/port/`:
 
 ## Measurement discipline
 
-Every performance figure in `docs/design.md` is currently an arithmetic estimate
-derived from `hardware-notes.md`, not a measurement, and is labelled as such.
-When replacing one with a real number (`hardware-notes.md` §9.1): profile in the
+Most performance figures in `docs/design.md` are now measured on a Plus 2 W
+(§5's SRAM, §6.3's interpreter, §8.4's presents, §9.4's audio), and each says
+when and on what. Any that are still arithmetic estimates from
+`hardware-notes.md` are labelled as such. When replacing one with a real number (`hardware-notes.md` §9.1): profile in the
 mode you ship, carry a control quantity that should not change, expect ~2 %
 run-to-run spread, compare on one board, and write results to a file — a number
 on a 320×320 panel cannot be copied off it.
