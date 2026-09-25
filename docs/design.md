@@ -7,11 +7,14 @@ Companion document: [`hardware-notes.md`](hardware-notes.md). Section references
 of the form §4.7 point there unless stated otherwise; that document is the
 authority on the host, this one on the guest and on the shape of the code.
 
-**Status:** design, pre-implementation. Nothing here has been measured on
-hardware yet; every performance figure below is derived arithmetically from the
-measurements in the hardware notes and is labelled as an estimate. §16 lists the
-constants that must be confirmed against primary sources before they are typed
-into a header.
+**Status:** M0–M10 are built and verified on a Pimoroni Plus 2 W (§17).
+The document began as a design written before any code, and much of it still
+reads that way. Where a section has been built, it says so and gives the
+measured figures, which replace the arithmetic estimates the design started
+with. A figure still labelled an estimate has not been measured. §16 lists
+the constants that must be confirmed against primary sources before they are
+typed into a header, and records how each one that has been confirmed was
+settled.
 
 **Contents**
 
@@ -59,7 +62,7 @@ into a header.
 ### Non-goals (for v1)
 
 - Cycle-exact video bus contention between the 6502 and the MC6847 ("Atom snow",
-  §8.6). Modelled as an option, off by default.
+  §8.6). Planned as an option, off by default; not built.
 - Analogue-accurate cassette audio, UHF artefact colour, or composite blur.
 - Second-processor, Econet, colour-board or other third-party expansions.
 - Wi-Fi. The radio costs SRAM (§2.6) and buys the Atom nothing. Leave GP0–GP1
@@ -215,11 +218,25 @@ RGB565 palette** covers everything with room for UI colours.
 that keeps one image working on all three RP2350 boards and avoids the QMI
 timing hazard of §3.
 
-An RP2040 build is plausible — the budget fits 264 KiB — but the display gets
-slower, not the CPU: at the RP2040's supported 200 MHz the SPI divider lands on
-**50 MHz** rather than 75 (hardware notes §3), stretching every present by half
-again. Treat it as a stretch goal and keep the code free of RP2350-only
-assumptions where that costs nothing.
+An RP2040 build is plausible but tight, and has not been tried. Treat it as a
+stretch goal and keep the code free of RP2350-only assumptions where that
+costs nothing. Today only `board.c` tests `PICO_RP2350`. Three things decide
+whether it would work:
+
+- **SRAM.** The shipping image uses ~251 KiB of main SRAM (§5). An RP2040 has
+  256 KiB plus two 4 KiB scratch banks, which hold the stacks. That leaves
+  about 5 KiB. The 64 KiB UEF deck, the M3 test scene (6 KiB) and the ROM load
+  buffer (8 KiB) are the places to find room.
+- **The interpreter on a Cortex-M0+.** On the M33 at 150 MHz the guest takes
+  35–46 % of core 0 (§6.3). The M0+ lacks Thumb-2's IT blocks, bitfield
+  extracts and wide immediates, so the same C will take more cycles per
+  instruction. How many more is unmeasured, and it is the number that
+  decides the port.
+- **The clock trades the CPU against the display.** At the RP2040's supported
+  200 MHz the SPI divider lands on **50 MHz** rather than 75 (hardware notes
+  §3), and a full redraw grows from 11.5 ms to ~17 ms, past a 16.7 ms field.
+  150 MHz keeps the panel at 75 MHz and gives the interpreter a quarter less
+  time.
 
 Per hardware notes §2.1, the banner must report **physical board identity
 separately from the SDK build target**.
@@ -251,13 +268,13 @@ baud and the PWM audio carrier are the two this project uses.
 | `i2c1` @ 10 kHz | Southbridge | keyboard, backlight, battery |
 | PWM slice from `pwm_gpio_to_slice_num(26)` | Audio | both channels, one 32-bit compare word |
 | DMA ch. 0 | LCD blit | **polled, no IRQ** (§4.6) |
-| DMA ch. 1, 2 | Audio ring | chained pair, `DMA_IRQ_0` at priority `0x40` |
-| DMA ch. 3 | SD (optional) | |
+| Two more DMA channels | Audio ring | chained pair, `DMA_IRQ_0` at priority `0x40` |
 | Core 0 | 6502, 8255, VDG snapshot, audio synthesis | |
 | Core 1 | LCD blit, southbridge I²C, SD | |
 
-DMA channels and the IRQ owner are claimed explicitly at init, not left to
-allocation order (hardware notes §10).
+DMA channels and the IRQ owner are claimed explicitly at init (hardware notes
+§10). The LCD claims channel 0 by number, and audio claims two unused
+channels after it. The SD driver is polled SPI and uses no DMA.
 
 ---
 
@@ -278,18 +295,25 @@ allocation order (hardware notes §10).
       └───────────────────────────────────────────────────────┘
 ```
 
-`core/` knows nothing about DMA, I²C, SPI or `pico/stdlib.h`. It exposes:
+`core/` knows nothing about DMA, I²C, SPI or `pico/stdlib.h`. Its centre is
+this, in `src/core/atom.h`:
 
 ```c
+void     atom_init(atom_t *m, const atom_config_t *cfg);
 void     atom_reset(atom_t *m);
 uint32_t atom_run(atom_t *m, uint32_t cycles);   /* returns cycles actually run */
+uint32_t atom_run_field(atom_t *m);              /* one field, split at FS (§12.1) */
 void     atom_key_set(atom_t *m, uint8_t row, uint8_t col, bool down);
 void     atom_key_mods(atom_t *m, bool shift, bool ctrl, bool rept);
 void     atom_field_sync(atom_t *m, bool in_flyback);
 size_t   atom_audio_drain(atom_t *m, int16_t *dst, size_t max);
 const uint8_t *atom_vram(const atom_t *m);       /* 6 KiB */
 uint8_t  atom_vdg_mode(const atom_t *m);         /* A/G, GM2:0, CSS packed */
+void     atom_copy(atom_t *dst, const atom_t *src);   /* never `=` */
 ```
+
+Beside it are the tape deck (`atom_cassette_*`, §11.3), the disc requests the
+port serves (`atom_disc_*`, §11.4), ROM loading and `atom_seed_rnd` (§7.2).
 
 That interface is the seam every test in §15 exercises, and it is the reason the
 6502 can be validated on a workstation against Klaus Dormann's functional tests
@@ -340,15 +364,16 @@ a full field behind. With two buffers, core 0 would at that moment have to
 either block — which corrupts the simulation schedule that audio is paced
 against — or rewrite a `ready` buffer core 1 may be claiming in the same
 instant, which is a race no amount of care in the renderer can see. The third
-buffer costs 6 KiB out of ~370 KiB spare and deletes the entire class of
+buffer costs 6 KiB out of ~265 KiB spare (§5) and deletes the entire class of
 problem; do not economise here.
 
 State transitions are published under a single SIO spinlock. RP2350 has no
 compare-and-swap, and "explicit ownership" is not a synchronisation primitive —
 local interrupt masking is not a multicore lock (hardware notes §9.5). No locks
 are held across a blit, and core 1 never reads guest RAM while the 6502 runs.
-Between service iterations core 1 waits on a 20 µs hardware timer rather than
-spinning on shared state.
+Between service iterations core 1 waits 20 µs on the hardware timer rather than
+spinning on shared state. It waits with `busy_wait_us_32`, not `sleep_us`,
+which sets an alarm whose IRQ lands on core 0 (§6.3, hardware notes §9.7).
 
 Two invariants, both taken straight from the hardware notes' scar tissue:
 
@@ -386,6 +411,36 @@ run 6502 for one field's cycles
 RP2350A has 520 KiB. Budget code placed in SRAM, static buffers, both stacks,
 DMA storage and peak heap together (hardware notes §2.3).
 
+**Measured**, from the linked image (`arm-none-eabi-size -A` and `nm`), a
+`pico2` Release build at `PICO_ATOM_RAM_TIER` 2, 2026-09-25:
+
+| Item | Bytes | Symbol, note |
+|---|---:|---|
+| The machine | 72,952 | `g_atom`: 64 KiB address space, page table, 8271 track buffer, the chips, the core's 1024-sample audio buffer |
+| UEF deck | 65,536 | `s_uef`, `ATOM_UEF_MAX` (§11.3) |
+| VDG snapshots ×3 | 18,468 | `g_pool` (§4.2) |
+| Renderer and its LUT | 8,204 | `s_vdg`, core 1's `mc6847_t` (§8.3) |
+| ROM load buffer | 8,192 | `s_image`, two ROMs' room for MAME's `abasic.ic20` (§11.1) |
+| Menu's tape and disc lists | 15,360 | `s_list`, `s_discs`, 48 × 160 B each (§13) |
+| Presented shadow | 6,144 | `s_shadow` (§8.4) |
+| M3 test scene | 6,144 | `s_scene`, the test pattern's VRAM |
+| PCM queue | 4,096 | `s_queue` (§9.4) |
+| Audio DMA ring, log ring, core 0's drain buffer | 6,144 | 2,048 each |
+| RGB565 line buffers | 1,280 | `s_line` |
+| Everything else in `.bss` | 15,128 | FatFs, keymaps, settings text, counters |
+| `.data`: hot code in SRAM, and initialised data | 27,188 | tier 2 (§6.3) |
+| Heap, vector table | 2,336 | |
+| Stacks, both cores | 4,096 | in the scratch banks |
+| **Total** | **~255 KiB** | **49 % of 520 KiB** |
+
+The MC6847 character ROM is `const` and stays in flash. The largest items that
+are not the machine are the UEF deck and buffers that sit idle once the guest
+runs (the ROM load buffer and the M3 scene), which is where to look first if
+SRAM is ever needed.
+
+The estimate the design started with is kept below, because its rows say what
+each item was for. It totalled ~228 KiB, 44 %:
+
 | Item | Bytes | Note |
 |---|---:|---|
 | Guest address space, flat 64 KiB | 65,536 | direct index; simplest and fastest (§7.1) |
@@ -407,12 +462,13 @@ DMA storage and peak heap together (hardware notes §2.3).
 | Heap, UI, perf counters, misc | ~16,000 | |
 | **Total** | **~228 KiB** | **44 % of 520 KiB** |
 
-Two observations worth acting on:
+Two observations:
 
 - There is enough slack to hold a **second 64 KiB guest image** for instant
-  snapshot restore, and still be under 45 %.
-- The budget also fits an RP2040's 264 KiB at ~58 %, which is what keeps §3.1's
-  stretch goal honest.
+  snapshot restore, and still be under 62 %.
+- An RP2040's 264 KiB would hold the measured image with ~5 KiB to spare, not
+  at the ~58 % first written here, which predated the UEF deck and the SRAM
+  tier. §3.1 has what a port would need.
 
 Fixed capacities live in one header, `src/core/config.h`, because they will be
 traded against each other repeatedly (hardware notes §2.3).
@@ -447,8 +503,12 @@ typedef struct {
     uint8_t  a, x, y, s, p;
     uint64_t cycles;
     uint8_t  irq_lines;      /* bitmask of asserted IRQ sources */
-    bool     nmi_edge;
+    bool     nmi_pending;    /* edge-triggered, latched */
+    bool     nmi_line;       /* last level seen, for edge detection */
     bool     reset_pending;  /* BREAK key */
+    uint32_t undoc_count;    /* undocumented opcodes trapped (§6.1), */
+    uint16_t undoc_pc;       /* and the latest one's PC and opcode   */
+    uint8_t  undoc_op;
 } m6502_t;
 ```
 
@@ -568,21 +628,28 @@ tick.
 
 ### 7.1 Fast path
 
-A flat `uint8_t ram[65536]` backs the entire address space. Reads of RAM and ROM
-are a single indexed load. Writes and I/O go through a 256-entry page table:
+A flat `uint8_t ram[65536]` backs the entire address space. Reads and writes
+both go through a 256-entry page table, and for RAM and ROM each is a single
+indexed load or store:
 
 ```c
 typedef struct {
+    uint8_t *read;    /* NULL → slow path */
     uint8_t *write;   /* NULL → not writable, or I/O */
-    uint8_t  flags;   /* PAGE_IO | PAGE_VRAM | PAGE_ROM */
 } page_t;
 ```
+
+The descriptor is exactly two pointers, 2 KiB for the table. The flags
+(`PAGE_ROM`, `PAGE_IO`, `PAGE_VRAM`, `PAGE_OPEN`) are a separate byte array,
+`atom_t.page_flags[]`, because only the slow path reads them and a third field
+would pad the descriptor to twelve bytes.
 
 Write dispatch:
 
 ```c
 static inline void bus_write(atom_t *m, uint16_t a, uint8_t v) {
     page_t *p = &m->page[a >> 8];
+    m->open_bus = v;
     if (__builtin_expect(p->write != NULL, 1)) {
         p->write[a & 0xFF] = v;           /* RAM, including VRAM */
     } else {
@@ -595,15 +662,15 @@ VRAM needs no write hook: the snapshot-and-diff scheme of §8.4 discovers change
 at field end, which is cheaper than tracking every store and is immune to
 under-marking.
 
-Reads take the same shape, with a fast path for everything outside
-`#A000`–`#BFFF`.
+Reads take the same shape through `read`. A page whose `read` is NULL, I/O or
+unpopulated, takes the slow path.
 
 **A page-granular fast path cannot express a sub-page device, and the Atom has
 one.** With AtomDOS enabled the 8271 sits at `#0A00`–`#0A07` (§7.3), inside a
 page that is otherwise RAM. If page `#0A` keeps a non-NULL `write`, those eight
 addresses take the fast RAM store and the FDC is never reached — silently, with
 the disc system simply not responding. So when AtomDOS is enabled, page `#0A` is
-marked `PAGE_IO` with `write = NULL`, and `bus_write_slow` splits it:
+marked `PAGE_IO` with `read` and `write` both NULL, and `bus_write_slow` splits it:
 
 ```c
 /* page #0A, AtomDOS enabled: 8 bytes of FDC, 248 bytes of ordinary RAM */
@@ -645,9 +712,8 @@ the first reset; the host tests seed `GUEST_RND_SEED`, so a run repeats.
 `test_boot` checks that the seed survives the reset and drives `RND`, with a
 zero seed as the control.
 
-Unpopulated pages read as open bus. Modelling open bus as "last value on the
-bus" rather than `0xFF` costs one field in the struct and occasionally matters;
-do it.
+Unpopulated pages read as open bus, modelled as the last value on the bus
+rather than `0xFF`: `atom_t.open_bus`, set by every read and write (§7.1).
 
 ### 7.3 I/O decoding
 
@@ -752,9 +818,12 @@ it leaves three useful regions:
 
 The bands are drawn once at startup and touched only when their contents change,
 so they cost nothing per field — the point of hardware notes §4.7's "cost is per
-pixel, not per present". A nearest-neighbour 320×240 at (0,40) is offered as an
-option; it is 56 % more pixels on the wire for a 1.25× stretch with visibly
-uneven pixel doubling.
+pixel, not per present". As built, the top band is never drawn after
+`lcd_init`, and the status band does not exist yet. With the border on (§8.7)
+their 48 rows nearest the rectangle are the border's. A nearest-neighbour
+320×240 at (0,40) was planned as an option and has not been built; it would be
+56 % more pixels on the wire for a 1.25× stretch with visibly uneven pixel
+doubling.
 
 ### 8.3 Row generation
 
@@ -847,17 +916,28 @@ What the numbers say:
   everything else on core 1 — enough for one southbridge poll, which is why the
   poll moves to every second field (below) rather than the redraw rate dropping.
 
-**This is the machine's real constraint.** A field is 16.7 ms; a full-screen
-redraw plus a 4–5 ms southbridge poll is ~18 ms, so core 1 saturates when the
-whole screen changes every field. Mitigations, in the order they are applied:
+**This was expected to be the machine's real constraint.** A field is 16.7 ms;
+a full-screen redraw (11.5 ms, measured above) plus a 4–5 ms southbridge poll
+is 15.5–16.5 ms, so core 1 has almost nothing left if the whole screen changes
+every field. The mitigations planned
+were these, and this is how each was built:
 
-- Poll the keyboard every **second** field (30 Hz). Still well inside the
-  southbridge's 2.5 s bus-reset timeout (§6.1) and it halves the fixed I²C cost.
-- Drop to **30 Hz presentation** automatically when sustained full-screen change
-  is detected. The 6502 keeps running at 60 fields/s; only presentation is
-  decimated (hardware notes §9.6, lever 2). Atom BASIC scrolling is the case
-  this exists for.
-- Never resend the top or status bands.
+- Poll the keyboard at **30 Hz**. Still well inside the southbridge's 2.5 s
+  bus-reset timeout (§6.1), and it halves the fixed I²C cost. **Built**, on a
+  33 ms timer in core 1's loop rather than every second field.
+- Drop to **30 Hz presentation** when sustained full-screen change is detected
+  (hardware notes §9.6, lever 2). **Not built as a mode of its own.** §4.2's
+  pool already does it: a snapshot published while core 1 is still presenting
+  replaces the one waiting, and the heartbeat counts it as `dropped`. The 6502
+  keeps running at 60 fields/s whatever core 1 does.
+- Never resend the top or status bands. **Built**: nothing redraws them.
+
+**Measured at M10**, in the perf pass's scroll workload (§6.3), a `PRINT` loop
+scrolling Atom BASIC for 55 s: 3,300 fields, 3,300 presents, **0 dropped**,
+and one full redraw, at boot; the presents sampled at heartbeats took
+0.1–5.5 ms. Scrolling, the case this was designed for, does not saturate core 1. A
+program that rewrites a whole graphics screen every field has not been
+measured; the `dropped` count is where it would show.
 
 ### 8.5 Tearing
 
@@ -958,7 +1038,9 @@ literals anywhere near it (hardware notes §2.2).
 
 Cassette bits (port C bits 0–1) are excluded from the mix by default and
 available as a monitor option, because hearing your loads is charming for about
-ninety seconds. (The monitor option arrives with tape, M6/M8.)
+ninety seconds. The monitor option has not been built: tape arrived at M6
+and M8 without it, and while a UEF plays the guest runs in turbo, silent
+(§11.3).
 
 As built, in `src/core/beeper.c`:
 
@@ -1098,7 +1180,10 @@ table is data, `src/core/keymap_picocalc.c`, with one row per PicoCalc keycode:
 typedef struct { uint8_t code; uint8_t row, col; uint8_t flags; } keymap_t;
 /* flags: KM_SHIFT — assert the Atom SHIFT line with this cell
           KM_CTRL  — assert the Atom CTRL line
-          KM_NONE  — no matrix cell; handled by the UI layer          */
+          KM_ALT   — the entry is on the Alt layer
+          KM_REPT, KM_BREAK, KM_MENU — no cell: REPT, the reset line,
+                     the emulator menu
+          KM_LINE  — no cell: KM_SHIFT or KM_CTRL alone (§10.5)      */
 ```
 
 Keys the Atom has and the PicoCalc does not get a **`Alt` layer**. `Alt` is
@@ -1290,17 +1375,17 @@ Babies file above, where `Left` must read exactly `127` in port B.
 ```
 /atom/
   roms/       akernel.rom  abasic.rom  afloat.rom  dosrom.rom  utility.rom
-  tapes/      *.atm  *.uef  *.tap
-  discs/      *.ssd  *.dsk
-  snaps/      *.psnap
+  tapes/      *.atm  *.uef        a .uef may be gzipped (§11.3)
+  discs/      *.ssd  *.dsk  *.40t  *.dsd
+  snaps/      slot1.psnap … slot4.psnap
   keymaps/    *.map        game keymaps (§10.5)
   pico-atom.cfg
 ```
 
 ROMs are **not shipped** (§1). If `/atom/roms/` is missing or incomplete, the
-emulator boots to its menu with an explanatory screen rather than into a dead
-machine — a blank screen is the single most expensive failure mode to debug on
-this hardware.
+emulator shows a text page saying which files are missing (`roms.c`) rather
+than booting into a dead machine — a blank screen is the single most expensive
+failure mode to debug on this hardware.
 
 The four names above that are not `utility.rom` are Atomulator's, which is the
 set most Atom software assumes and the one [`README.md`](../README.md#rom-images)
@@ -1325,8 +1410,10 @@ most expensive class of bug on this project.
 SD access follows hardware notes §7.1: 400 kHz for init then 25 MHz requested,
 card detect on GP22 active-low with a pull-up, 512-byte blocks, SDSC byte
 addressing distinguished from SDHC block addressing, and **all card work done at
-a defined application boundary** — the menu, with the guest paused — because
-write latency can exceed both the field and the audio deadline.
+a defined application boundary** — the menu, a tape call or a disc request,
+each with core 0 parked at a field boundary and feeding the audio queue
+silence — because write latency can exceed both the field and the audio
+deadline.
 
 ### 11.2 Tape, phase 1: OS-level trapping
 
@@ -1797,20 +1884,26 @@ never sacrificed to presentation.
 
 ### 12.3 Instrumentation
 
-A perf block, reported over UART1 (115200 8-N-1, TX GP4, RX GP5) and summarised
-in the status band:
+A perf block, reported over UART1 (115200 8-N-1, TX GP4, RX GP5) as a heartbeat
+every five seconds (`main.c`). It was also to be summarised in the status band,
+which does not exist yet.
 
-| Counter | Why |
-|---|---|
-| Real-time ratio (guest s / wall s) | the headline number; paced, so it reads 1.000 whatever the code costs |
-| Core 0 in the guest, headroom | what the code costs: the share of wall time inside `atom_run_field`, and guest cycles per microsecond of it (§6.3) |
-| Host cycles per guest instruction | §6.3's figure; `atom_t.instructions` counts the guest's side |
-| Present ms, dirty bands, dirty pixels | §8.4's budget, verified |
-| Fields presented / fields simulated | is the 30 Hz decimation engaging? |
-| **PCM underrun samples** | producer starvation |
-| **Late DMA refills** | consumer starvation — a different bug (§5.8) |
-| I²C errors, key events dropped | southbridge health |
-| Die temperature | free, and it catches the 300 MHz build misbehaving |
+| Counter | Why | As built |
+|---|---|---|
+| Real-time ratio (guest s / wall s) | the headline number; paced, so it reads 1.000 whatever the code costs | `heartbeat` line, `rt` |
+| Core 0 in the guest, headroom | what the code costs: the share of wall time inside `atom_run_field`, and guest cycles per microsecond of it (§6.3) | `perf` line |
+| Host cycles per guest instruction | §6.3's figure; `atom_t.instructions` counts the guest's side | `perf` line |
+| Present ms, dirty bands, dirty pixels | §8.4's budget, verified | last and max present time; bands and pixels only in the M3 measurement build |
+| Presents, full presents, dropped snapshots | is core 1 keeping up? (§8.4) | `heartbeat` line |
+| **PCM underrun samples** | producer starvation | `audio` line |
+| **Late DMA refills** | consumer starvation — a different bug (§5.8) | `audio` line |
+| I²C errors, key events dropped | southbridge health | `heartbeat` line |
+| Die temperature | free, and it catches the 300 MHz build misbehaving | not built; there is no 300 MHz build |
+
+The heartbeat also carries the undocumented opcodes trapped (§6.1), tape calls
+and disc sectors, the deck's position and turbo fields while a tape is in, the
+PCM queue's depth and low water, and the consumed sample rate, which is the
+control quantity for every measurement in this document.
 
 Measurement discipline, from hardware notes §9.1, is part of the design and not
 an afterthought: profile **in the mode you ship** (a present that returns early
@@ -1865,19 +1958,26 @@ settings file (§11.7), and the menu's status row names the file's first problem
 | Display | native 256×192 vs scaled 320×240, colour set override, snow |
 | System | backlight, volume, perf overlay, board and ROM identification, about |
 
+Of that table, as built: Tape (without record or a position control), Keys,
+Disc and Snapshot are there; Display has colour or mono, the border and the
+backlight; volume and Reset are on the main page. The Machine page, the
+scaled display, snow, the perf overlay and the about page are not built. The
+machine's configuration is set by the settings file instead (§11.7).
+
 The backlight is southbridge register `0x05`, stepped to multiples of 16 and
 clamped to 16–240, so a fade is 15 steps and not 256 (hardware notes §4.11).
-Dimming on pause costs one I²C transaction and is worth it.
+Dimming on pause would cost one I²C transaction; it is not built.
 
-The overlay draws into the top and status bands plus, when it needs the space, a
-region of the Atom rectangle. **Dismissing it does not "restore" pixels.**
-`shadow` holds 6 KiB of guest VRAM bytes, not a decoded 256×192 panel image — in
-graphics modes one byte expands to 8 or 16 pixels, and alpha mode additionally
-needs the character ROM and the presented mode — so there is nothing there to
-copy back. Instead the overlay's bands are marked fully dirty and the normal band
-generator repaints them from `shadow` plus the presented mode on the next
-present. That is zero new code, and it is why the mode byte belongs in the shadow
-state (§8.4).
+The menu was first designed as an overlay drawn into the top and status bands.
+As built it replaces the Atom's screen instead: the menu's page goes to the
+presenter as a snapshot in alpha mode, through the same renderer. **Closing it
+does not "restore" pixels.** `shadow` holds 6 KiB of guest VRAM bytes, not a
+decoded 256×192 panel image — in graphics modes one byte expands to 8 or 16
+pixels, and alpha mode additionally needs the character ROM and the presented
+mode — so there is nothing there to copy back. Instead closing the menu calls
+`display_invalidate()`, and the presenter redraws the guest's next snapshot
+whole, one 11.5 ms present. That is almost no new code, and the same forced
+redraw is what the M3 measurement uses.
 
 ---
 
@@ -1887,6 +1987,7 @@ state (§8.4).
 pico-atom/
 ├── CMakeLists.txt              # pico-sdk build; host build behind PICO_ATOM_HOST
 ├── THIRD-PARTY.md              # material that is not ours, and under what terms
+├── .github/workflows/ci.yml    # both targets under -Werror, host tests, SRAM report
 ├── docs/
 │   ├── hardware-notes.md
 │   └── design.md
@@ -1897,57 +1998,76 @@ pico-atom/
 │   │   ├── hot.h               # which functions go to SRAM, by measured tier (§6.3)
 │   │   ├── m6502.c/.h
 │   │   ├── bus.c/.h
-│   │   ├── atom.c/.h
+│   │   ├── atom.c/.h           # atom_t, the page table, the run loop, §4.1's API
 │   │   ├── beeper.c/.h         # PC2 → PCM: box filter at the sample period (§9.3)
 │   │   ├── i8255.c/.h
-│   │   ├── mc6847.c/.h         # mode decode, LUT build, row generation, band diff
+│   │   ├── mc6847.c/.h         # mode decode, palettes, LUT build, row generation
 │   │   ├── mc6847_font.c/.h    # 64-glyph character ROM (XRoar's, THIRD-PARTY.md)
 │   │   ├── snappool.c/.h       # §4.2's three-buffer handoff; the state machine, no lock
-│   │   ├── via6522.c/.h
-│   │   ├── keymatrix.c/.h
-│   │   ├── keymap_picocalc.c   # data table (§10.3)
+│   │   ├── via6522.c/.h        # the whole 6522 (§7.4)
+│   │   ├── i8271.c/.h          # the FDC (§11.4)
+│   │   ├── keymatrix.c/.h      # held-key set, layouts, paced replay (§10)
+│   │   ├── keymap_picocalc.c   # data table (§10.3), built-in layouts
+│   │   ├── keylayout.c         # the .map parser (§10.5)
 │   │   ├── tape.c/.h           # phase 1: the OSLOAD/OSSAVE trap, ATM (§11.2)
 │   │   ├── uef.c/.h            # phase 2: a UEF image as half-cycles (§11.3)
 │   │   ├── cassette.c/.h       # the half-cycles on port C, in guest cycles
 │   │   ├── inflate.c/.h        # gzip, for UEF images
+│   │   ├── snapshot.c/.h       # §11.5's format
 │   │   ├── settings.c/.h       # every default, and /atom/pico-atom.cfg (§11.7)
-│   │   └── snapshot.c/.h
-│   ├── port/                   # PicoCalc + SDK
-│   │   ├── main.c              # bring-up order per hardware notes §10
-│   │   ├── board.c/.h          # clocks, vreg, board identification
-│   │   ├── lcd.c/.h            # ST7789P init, windows, DMA blit
-│   │   ├── display.c/.h        # snapshot diff, band present, status band
-│   │   ├── audio.c/.h          # PWM slice, chained DMA, SPSC queue
-│   │   ├── log.c/.h            # core 0's UART lines, drained by core 1 (§9.4)
-│   │   ├── southbridge.c/.h    # i2c1 register layer: read, write, busy flag, errors
-│   │   ├── kbd.c/.h            # key-event normalisation on top of it
-│   │   ├── sd.c/.h  fs.c/.h    # SPI0, FatFs
-│   │   ├── ui.c/.h
-│   │   └── perf.c/.h
-│   └── roms/embedded.h         # placeholders only; no ROM binaries in-tree
+│   │   ├── sha1.c/.h           # ROM identity
+│   │   └── romset.c/.h         # the ROM slots of §11.1
+│   └── port/                   # PicoCalc + SDK
+│       ├── main.c              # bring-up, core 0's field loop, core 1's loop, the park/handoff
+│       ├── board.c/.h          # clocks, board identification
+│       ├── lcd.c/.h            # ST7789P init, windows, DMA blit
+│       ├── display.c/.h        # snapshot diff, band present, mono palette, border
+│       ├── audio.c/.h          # PWM slice, chained DMA, SPSC queue
+│       ├── log.c/.h            # core 0's UART lines, drained by core 1 (§9.4)
+│       ├── southbridge.c/.h    # i2c1 register layer: read, write, busy flag, errors
+│       ├── kbd.c/.h            # key events from core 1 to core 0
+│       ├── sd.c/.h  diskio.c   # SPI0 and FatFs's disk layer; FatFs is copied from the SDK
+│       ├── storage.c/.h        # mount and unmount, once per piece of card work
+│       ├── roms.c/.h           # /atom/roms/ into the machine; the no-ROMs page
+│       ├── tapeio.c/.h         # tape calls, the tape list, the deck's buffer (§11.2, §11.3)
+│       ├── discio.c/.h         # sector requests off /atom/discs/ (§11.4)
+│       ├── snapio.c/.h         # snapshot slots (§11.5)
+│       ├── settingsio.c/.h     # /atom/pico-atom.cfg at boot (§11.7)
+│       ├── keymapio.c/.h       # the card's layouts (§10.5)
+│       └── menu.c/.h  textpage.c/.h   # the Alt+M menu (§13)
 ├── test/
-│   ├── host/                   # CTest
-│   │   ├── test_m6502.c        # Dormann functional, Clark decimal
+│   ├── host/                   # CTest, one binary per area, no framework
+│   │   ├── test_util.h         # CHECK and TEST_DONE; 77 is a skip
+│   │   ├── guest.c/.h          # the real machine for the ROM tests: ROMs by SHA-1, keys typed
+│   │   ├── test_m6502_functional.c   # Dormann's suite, skipped without the binary
+│   │   ├── test_m6502_decimal.c      # exhaustive valid-BCD checks
+│   │   ├── test_m6502_cycles.c       # the cycle table, by execution
+│   │   ├── test_m6502_behaviour.c
+│   │   ├── test_bus.c  test_i8255.c  test_via6522.c  test_i8271.c
 │   │   ├── test_mc6847.c       # mode table, LUT, font layout
 │   │   ├── test_mc6847_golden.c  # golden images, all nine modes
 │   │   ├── vdg_scenes.c/.h     # the VRAM behind them, shared with vdg-ppm
-│   │   ├── test_i8255.c
-│   │   ├── test_field.c        # §12.1: a guest polling FS sees it low and escapes; a redraw after FS finishes by the field's end
+│   │   ├── test_field.c        # §12.1: FS seen low and escaped; a redraw after FS finishes by the field's end
 │   │   ├── test_present.c      # §8.4 dirty bands by execution; §4.2 snapshot pool
-│   │   ├── test_keymap.c
-│   │   ├── test_settings.c     # §11.7's parser and the defaults
-│   │   ├── test_tape.c
-│   │   ├── test_uef.c          # inflate against gzip; the waveform to the cycle
-│   │   └── test_cassette.c     # the ROM's own SAVE recorded, decoded, loaded back
+│   │   ├── test_audio.c        # §9.3, every sample against an independent model
+│   │   ├── test_keymap.c  test_settings.c
+│   │   ├── test_tape.c  test_uef.c  test_cassette.c
+│   │   ├── test_snapshot.c  test_disc.c
+│   │   └── test_boot.c         # the real MOS: typing, the bell, RND, layouts
+│   ├── suites/                 # Dormann's binary, fetched, gitignored
 │   └── golden/                 # committed reference PPMs
 └── tools/
-    ├── mkfont.py               # MC6847 character ROM → header
-    ├── vdg-ppm.c               # render the scenes; regenerates test/golden/
+    ├── build.sh  flash.sh      # the firmware, built and programmed over SWD
+    ├── uart-log.sh  uart-type.sh   # capture UART1; type at the guest over it
     ├── perf-run.sh             # §6.3's measurement: workloads typed at the guest
     ├── perf-summary.sh         # the heartbeats, one line per workload
-    ├── atm.py                  # inspect/build ATM files
-    └── trace-diff.py           # compare a trace against a reference emulator
+    ├── fetch-test-suites.sh    # Dormann's binary into test/suites/
+    ├── mkfont.py               # MC6847 character ROM → header
+    └── vdg-ppm.c               # render the scenes; regenerates test/golden/
 ```
+
+`tools/atm.py` (inspect and build ATM files) and `tools/trace-diff.py` (§15.1)
+were planned and have not been written.
 
 `CMakeLists.txt` produces two targets from one source tree: the UF2, and a host
 test binary that compiles `src/core/` with the system compiler and no SDK. The
@@ -1967,7 +2087,7 @@ link-time fact rather than a hope (hardware notes §2.3).
 | Test | Standard |
 |---|---|
 | **Klaus Dormann `6502_functional_test`** | must run to completion. Non-negotiable; it is the difference between an emulator and a plausible one. |
-| **Bruce Clark decimal mode test** | must pass, including NMOS flag behaviour. |
+| **Bruce Clark decimal mode test** | must pass, including NMOS flag behaviour. **Not yet wired up**: it is distributed as source, not a binary. Until it is, decimal mode rests on the functional test's decimal section and `test_m6502_decimal`'s exhaustive valid-BCD checks; invalid BCD operands are the gap. |
 | Cycle-count table | every opcode's cycle count and page-cross penalty asserted against the published table. |
 | MC6847 golden images | render fixed VRAM contents in each of the nine modes, both colour sets, compare to committed PPMs. Includes every SG6 pattern and an inverse-video text page. |
 | 8255 | port C nibble separation, BSR writes, mode-nibble-vs-column-nibble independence. |
@@ -1978,7 +2098,10 @@ link-time fact rather than a hope (hardware notes §2.3).
 Add a **trace-diff harness**: run the same ROM image for N instructions under
 pico-atom's host build and under a reference Atom emulator, diff the per-instruction
 `PC/A/X/Y/S/P/cycles` trace. The first divergence is almost always the bug, and
-it finds problems no unit test is shaped to catch.
+it finds problems no unit test is shaped to catch. **Not built yet.** What has
+stood in for it is running the real ROMs on the host (`test_boot`, `test_tape`,
+`test_cassette`, `test_disc`), which checks what the machine does rather than
+how it gets there.
 
 ### 15.2 On hardware
 
@@ -2035,7 +2158,7 @@ class of bug in emulation.
 | VDG field rate: 50 or 60 Hz on a UK Atom | Atom circuit diagram, VDG clock source; owners' accounts | **confirmed** — 60 Hz on every Atom, UK machines included: the MC6847 is an NTSC part, and UK owners had to adjust their TV's vertical hold to lock to it. Software times itself on it (BASIC's `WAIT` is one field sync, 1/60 s), so it is `ATOM_FIELD_HZ`, a constant; it was `atom_config_t.field_hz` while unverified |
 | `FS` low interval, and the lines from `FS` to the first active line (§12.1) | MC6847 datasheet, `FS` timing | **confirmed** — the datasheet's figure 8: `tWFS` is 32 lines, `tPFS` 262. Figure 13: `FS` falls at the end of the 192 active lines, and the next active line is 13 blank and 25 top-border lines after the 26 + 6 it is low for (`ATOM_FS_LOW_LINES`, `ATOM_BLANK_LINES`). XRoar's `mc6847.h` agrees. It was ~6 % of a field, a guess, and that length did matter: ending the field at `FS`'s rise caught games mid-redraw |
 | RAM blocks populated in a stock vs expanded Atom (§7.2) | Atom manual | medium |
-| 8271 base address `#0A00` (§7.3) | the DOS ROM, disassembled and executed | **confirmed** — `#0A00`–`#0A02` and data at `#0A04` (`#E84F`), not `#0A00`–`#0A03` as first written; INT on NMI through `#0200` (`#EEEF`); `test_disc` runs the DOS against the model |
+| 8271 base address `#0A00` (§7.3) | the DOS ROM, disassembled and executed | **confirmed** — `#0A00`–`#0A02` and data at `#0A04` (`#E84F`), not `#0A00`–`#0A03` as first written; INT on NMI through `#0200`, which the DOS points at `#E87B` (`#EEEF`); `test_disc` runs the DOS against the model |
 | VRAM byte wiring in alpha mode (§2.4) | the MOS and BASIC, executed | **confirmed** — bit 6 is `A/S` and `INT/EXT` (SG6), bit 7 is `INV`: the MOS's cursor is `#A0`, and `CLEAR 0` then `PLOT` writes `#40` plus one element bit per point; `test_boot` pins both |
 | SG6 colour from bits 7:6 (§2.4) | MC6847 datasheet; a reference emulator | **confirmed** — the datasheet's `C1:C0` = `D7:D6`, so yellow/red (cyan/orange with `CSS`); `CLEAR 0` + `PLOT` compared by eye against another Atom emulator on 2026-09-22 |
 | 2.4 kHz cassette reference period, port C bit 4 (§11.3) | Atom circuit diagram | **medium**: 416 cycles, 4 MHz ÷ 1664 = 2403.8 Hz, which MAME's Atom driver also uses. `ATOM_CASSETTE_REF_CYCLES`. The ROM reads a tape by its own loop timing, so only the speed of a signal-level save depends on it |
@@ -2070,10 +2193,10 @@ Each milestone ends with something that runs and something that is measured.
 
 | # | Deliverable | Done when |
 |---|---|---|
-| **M0** | Skeleton: CMake, host + UF2 targets, CI, `config.h` | both targets build clean under `-Werror` |
-| **M1** | 6502 core, host only | Dormann and Clark tests pass; cycle table asserted |
-| **M2** | Bus, 8255, VDG row generation, host only | golden images match for all nine modes |
-| **M3** | Board bring-up: clocks, I²C, LCD, test pattern; the real core 0 slice loop, split at flyback (§12.1) | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate; a guest loop polling `FS` observes the low state and escapes |
+| **M0** | Skeleton: CMake, host + UF2 targets, CI, `config.h` | both targets build clean under `-Werror` — **done**; CI builds both on every push |
+| **M1** | 6502 core, host only | Dormann and Clark tests pass; cycle table asserted — **done**, with Dormann's suite passing and the cycle table asserted by execution; Clark's test is not wired up yet (§15.1) |
+| **M2** | Bus, 8255, VDG row generation, host only | golden images match for all nine modes — **done**, the images checked by eye before they were committed (`test/golden/`) |
+| **M3** | Board bring-up: clocks, I²C, LCD, test pattern; the real core 0 slice loop, split at flyback (§12.1) | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate; a guest loop polling `FS` observes the low state and escapes — **done** 2026-09-22 on a Plus 2 W: the test pattern's corners, colour order and orientation checked by eye on the panel; a full redraw measured at 11.5 ms, wire-bound (§8.4); zero I²C errors |
 | **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` — **done** 2026-09-22 on a Plus 2 W: typed on the PicoCalc keyboard, answer read off the panel; `CLEAR 0` + `PLOT` draws an SG6 element of the right size |
 | **M5** | Audio | integrator verified against a known frequency; underrun and late-refill counters both zero over 10 minutes — **done** 2026-09-22 on a Plus 2 W (§9.4) |
 | **M6** | Tape phase 1 (ATM via OS traps), snapshots, menu | a downloaded `.atm` game loads and runs — **done** 2026-09-22 on a Plus 2 W: Galaxians, extracted from a `games1.dsk` image to `.atm`, loaded off the card by `LOAD "GALAXI"` (4,864 bytes in 5 ms) and was played; `SAVE`/`LOAD` round-tripped through the card; snapshots saved and restored from the menu; a tape chosen in the menu loaded by `LOAD ""` |
@@ -2086,20 +2209,28 @@ Each milestone ends with something that runs and something that is measured.
 M4 is the milestone that matters; everything before it is scaffolding and
 everything after it is refinement.
 
+Nothing after M10 is named yet. Work since M10, each section saying what was
+checked on the device: the settings file (§11.7); the field split at the VDG's own 262 lines and
+BASIC's `RND` seeded from the board (§12.1, §7.2); powering up in mono with
+the border on, and the border drawn as a frame (§8.7); the host's `Shift` as
+the Atom's SHIFT line on its own (§10.3); and BREAK resetting the VIA and the
+disc controller (§6.4). Still to do: recording at signal level (§11.3), the
+status band (§8.2), and menu changes persisted to flash (§11.6).
+
 ---
 
 ## 18. Risks
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| **Core 1 saturates during full-screen scrolling** (§8.4) | visible stutter in the most common BASIC operation | 30 Hz presentation decimation is designed in from M3, not retrofitted; measure at M3 before M4 depends on it |
+| **Core 1 saturates during full-screen scrolling** (§8.4) | visible stutter in the most common BASIC operation | the snapshot pool drops what core 1 cannot present, and the heartbeat counts it. **Retired for scrolling**: 0 dropped over 3,300 fields of it at M10. A whole graphics screen rewritten every field is unmeasured |
 | **Keyboard chords the southbridge cannot deliver** (§10.3) | some Atom keys unreachable | keymap is a data table validated by a host test that knows the swallowed-chord list; Alt layer as the escape hatch |
-| **Wrong keyboard matrix transcription** (§16) | machine types the wrong characters; looks like a CPU bug | transcribe from the service manual, test against a reference emulator's matrix, verify on hardware at M4 |
+| **Wrong keyboard matrix transcription** (§16) | machine types the wrong characters; looks like a CPU bug | **retired**: settled by executing the kernel ROM's scan at M4, and `test_boot` types every entry through the real MOS |
 | **Field rate 50 vs 60 Hz** (§16) | timing-sensitive software runs at the wrong speed | was configuration while unverified; settled at 60 Hz and now a constant |
-| **MOS vector addresses wrong** (§11.2) | tape loading silently fails or corrupts | phase 2 signal-level tape does not depend on them at all — which is the real argument for doing phase 2 |
+| **MOS vector addresses wrong** (§11.2) | tape loading silently fails or corrupts | **retired**: read off the kernel ROM and held to its own routines by `test_tape`; phase 2 signal-level tape does not depend on them at all |
 | **Tearing on full-screen change** (§8.5) | cosmetic | accepted; band presents localise it. No TE line exists to fix it with |
-| **SRAM growth past budget** | link failure, or worse, a heap that fails at runtime | `config.h` plus a linker-map check in CI; §5 has 70 % headroom to start |
-| **Shipping ROMs** | licence violation | user supplies ROMs; the build has no ROM binaries and the menu explains their absence |
+| **SRAM growth past budget** | link failure, or worse, a heap that fails at runtime | `config.h`, and CI prints `arm-none-eabi-size` on every build (it reports, it does not fail); §5 measured 49 % used, 51 % headroom, at 2026-09-25 |
+| **Shipping ROMs** | licence violation | user supplies ROMs; the build has no ROM binaries and a boot without them shows a page naming what is missing |
 | **300 MHz turbo build corrupts data** | silent, intermittent | not shipped by default; if enabled, the hardware notes' §3 clock checklist is mandatory and the flash-integrity concern is real |
 
 ---
