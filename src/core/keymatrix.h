@@ -107,6 +107,10 @@ typedef struct {
     /* The binding chosen at press, copied: its release undoes exactly
      * that, whatever layout is in force by then (§10.5). */
     keymap_t map;
+    /* Pressed under the host's Shift for a character the Atom types
+     * unshifted, like ':': while it is down the host's Shift does not
+     * reach the SHIFT line (§10.3). */
+    bool unshift;
 } keymatrix_held_t;
 
 typedef struct { uint8_t state, code; } keymatrix_event_t;
@@ -128,6 +132,7 @@ typedef struct {
     keymatrix_held_t held[ATOM_KEY_HELD_MAX];
     uint8_t n;
     bool alt, ctrl;
+    uint8_t shift;        /* the host's Shifts that are down: bit 0 left, 1 right */
 
     /* The game keymap over the standard map, or NULL (§10.5). */
     const keylayout_t *layout;
