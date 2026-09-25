@@ -466,9 +466,9 @@ Two observations:
 
 - There is enough slack to hold a **second 64 KiB guest image** for instant
   snapshot restore, and still be under 62 %.
-- An RP2040's 256 KiB of main SRAM would hold the measured image with ~5 KiB to spare, not
-  at the ~58 % first written here, which predated the UEF deck and the SRAM
-  tier. §3.1 has what a port would need.
+- An RP2040's 256 KiB of main SRAM would hold the measured image with ~5 KiB
+  to spare, not at the ~58 % first written here, which predated the UEF deck
+  and the SRAM tier. §3.1 has what a port would need.
 
 Fixed capacities live in one header, `src/core/config.h`, because they will be
 traded against each other repeatedly (hardware notes §2.3).
