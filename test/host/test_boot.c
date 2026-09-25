@@ -217,6 +217,27 @@ int main(void) {
         CHECK(strcmp(row_text(0), "ACORN ATOM") == 0, "BREAK banner: '%s'", row_text(0));
         CHECK(strcmp(row_text(2), ">") == 0, "BREAK prompt: '%s'", row_text(2));
 
+        /* BREAK over a program taking T1 interrupts. The kernel CLIs with
+         * IRQVEC back at #A000 and never writes the VIA, so unless the
+         * reset line clears the VIA the next tick runs open bus into
+         * ERROR n LINE 484 (§6.4). The handler at #3F00 is LDA #B804,
+         * PLA, RTI. */
+        restore();
+        type("10?#3F00=#AD;?#3F01=4;?#3F02=#B8;?#3F03=#68;?#3F04=#40\n");
+        type("20?#204=0;?#205=#3F\n");
+        type("30?#B80B=#40;?#B804=0;?#B805=#40;?#B80E=#C0\n");
+        type("484 GOTO 484\n");
+        type("RUN\n");
+        fields(30);
+        CHECK(g.m.via.ier == 0x40u, "T1 IRQ not enabled: IER 0x%02X", g.m.via.ier);
+        chord(PICOCALC_KEY_ALT, 'K');
+        fields(60);
+        CHECK(g.m.via.ier == 0, "BREAK left IER 0x%02X", g.m.via.ier);
+        CHECK(g.m.via.in_a == 0x7Fu, "BREAK changed the printer line: 0x%02X", g.m.via.in_a);
+        CHECK(strcmp(row_text(0), "ACORN ATOM") == 0, "BREAK over IRQs, banner: '%s'", row_text(0));
+        CHECK(strcmp(row_text(2), ">") == 0, "BREAK over IRQs, prompt: '%s'", row_text(2));
+        CHECK(strcmp(row_text(3), "") == 0, "BREAK over IRQs, row 3: '%s'", row_text(3));
+
         /* LOCK turns the letters over: unshifted A is then lower case. */
         restore();
         chord(PICOCALC_KEY_ALT, 'L');
