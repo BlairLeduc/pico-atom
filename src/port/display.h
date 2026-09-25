@@ -20,8 +20,9 @@ typedef struct {
 
 void display_init(const uint8_t *font);
 
-/* Colour or monochrome, and whether the VDG's border fills the panel
- * around the Atom's rectangle (design.md §8.7). A change repaints
+/* Colour or monochrome, and whether the VDG's border is drawn as a
+ * frame around the Atom's rectangle, ATOM_BORDER_X by ATOM_BORDER_Y
+ * (design.md §8.7). A change repaints
  * everything at the next present. With the border off the panel around
  * the rectangle is black, as it was before M10. */
 void display_set_look(bool mono, bool border);

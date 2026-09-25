@@ -31,6 +31,11 @@
 #define ATOM_SCREEN_X          32u
 #define ATOM_SCREEN_Y          64u
 
+/* §8.7's border: 32 px at the sides, 48 rows above and below, so it
+ * stops 16 rows short of the panel's top and bottom, which stay black. */
+#define ATOM_BORDER_X          32u
+#define ATOM_BORDER_Y          48u
+
 #define ATOM_SNAPSHOT_COUNT     3u  /* §4.2: three, and the third is the point */
 #define ATOM_BAND_ROWS          8u  /* 24 bands over 192 rows (§8.4)      */
 #define ATOM_BAND_COUNT     (ATOM_SCREEN_H / ATOM_BAND_ROWS)
