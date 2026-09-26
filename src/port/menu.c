@@ -26,6 +26,10 @@
  * live loop. */
 #define POLL_US 33333u
 
+/* The MCU refreshes its battery reading every 20 s (hardware-notes.md
+ * §6); reading it more often than this would show nothing new. */
+#define BAT_POLL_US 5000000u
+
 #define PC_ENTER  0x0Au
 #define PC_ESC    0xB1u
 #define PC_LEFT   0xB4u
@@ -66,6 +70,7 @@ static struct {
     unsigned         slot;
     bool             used[SNAPIO_SLOTS];
     unsigned         backlight;
+    int              battery;   /* SB_REG_BAT's byte, -1 if unread */
     char             status[TEXT_COLS + 1];
 
     /* The tape page. */
@@ -234,11 +239,31 @@ static void draw_discs(void) {
     }
 }
 
+/* The title row's right end: the charge, and CHG in place of BAT while
+ * it charges (bit 7, hardware-notes.md §6). Nothing if it could not be
+ * read. */
+static void draw_battery(void) {
+    if (s.battery < 0) return;
+    unsigned pct = (unsigned)s.battery & 0x7Fu;
+    char text[12];
+    snprintf(text, sizeof text, "%s %u%% ", s.battery & 0x80 ? "CHG" : "BAT",
+             pct > 100u ? 100u : pct);
+    textpage_put(s.vram, 0, TEXT_COLS - (int)strlen(text), text, true);
+}
+
+static bool read_battery(void) {
+    uint8_t r[2];
+    int was = s.battery;
+    s.battery = sb_read(SB_REG_BAT, r) == SB_OK ? r[1] : -1;
+    return s.battery != was;
+}
+
 static void draw(void) {
     textpage_clear(s.vram);
     textpage_line(s.vram, 0, s.tapes ? " PICO-ATOM: TAPES" : s.discs ? " PICO-ATOM: DISCS"
                              : s.snaps ? " PICO-ATOM: SNAPSHOTS"
                              : s.display ? " PICO-ATOM: DISPLAY" : " PICO-ATOM", true);
+    draw_battery();
     if (s.tapes) draw_tapes();
     else if (s.discs) draw_discs();
     else if (s.snaps) draw_snaps();
@@ -550,16 +575,23 @@ void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram) {
     uint8_t r[2] = { 0, 0 };
     s.backlight = sb_read(SB_REG_BKL, r) == SB_OK ? r[1] : 0u;
     if (s.backlight < BKL_MIN || s.backlight > BKL_MAX) s.backlight = 128u;
+    s.battery = -1;
+    (void)read_battery();
 
     printf("  menu         : open%s\n", s.card ? "" : " (no card)");
     draw();
 
     uint32_t last_poll = time_us_32();
+    uint32_t last_bat = last_poll;
     while (!s.done) {
         if (time_us_32() - last_poll >= POLL_US) {
             last_poll = time_us_32();
             (void)kbd_poll();
             keys();
+            if (!s.done && last_poll - last_bat >= BAT_POLL_US) {
+                last_bat = last_poll;
+                if (read_battery()) draw();
+            }
         }
         log_pump();
         sleep_us(500);
