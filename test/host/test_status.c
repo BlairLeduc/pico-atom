@@ -98,6 +98,10 @@ int main(void) {
     atom_status(&m, &st);
     CHECK(st.deck == STATUS_DECK_REC && st.percent == 12u * 100u / sizeof img,
           "recording, and how full: %u %u%%", st.deck, st.percent);
+    atom_cassette_rewind(&m);
+    atom_cassette_play(&m, true);
+    CHECK(atom_cassette_recording(&m) && !m.cas.playing,
+          "rewind and play leave a recording alone");
     atom_cassette_record(&m, false);
     atom_status(&m, &st);
     CHECK(st.deck == STATUS_DECK_END, "stopped at the end of what it wrote: %u", st.deck);

@@ -65,7 +65,8 @@ static void advance(cassette_t *c, uint64_t now) {
 }
 
 void cassette_play(cassette_t *c, uint64_t now, bool on) {
-    if (!c->loaded) return;
+    /* While recording the recorder has the tape (§11.3). */
+    if (!c->loaded || c->rec.on) return;
     if (on == c->playing) return;
     if (on) {
         if (c->ended) return;               /* rewind first, as on a deck */
@@ -80,7 +81,7 @@ void cassette_play(cassette_t *c, uint64_t now, bool on) {
 }
 
 void cassette_rewind(cassette_t *c, uint64_t now) {
-    if (!c->loaded) return;
+    if (!c->loaded || c->rec.on) return;
     bool was = c->playing;
     uef_rewind(&c->uef);
     c->playing = false;

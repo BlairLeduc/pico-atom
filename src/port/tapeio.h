@@ -63,7 +63,8 @@ unsigned tapeio_list(tapeio_entry_t *out, unsigned max);
  * .uef is decompressed into the deck, stopped: the MOS's PLAY TAPE and
  * the key that answers it start it (tape.h's cues, §11.3). NULL or ""
  * ejects. A recording on the tape coming out is stopped and written
- * first. The card must be mounted and core 0 parked. Returns NULL, or
+ * first; if that write fails the tape stays in and the reason is
+ * returned. The card must be mounted and core 0 parked. Returns NULL, or
  * why the tape did not go in, and the deck is then empty. */
 const char *tapeio_insert(atom_t *m, const char *path);
 const char *tapeio_inserted(void);   /* "" when none */

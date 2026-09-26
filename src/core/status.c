@@ -17,7 +17,7 @@ void atom_status(const atom_t *m, atom_status_t *st) {
         else if (c->refused == CAS_REC_PROTECTED) st->deck = STATUS_DECK_PROTECTED;
         else if (c->refused == CAS_REC_FULL) st->deck = STATUS_DECK_FULL;
         else if (c->playing) st->deck = STATUS_DECK_PLAY;
-        else if (c->ended) st->deck = STATUS_DECK_END;
+        else if (c->ended) st->deck = c->rec.full ? STATUS_DECK_FULL : STATUS_DECK_END;
         else st->deck = STATUS_DECK_STOP;
         st->percent = (uint8_t)(c->rec.on ? cassette_room_percent(c) : cassette_percent(c));
         st->errors = (uint16_t)(c->rec.errors > 0xFFFFu ? 0xFFFFu : c->rec.errors);

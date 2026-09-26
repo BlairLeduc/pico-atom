@@ -25,6 +25,7 @@
 
 #include "bus.h"
 #include "guest.h"
+#include "status.h"
 #include "test_util.h"
 #include "uef.h"
 
@@ -549,6 +550,9 @@ static int test_record(void) {
     CHECK(ok, "what it holds is a whole image");
     CHECK(w == 1, "what it holds went to the card");
     CHECK(guest_cursor(&g.m) >= 0, "SAVE returned");
+    atom_status_t st;
+    atom_status(&g.m, &st);
+    CHECK(st.deck == STATUS_DECK_FULL, "the status line says FULL after: %u", st.deck);
     if (test_failures) dump_screen(&g.m);
 
     /* The nameless format ends at OSSAVE's other exit (#FAB9), with the

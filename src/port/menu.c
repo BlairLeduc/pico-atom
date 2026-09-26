@@ -512,6 +512,7 @@ static void key_display(uint8_t c) {
 static void deck(int what) {
     atom_t *m = s.m;
     if (!m->cas.loaded) { say(" NO UEF IN THE DECK", ""); return; }
+    if (atom_cassette_recording(m)) { say(" RECORDING: STOP IT FIRST", ""); return; }
     if (what == T_REWIND) {
         atom_cassette_rewind(m);
         say(" REWOUND", "");
@@ -562,7 +563,8 @@ static void key_tapes(uint8_t c) {
     case PC_DOWN: if (s.tape_sel < last) s.tape_sel++; break;
     case PC_ENTER:
         if (s.tape_sel == T_EJECT) {
-            tapeio_insert(s.m, NULL);
+            const char *err = tapeio_insert(s.m, NULL);
+            if (err) { say(" NOT WRITTEN: %.18s", err); return; }
             say(" TAPE EJECTED", "");
         } else if (s.tape_sel == T_PLAY || s.tape_sel == T_REWIND) {
             deck(s.tape_sel);

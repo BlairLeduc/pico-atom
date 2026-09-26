@@ -158,9 +158,13 @@ const char *tapeio_write(atom_t *m) {
 
 const char *tapeio_insert(atom_t *m, const char *path) {
     /* A recording is the user's: it goes to the card before the tape
-     * leaves the deck, whoever is changing it. */
+     * leaves the deck, whoever is changing it, and a tape that could not
+     * be written stays in, the only copy of what was recorded. */
     if (atom_cassette_recording(m)) (void)atom_cassette_record(m, false);
-    if (m->cas.dirty) (void)tapeio_write(m);
+    if (m->cas.dirty) {
+        const char *err = tapeio_write(m);
+        if (err) return err;
+    }
     s_inserted[0] = 0;
     s_first[0] = 0;
     atom_cassette_eject(m);
@@ -430,7 +434,8 @@ bool tapeio_serve(atom_t *m, char loaded[ATOM_ATM_NAME_LEN + 1]) {
             (void)tapeio_write(m);
             storage_unmount();
         } else {
-            printf("  tape         : recording: no card; kept in the deck until one is in\n");
+            printf("  tape         : recording: no card; kept in the deck, written when "
+                   "it next leaves it\n");
         }
         atom_tape_written(m);
         return false;
