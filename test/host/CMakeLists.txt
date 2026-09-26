@@ -119,3 +119,11 @@ endforeach()
 target_compile_definitions(test_keymap PRIVATE
     PICO_ATOM_README="${CMAKE_SOURCE_DIR}/README.md"
 )
+
+# §15.1's trace-diff harness: our half. tools/trace-diff.py runs it beside
+# atomulator-trace, which tools/trace/build-atomulator.sh builds from an
+# Atomulator checkout, and diffs the two.
+add_executable(atom-trace ${CMAKE_SOURCE_DIR}/tools/trace/atom-trace.c)
+target_link_libraries(atom-trace PRIVATE pico_atom_core)
+target_include_directories(atom-trace PRIVATE ${CMAKE_SOURCE_DIR}/tools/trace)
+target_compile_options(atom-trace PRIVATE ${PICO_ATOM_WARNINGS})

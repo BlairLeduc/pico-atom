@@ -14,6 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install cc65, for Clark's decimal test
+        run: sudo apt-get update && sudo apt-get install -y cc65
+
       - name: Fetch the 6502 test suites
         run: ./tools/fetch-test-suites.sh test/suites
 
