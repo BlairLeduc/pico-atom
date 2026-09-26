@@ -50,8 +50,9 @@ void display_invalidate(void) {
     s_valid = false;
 }
 
-void display_set_look(bool mono, bool border) {
+void display_set_look(bool mono, bool border, bool dark_bg) {
     mc6847_set_mono(&s_vdg, mono);
+    mc6847_set_dark_bg(&s_vdg, dark_bg);
     s_border = border;
     display_invalidate();
 }

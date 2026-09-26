@@ -65,6 +65,13 @@ static settings_status_t screen(settings_t *s, const char *v) {
     return SET_OK;
 }
 
+static settings_status_t background(settings_t *s, const char *v) {
+    if (same_name(v, "dark")) s->dark_bg = true;
+    else if (same_name(v, "black")) s->dark_bg = false;
+    else return SET_BAD_VALUE;
+    return SET_OK;
+}
+
 static settings_status_t keys(settings_t *s, const char *v) {
     if (!*v) return SET_BAD_VALUE;
     if (same_name(v, "standard")) { s->keys[0] = 0; return SET_OK; }
@@ -77,12 +84,12 @@ static settings_status_t keys(settings_t *s, const char *v) {
 /* Every setting the file may give, in the order the README lists them.
  * Only the tape and the drives may be left empty, meaning none. */
 enum {
-    K_SCREEN, K_BORDER, K_BACKLIGHT, K_VOLUME, K_KEYS, K_TAPE, K_TURBO,
+    K_SCREEN, K_BORDER, K_BACKGROUND, K_BACKLIGHT, K_VOLUME, K_KEYS, K_TAPE, K_TURBO,
     K_DRIVE0, K_DRIVE1, K_UPPER_RAM, K_DOS, K_COUNT
 };
 
 static const char *const k_names[K_COUNT] = {
-    "screen", "border", "backlight", "volume", "keys", "tape", "turbo",
+    "screen", "border", "background", "backlight", "volume", "keys", "tape", "turbo",
     "drive0", "drive1", "upper_ram", "dos",
 };
 
@@ -91,6 +98,7 @@ static settings_status_t apply(settings_t *s, unsigned k, const char *v) {
     switch (k) {
     case K_SCREEN:    return screen(s, v);
     case K_BORDER:    return on_off(v, &s->border);
+    case K_BACKGROUND: return background(s, v);
     case K_BACKLIGHT: return number(v, 1u, 15u, &s->backlight);
     case K_VOLUME:    return number(v, 0u, 8u, &s->volume);
     case K_KEYS:      return keys(s, v);

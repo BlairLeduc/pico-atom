@@ -162,7 +162,10 @@ The menu's *Display* page switches the screen between colour and **mono**,
 which is how most Atoms looked without the colour board. In mono, blue and red
 are the darkest grey. It also turns the **border** on or off. The border is
 the colour the video chip draws around its picture: black in text modes, and
-green or buff in the graphics modes. The backlight is on the same page.
+green or buff in the graphics modes. **Background** puts text on dark green
+(or dark orange), as the video chip drew it, instead of black. It changes
+nothing in mono, where the chip's dark green was black. The
+backlight is on the same page.
 A change made in the menu lasts until the power goes off. To choose how the
 PicoCalc starts, use the settings file below.
 
@@ -175,6 +178,7 @@ which is left alone unless the file sets it:
 # /atom/pico-atom.cfg
 screen    = mono       # or colour
 border    = on         # or off
+background = black     # or dark
 backlight = 8          # 1-15, as the menu shows it; leave out to keep the last
 volume    = 8          # 0-8
 keys      = standard   # or a layout's name, as the menu shows it

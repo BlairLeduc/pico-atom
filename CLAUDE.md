@@ -122,7 +122,9 @@ only needs the T1 frame clock M4 already had. The outside world is
 `via6522_set_ca1()` and its kind. The new state is in bytes the snapshot had
 reserved, encoded so that zero means reset. The menu's Display page switches a
 mono palette (the VDG's luminance levels, off the datasheet's figure 10) and the
-VDG border (black in text modes, green or buff in graphics). The presenter
+VDG border (black in text modes, green or buff in graphics). A third
+setting, off by default, puts text on the datasheet's dark green or dark
+orange instead of black; its level is a guess (§16). The presenter
 fills the border only when its colour changes; with the border off it never
 fills it. Verified on a Plus 2 W on 2026-09-23: both settings were switched from
 the menu and seen on the panel. As first built, the VIA cost 2.5–4 % on every
@@ -134,7 +136,7 @@ events; call `via6522_sync()` before reading them from outside. M10 now runs
 Nothing after M10 is named in design.md §17 yet.
 
 The settings file (design.md §11.7): `/atom/pico-atom.cfg` sets what the
-machine powers up with: screen, border, backlight, volume, keys, tape, turbo,
+machine powers up with: screen, border, background, backlight, volume, keys, tape, turbo,
 drives 0 and 1, upper RAM and AtomDOS. `settings_default()` is
 where every default lives. Core 1 reads the file once, before the ROMs, and
 re-runs `atom_init` with its machine configuration while core 0 waits. A wrong

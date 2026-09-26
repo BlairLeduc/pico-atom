@@ -448,5 +448,45 @@ int main(void) {
         }
     }
 
+    /* ---- the dark background (§8.7) ----------------------------------- */
+    {
+        /* Columns 1-5 of row 1 are blank in a space and all ink in an
+         * inverse space, with or without a font (the placeholder box
+         * inks columns 0 and 6); #40 is an SG6 cell with no element on. */
+        memset(g_vram, 0, sizeof g_vram);
+        g_vram[0] = 0x20;
+        g_vram[1] = 0xA0;
+        g_vram[2] = 0x40;
+        mc6847_init(&g_vdg);
+        mc6847_set_mode(&g_vdg, mode_of(false, 0, false));
+        mc6847_render_row(&g_vdg, g_vram, 1, g_row);
+        CHECK(g_row[1] == mc6847_palette[VDG_BLACK], "off by default: black");
+
+        mc6847_set_dark_bg(&g_vdg, true);
+        for (unsigned css = 0; css < 2u; css++) {
+            mc6847_set_mode(&g_vdg, mode_of(false, 0, css));
+            mc6847_render_row(&g_vdg, g_vram, 1, g_row);
+            uint16_t dark = mc6847_palette[css ? VDG_DARK_ORANGE : VDG_DARK_GREEN];
+            uint16_t ink  = mc6847_palette[css ? VDG_ORANGE : VDG_GREEN];
+            CHECK(g_row[1] == dark && g_row[5] == dark, "CSS %u: text on dark", css);
+            CHECK(g_row[9] == ink && g_row[13] == ink, "CSS %u: an inverse space is ink", css);
+            CHECK(g_row[16] == mc6847_palette[VDG_BLACK] &&
+                  g_row[23] == mc6847_palette[VDG_BLACK], "CSS %u: SG6 stays black", css);
+        }
+        CHECK(mc6847_palette[VDG_DARK_GREEN] != mc6847_palette[VDG_BLACK] &&
+              mc6847_palette[VDG_DARK_ORANGE] != mc6847_palette[VDG_DARK_GREEN],
+              "dark green and dark orange are colours of their own");
+
+        mc6847_set_mono(&g_vdg, true);
+        mc6847_set_mode(&g_vdg, mode_of(false, 0, false));
+        mc6847_render_row(&g_vdg, g_vram, 1, g_row);
+        CHECK(g_row[1] == mc6847_palette_mono[VDG_BLACK],
+              "mono: black, since only chroma made it dark green: %04X", g_row[1]);
+
+        mc6847_set_dark_bg(&g_vdg, false);
+        mc6847_render_row(&g_vdg, g_vram, 1, g_row);
+        CHECK(g_row[1] == mc6847_palette_mono[VDG_BLACK], "off again: black");
+    }
+
     TEST_DONE();
 }

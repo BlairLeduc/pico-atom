@@ -20,12 +20,13 @@ typedef struct {
 
 void display_init(const uint8_t *font);
 
-/* Colour or monochrome, and whether the VDG's border is drawn as a
- * frame around the Atom's rectangle, ATOM_BORDER_X by ATOM_BORDER_Y
+/* Colour or monochrome, whether the VDG's border is drawn as a frame
+ * around the Atom's rectangle, ATOM_BORDER_X by ATOM_BORDER_Y, and
+ * whether text sits on dark green or orange rather than black
  * (design.md §8.7). A change repaints
  * everything at the next present. With the border off the panel around
  * the rectangle is black, as it was before M10. */
-void display_set_look(bool mono, bool border);
+void display_set_look(bool mono, bool border, bool dark_bg);
 
 /* Present one snapshot. If its mode byte differs from the presented one,
  * the whole rectangle is redrawn, and the border too if its colour has

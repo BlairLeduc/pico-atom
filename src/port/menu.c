@@ -52,7 +52,7 @@ enum {
 enum { S_SLOT, S_SAVE, S_LOAD, S_DELETE, S_COUNT };
 
 /* The display page (§8.7). */
-enum { D_COLOUR, D_BORDER, D_BACKLIGHT, D_COUNT };
+enum { D_COLOUR, D_BORDER, D_BACKGROUND, D_BACKLIGHT, D_COUNT };
 
 #define TAPE_ROWS 11
 
@@ -206,6 +206,9 @@ static void draw_display(void) {
             break;
         case D_BORDER:
             snprintf(line, sizeof line, " BORDER          < %s >", s.set->border ? "ON" : "OFF");
+            break;
+        case D_BACKGROUND:
+            snprintf(line, sizeof line, " BACKGROUND      < %s >", s.set->dark_bg ? "DARK" : "BLACK");
             break;
         case D_BACKLIGHT:
             snprintf(line, sizeof line, " BACKLIGHT       < %u >", s.backlight / BKL_STEP);
@@ -443,12 +446,14 @@ static void key_display(uint8_t c) {
         }
         if (s.display_sel == D_COLOUR) {
             s.set->mono = !s.set->mono;
+        } else if (s.display_sel == D_BACKGROUND) {
+            s.set->dark_bg = !s.set->dark_bg;
         } else {
             s.set->border = !s.set->border;
             /* This page is text, and the VDG's text border is black. */
             say(s.set->border ? " GREEN OR BUFF IN GRAPHICS MODES" : "", "");
         }
-        display_set_look(s.set->mono, s.set->border);
+        display_set_look(s.set->mono, s.set->border, s.set->dark_bg);
         break;
     case PC_ESC:
         s.display = false;
