@@ -1,5 +1,6 @@
-/* test_settings.c — the defaults and /atom/pico-atom.cfg's parser
- * (settings.h, design.md §11.7). Needs no ROM.
+/* test_settings.c — the defaults, /atom/pico-atom.cfg's parser, and the
+ * menu's save that edits it (settings.h, design.md §11.6, §11.7). Needs
+ * no ROM.
  */
 
 #include <string.h>
@@ -22,8 +23,8 @@ int main(void) {
         atom_config_t cfg;
         atom_config_default(&cfg);
         CHECK(memcmp(&d.machine, &cfg, sizeof cfg) == 0, "machine defaults are atom_config_default's");
-        CHECK(d.mono && d.border && !d.dark_bg && d.volume == 8u && d.backlight == 0u && d.turbo,
-              "host defaults");
+        CHECK(d.mono && d.border && !d.dark_bg && d.status && d.volume == 8u &&
+              d.backlight == 0u && d.turbo, "host defaults");
         CHECK(!d.keys[0] && !d.tape[0] && !d.drive[0][0] && !d.drive[1][0], "nothing inserted");
     }
 
@@ -40,6 +41,7 @@ int main(void) {
             "screen    = colour\r\n"
             "BORDER    = Off\r\n"
             "background = Dark\r\n"
+            "status    = off\r\n"
             "backlight = 12\r\n"
             "volume    = 0\r\n"
             "keys      = cursor games\r\n"
@@ -50,7 +52,8 @@ int main(void) {
             "upper_ram = off\r\n"
             "dos       = off\r\n";
         CHECK(parse(&s, all, &line) == SET_OK && line == 0, "every setting: line %u", line);
-        CHECK(!s.mono && !s.border && s.dark_bg && s.backlight == 12u && s.volume == 0u && !s.turbo, "host");
+        CHECK(!s.mono && !s.border && s.dark_bg && !s.status && s.backlight == 12u &&
+              s.volume == 0u && !s.turbo, "host");
         CHECK(strcmp(s.keys, "CURSOR GAMES") == 0, "keys uppercased, spaces kept: %s", s.keys);
         CHECK(strcmp(s.tape, "cchuck.uef") == 0, "tape: %s", s.tape);
         CHECK(strcmp(s.drive[0], "games1.dsk") == 0, "drive0: %s", s.drive[0]);
@@ -128,6 +131,154 @@ int main(void) {
         settings_default(&s);
         CHECK(settings_parse(&s, nul, sizeof nul - 1, &line) == SET_SYNTAX && line == 1, "NUL");
         CHECK(s.mono && !s.border, "the NUL line is refused, the next applies");
+    }
+
+    /* ---- the menu's save edits the file (§11.6) ------------------------- */
+    const char *out;
+    size_t out_len;
+#define REWRITE(text, set) settings_rewrite(text, strlen(text), set, &out, &out_len)
+#define IS(want) (out_len == strlen(want) && memcmp(out, want, out_len) == 0)
+
+    /* Nothing to say: an empty file, or none, stays empty. */
+    CHECK(REWRITE("", &d) == SET_OK && out_len == 0, "defaults into an empty file: %zu", out_len);
+
+    /* The user's file, CRLF, with comments, a bad line and a stranger. */
+    {
+        const char *file =
+            "# my PicoCalc\r\n"
+            "  screen = color      # the colour board\r\n"
+            "volume = 11\r\n"
+            "tape =          # none\r\n"
+            "turbo = off\r\n"
+            "frobnicate = yes\r\n"
+            "\r\n"
+            "keys = cursor games\r\n"
+            "drive0 = /atom/discs/games1.dsk # disc\r\n";
+        settings_default(&s);
+        CHECK(settings_parse(&s, file, strlen(file), &line) == SET_BAD_VALUE && line == 3, "setup");
+        /* What the menu changed: mono, volume, a tape in the deck, and a
+         * disc taken out of drive 0 and put in drive 1. */
+        s.mono = true;
+        s.volume = 5u;
+        strcpy(s.tape, "NEW01.uef");
+        strcpy(s.drive[0], "");
+        strcpy(s.drive[1], "/atom/other/side#2.ssd");
+        CHECK(REWRITE(file, &s) == SET_OK, "rewrites");
+        const char *want =
+            "# my PicoCalc\r\n"
+            "  screen = mono       # the colour board\r\n"
+            "volume = 11\r\n"
+            "tape = NEW01.uef # none\r\n"
+            "turbo = off\r\n"
+            "frobnicate = yes\r\n"
+            "\r\n"
+            "keys = cursor games\r\n"
+            "drive0 =                        # disc\r\n"
+            "volume = 5\r\n"
+            "drive1 = /atom/other/side#2.ssd\r\n";
+        CHECK(IS(want), "the user's file, edited:\n%.*s\nwanted:\n%s", (int)out_len, out, want);
+
+        /* Saving again changes nothing more. */
+        static char again[ATOM_SETTINGS_FILE_MAX];
+        memcpy(again, out, out_len);
+        size_t again_len = out_len;
+        CHECK(settings_rewrite(again, again_len, &s, &out, &out_len) == SET_OK &&
+              out_len == again_len && memcmp(out, again, out_len) == 0, "a second save is the same");
+    }
+
+    /* A value that already says the same stays as the user wrote it,
+     * however it is spelt. */
+    {
+        const char *file = "screen = Color\nkeys = cursor games\ntape = /atom/tapes/CChuck.UEF\n";
+        CHECK(parse(&s, file, &line) == SET_OK, "setup");
+        strcpy(s.tape, "cchuck.uef");
+        CHECK(REWRITE(file, &s) == SET_OK && IS(file), "unchanged: %.*s", (int)out_len, out);
+    }
+
+    /* Appended lines: only what differs from the default, with the
+     * file's line ending, after a last line that had none. */
+    {
+        settings_default(&s);
+        s.border = false;
+        s.status = false;
+        s.backlight = 9u;
+        strcpy(s.keys, "GAMES");
+        CHECK(REWRITE("# mine\r\nturbo = off", &s) == SET_OK &&
+              IS("# mine\r\nturbo = off\r\nborder = off\r\nstatus = off\r\nbacklight = 9\r\n"
+                 "keys = GAMES\r\n"), "appended: %.*s", (int)out_len, out);
+        s.border = true;
+        CHECK(REWRITE("border = off\n", &s) == SET_OK && strncmp(out, "border = on\n", 12) == 0,
+              "back to the default is written where the file has it");
+        s.keys[0] = 0;
+        CHECK(REWRITE("keys = games\n", &s) == SET_OK && strstr(out, "keys = standard\n"),
+              "the standard map is written by name");
+    }
+
+    /* The README's file, three columns: a value put in, one changed and
+     * one taken out all leave the comments where they were. */
+    {
+        const char *file =
+            "screen    = mono       # or colour\n"
+            "tape      =            # a file in /atom/tapes/\n"
+            "drive0    = games1.dsk # a disc image\n"
+            "volume\t= 8\t# 0-8\n";
+        CHECK(parse(&s, file, &line) == SET_OK, "setup");
+        s.mono = false;
+        strcpy(s.tape, "TAPE01.uef");
+        s.drive[0][0] = 0;
+        s.volume = 3u;
+        const char *want =
+            "screen    = colour     # or colour\n"
+            "tape      = TAPE01.uef # a file in /atom/tapes/\n"
+            "drive0    =            # a disc image\n"
+            "volume\t= 3\t# 0-8\n";
+        CHECK(REWRITE(file, &s) == SET_OK && IS(want), "columns kept:\n%.*s\nwanted:\n%s",
+              (int)out_len, out, want);
+        strcpy(s.tape, "A-MUCH-LONGER-NAME.uef");
+        CHECK(REWRITE(file, &s) == SET_OK &&
+              strstr(out, "tape      = A-MUCH-LONGER-NAME.uef # a file"),
+              "a value too long for the column pushes its comment one space on:\n%.*s",
+              (int)out_len, out);
+    }
+
+    /* The backlight: left alone at 0, which is the southbridge's own. */
+    {
+        settings_default(&s);
+        CHECK(REWRITE("backlight = 8 # dim\n", &s) == SET_OK && IS("backlight = 8 # dim\n"),
+              "a backlight the menu never moved is left");
+        s.backlight = 15u;
+        CHECK(REWRITE("backlight = 8 # dim\n", &s) == SET_OK && IS("backlight = 15 # dim\n"),
+              "one it moved is written");
+    }
+
+    /* Refusals leave nothing to write. */
+    settings_default(&s);
+    s.volume = 2u;
+    CHECK(REWRITE("volume = 3\nborder = off\nvolume = 4\n", &s) == SET_DUPLICATE,
+          "a key given twice refuses the save");
+    CHECK(REWRITE("volume = 11\nvolume = 4\n", &s) == SET_OK &&
+          IS("volume = 11\nvolume = 2\n"), "a refused line is not the key's: %.*s", (int)out_len, out);
+    {
+        static char big[ATOM_SETTINGS_FILE_MAX + 1];
+        memset(big, '#', ATOM_SETTINGS_FILE_MAX - 4u);
+        big[ATOM_SETTINGS_FILE_MAX - 4u] = '\n';
+        big[ATOM_SETTINGS_FILE_MAX - 3u] = 0;
+        CHECK(REWRITE(big, &s) == SET_TOO_LONG, "a result too long for the file refuses");
+    }
+    strcpy(s.tape, "/atom/tapes/a #1.uef");
+    CHECK(REWRITE("", &s) == SET_MISMATCH, "a name the file cannot hold does not read back");
+
+    /* What the port saves a path as. */
+    {
+        char n[ATOM_PATH_MAX];
+        settings_card_name(SETTINGS_TAPE_DIR, "/atom/tapes/x.uef", n);
+        CHECK(strcmp(n, "x.uef") == 0, "bare: %s", n);
+        settings_card_name(SETTINGS_TAPE_DIR, "/atom/tapes/sub/x.uef", n);
+        CHECK(strcmp(n, "/atom/tapes/sub/x.uef") == 0, "a subfolder keeps its path: %s", n);
+        settings_card_name(SETTINGS_DISC_DIR, "/atom/tapes/x.uef", n);
+        CHECK(strcmp(n, "/atom/tapes/x.uef") == 0, "another folder keeps its path: %s", n);
+        settings_card_name(SETTINGS_DISC_DIR, "", n);
+        CHECK(n[0] == 0, "none is none");
     }
 
     TEST_DONE();

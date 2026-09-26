@@ -21,6 +21,10 @@
 
 #define SETTINGS_DRIVES 2u
 
+/* Where a bare name in the file is looked for (§11.7). */
+#define SETTINGS_TAPE_DIR "/atom/tapes"
+#define SETTINGS_DISC_DIR "/atom/discs"
+
 typedef struct {
     /* The guest (§7.2): RAM at #4000-#7FFF, AtomDOS. */
     atom_config_t machine;
@@ -28,6 +32,7 @@ typedef struct {
     bool     mono;          /* the Display page's screen (§8.7)          */
     bool     border;        /* and its border                            */
     bool     dark_bg;       /* text on dark green or orange, not black   */
+    bool     status;        /* the status line in the bottom rows (§8.2) */
     unsigned volume;        /* 0-8, as the menu shows it                 */
     unsigned backlight;     /* 1-15, as the menu shows it; 0 leaves the
                                southbridge's own level alone             */
@@ -50,7 +55,8 @@ typedef enum {
     SET_UNKNOWN,        /* no such setting                  */
     SET_BAD_VALUE,      /* not one of the setting's values  */
     SET_DUPLICATE,      /* the setting was given twice      */
-    SET_TOO_LONG,       /* a line, a name or a path         */
+    SET_TOO_LONG,       /* a line, a name, a path, or a rewritten file */
+    SET_MISMATCH,       /* a rewrite that does not read back */
 } settings_status_t;
 
 /* Apply the file's text over *s, which holds the defaults or an earlier
@@ -61,5 +67,33 @@ typedef enum {
 settings_status_t settings_parse(settings_t *s, const char *text, size_t len,
                                  unsigned *line);
 const char *settings_status_str(settings_status_t st);
+
+/* The menu's settings written into the file's text (§11.6): screen,
+ * border, background, status, backlight, volume, keys, tape, drive0 and
+ * drive1. A backlight of 0 is left as the file has it. The text is
+ * edited, not regenerated:
+ *
+ *   - a key the file already gives keeps its line, its place, its
+ *     indentation and its comment; only the value changes, and not even
+ *     that if the value there already says the same;
+ *   - a key the file does not give is appended only if the value differs
+ *     from the default, so a default the user never touched keeps
+ *     following the firmware's;
+ *   - everything else — comments, blank lines, other keys, lines that do
+ *     not parse — is copied as it stands;
+ *   - the file's own line ending is kept, and appended lines use it.
+ *
+ * A key given twice is SET_DUPLICATE, and a result longer than
+ * ATOM_SETTINGS_FILE_MAX is SET_TOO_LONG. The result is parsed back
+ * before it is returned, and must give *s's values again, or it is
+ * SET_MISMATCH. On SET_OK, *out is the new text in a static buffer, valid
+ * until the next call. No I/O. */
+settings_status_t settings_rewrite(const char *text, size_t len, const settings_t *s,
+                                   const char **out, size_t *out_len);
+
+/* How the file names what is at `path`: a bare name for a file directly
+ * in `dir`, SETTINGS_TAPE_DIR or SETTINGS_DISC_DIR, otherwise the path
+ * as it is. "" stays "". */
+void settings_card_name(const char *dir, const char *path, char out[ATOM_PATH_MAX]);
 
 #endif /* PICO_ATOM_SETTINGS_H */

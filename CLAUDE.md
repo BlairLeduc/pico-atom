@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M10 are done** (`docs/design.md` §17).
+**Implementation status: M0–M11 are done** (`docs/design.md` §17); only
+M11's check of a recorded `.uef` in another emulator is outstanding.
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -133,15 +134,44 @@ to T2's or the shift register's next event, so `t2` and `sr_timer` lag between
 events; call `via6522_sync()` before reading them from outside. M10 now runs
 3.6–6.2 % faster than M9 (§6.3).
 
-Nothing after M10 is named in design.md §17 yet.
+M11 is built (design.md §17). Verified on a Plus 2 W on 2026-09-26: a
+new tape made from the menu, a BASIC program `SAVE`d onto it and after a power
+cycle `LOAD`ed and `RUN`; the status line's deck state, position and `D0`,
+cleared at once by BREAK (a reset now unloads the 8271's head); settings
+saved from the menu, the tape among them, back after a power cycle.
+**Recording at signal level** (§11.3): with a UEF in the deck the OSSAVE trap
+stands aside too, and `cassette.c`'s recorder reads port C bits 0–1 back as
+half-cycles, on port C writes only, and decodes them into &0110/&0100/&0112
+chunks appended to the deck's buffer. The cues are `RECORD TAPE` (`#FC40`,
+A = 6), its key (`#FC79`), and OSSAVE's exits `#FB39` and `#FAB9`, **not**
+`#FB78`, which runs after every block. At the exit the CPU stalls on
+`TAPE_RECORDED` while core 1 writes the image through `<tape>.new` and a
+rename. A read-only or gzipped UEF is protected. The writer's pause between
+bytes is left out of the image rather than written as &0110. **The status
+line** (§8.2): `atom_status_t`, six bytes in each snapshot, formatted by
+`status_format()` and drawn by `display_status()` only when its text changes.
+**Save settings** (§11.6): `settings_rewrite()` edits the user's text,
+refuses a duplicate key, and parses its own output back before `settingsio`
+writes it through `/atom/pico-atom.new`. Settings go to the card, not to
+internal flash; the emulator writes no flash at all. On the host,
+`test_cassette` records the ROM's `SAVE`, appends a second file, loads both
+back by name, and refuses a protected tape; `test_settings` and
+`test_status` hold the rest. Also verified on the board: the status line
+with the border on and off and in mono, a read-only tape refusing, the saved
+file keeping the user's comments, and the recorder's hook costing nothing
+measurable, M11 within 1 % of the tree before it (§6.3). Not checked: the
+recorded `.uef` in another Atom emulator.
+`-DPICO_ATOM_BOOT_NEW_TAPE=ON` boots with a new tape in the deck, so a
+recording can be driven over the UART.
 
 The settings file (design.md §11.7): `/atom/pico-atom.cfg` sets what the
-machine powers up with: screen, border, background, backlight, volume, keys, tape, turbo,
+machine powers up with: screen, border, background, status line, backlight, volume, keys, tape, turbo,
 drives 0 and 1, upper RAM and AtomDOS. `settings_default()` is
 where every default lives. Core 1 reads the file once, before the ROMs, and
 re-runs `atom_init` with its machine configuration while core 0 waits. A wrong
 line is skipped, and the first problem goes to the menu's status row. The
-emulator never writes the file. On a Plus 2 W on 2026-09-24 a card without the
+emulator writes the file only from the menu's *Save settings*, which edits it
+in place, keeping the user's comments and lines (§11.6). On a Plus 2 W on 2026-09-24 a card without the
 file booted on the defaults; a card with one has not been tried on the board yet.
 
 The field follows the VDG's 262 lines and ends where the next active line
@@ -150,9 +180,7 @@ On a Plus 2 W on 2026-09-24 ASTEROI showed its rocks, which it had not with
 a zero seed and a snapshot at `FS`'s rise, and `RND` differed across power
 cycles.
 
-What does not exist: recording at signal level
-(saves still go to `.atm` files), the status band, menu changes persisted to
-flash (§11.6).
+Nothing after M11 is named in design.md §17 yet.
 
 ## The two documents
 
@@ -241,7 +269,7 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/snappool.*` | §4.2's three-buffer handoff; state machine only, the port holds the lock |
 | `src/core/tape.*` | §11.2's OSLOAD/OSSAVE trap, the stall, ATM headers, and the ROM's page-zero leavings; §11.3's deck cues (`tape_at`), found by one table lookup in `atom_run` |
 | `src/core/uef.*` | §11.3's walker: a UEF image as half-cycles, in quarters of the base period |
-| `src/core/cassette.*` | the half-cycles on port C bit 5 in guest cycles, and bit 4's 2.4 kHz reference; brought up to date on a port C read, not per instruction |
+| `src/core/cassette.*` | the half-cycles on port C bit 5 in guest cycles, and bit 4's 2.4 kHz reference; brought up to date on a port C read, not per instruction; the recorder, bits 0–1 decoded into UEF chunks on port C writes |
 | `src/core/inflate.*` | gzip into a flat buffer, for UEF images; static tables, not reentrant |
 | `src/core/i8271.*` | §11.4's FDC: command/parameter/result, seek against the track register, non-DMA bytes on INT (NMI), READY from the head load; asks the port for sectors, never holds a disc |
 | `src/core/snapshot.*` | §11.5's format: explicit fields, CRC, ROM hash, two-pass load |
@@ -249,27 +277,28 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/keymatrix.*` | held-key set, paced replay of southbridge events into the matrix (§10.2) |
 | `src/core/keymap_picocalc.c` | PicoCalc code -> Atom cell; the cells are the kernel ROM's, by execution; the built-in game layouts and the names a `.map` file may use |
 | `src/core/keylayout.c` | §10.5's `.map` parser and tape matching |
-| `src/core/settings.*` | every default, host and guest, and §11.7's parser for `/atom/pico-atom.cfg` |
+| `src/core/settings.*` | every default, host and guest, §11.7's parser for `/atom/pico-atom.cfg`, and §11.6's `settings_rewrite` |
+| `src/core/status.*` | §8.2's status line: the bytes core 0 puts in each snapshot, and the text |
 | `src/core/sha1.*`, `romset.*` | identify ROM images by hash; the slot table from §11.1 |
 | `src/port/board.*` | clocks and board identification |
 | `src/port/southbridge.*` | i2c1 register layer; refuses to read `RST` (`0x08`), which resets the MCU |
 | `src/port/lcd.*` | panel init, windows, fills, polled-DMA ping-pong blit |
-| `src/port/display.*` | the §8.4 presenter; owns the renderer, its LUT, the shadow and line buffers; §8.7's mono palette and border, which it fills only when its colour changes |
+| `src/port/display.*` | the §8.4 presenter; owns the renderer, its LUT, the shadow and line buffers; §8.7's mono palette and border, which it fills only when its colour changes; §8.2's status line, drawn only when its text changes |
 | `src/port/sd.*`, `diskio.c` | spi0 SD driver and FatFs's disk layer; FatFs itself is copied from the SDK at configure time |
 | `src/port/roms.*` | loads `/atom/roms/` into the machine before the guest starts; the no-ROMs page |
 | `src/port/kbd.*` | core 1 drains the southbridge FIFO into an SPSC ring for core 0 |
 | `src/port/audio.*` | PWM slice, chained ping-pong DMA, PCM queue; the throttle (§9.4, §12.2) |
 | `src/port/log.*` | core 0's UART lines, formatted into a ring that core 1 drains |
 | `src/port/storage.*` | mount and unmount the card, once per piece of card work |
-| `src/port/tapeio.*` | serves a stalled tape call from `/atom/tapes/`; the tape list and the inserted tape; a `.uef` decompressed into the deck's 64 KiB buffer |
+| `src/port/tapeio.*` | serves a stalled tape call from `/atom/tapes/`; the tape list and the inserted tape; a `.uef` decompressed into the deck's 64 KiB buffer; a recording written back through `<tape>.new`; *New tape* |
 | `src/port/discio.*` | serves the FDC's sector requests from `/atom/discs/` images (`.ssd`, `.dsk`, `.40t`, `.dsd`); the menu's disc list; the image in each drive |
 | `src/port/snapio.*` | snapshot slots in `/atom/snaps/`: temp file, publish, recovery on load |
-| `src/port/settingsio.*` | reads `/atom/pico-atom.cfg` at boot; the first problem for the menu's status row |
+| `src/port/settingsio.*` | reads `/atom/pico-atom.cfg` at boot; the first problem for the menu's status row; *Save settings*, through `/atom/pico-atom.new` |
 | `src/port/keymapio.*` | the layouts the menu offers: built-in, then `/atom/keymaps/`; the first parse error for the status row |
 | `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer |
 | `src/port/main.c` | core 0's field loop, turbo while a tape plays, core 1's bring-up and live present; the park/handoff that gives core 1 the machine for tape calls and the menu; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot`, `test_tape` and `test_snapshot` run the real MOS when `roms/` holds the images |
-| `test/host/test_uef.c`, `test_cassette.c` | inflate against the system's `gzip`; the waveform to the cycle; the ROM's own SAVE recorded off port C, decoded, and loaded back by its own LOAD. `test_cassette` writes `m8-two-part.uef`, the hardware check's tape |
+| `test/host/test_uef.c`, `test_cassette.c` | inflate against the system's `gzip`; the waveform to the cycle; the ROM's own SAVE recorded off port C, decoded, and loaded back by its own LOAD; the same SAVE through the core's recorder, compared with the test's decoder. `test_cassette` writes `m8-two-part.uef`, the hardware check's tape |
 | `test/host/test_disc.c`, `test_i8271.c` | the real DOS against an in-memory image, served as `main.c` serves one; the chip's timing and the commands the DOS does not use |
 | `test/host/guest.*` | the real machine on the host for those tests: ROMs found by SHA-1, keys typed through keymatrix |
 | `test/host/vdg_scenes.*` | the VRAM behind the golden images, shared by the test and `vdg-ppm` |
@@ -347,7 +376,7 @@ a plausible-looking change silently breaks:
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
   in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
-  at M10 `.bss` is ~222 KiB, of which 64 KiB is the UEF deck, and `.data`
+  at M11 `.bss` is ~225 KiB, of which 64 KiB is the UEF deck, and `.data`
   ~27 KiB (the SRAM-resident interpreter) of the 520 KiB budget.
 - **Copy a machine with `atom_copy`, never `=`.** The page table points into
   `ram[]`, so a struct assignment leaves the copy reading and writing the

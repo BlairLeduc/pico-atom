@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include "config.h"
+#include "status.h"
 
 typedef enum {
     SNAP_FREE,       /* owned by nobody; core 0 may claim it        */
@@ -30,6 +31,7 @@ typedef struct {
     uint8_t  vram[ATOM_VRAM_SIZE];
     uint8_t  mode;         /* atom_vdg_mode() at the end of the field */
     uint32_t field;        /* which field this is, for the perf block */
+    atom_status_t status;  /* what the status line needs (§8.2)       */
 } snapshot_t;
 
 typedef struct {

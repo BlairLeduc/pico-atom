@@ -14,6 +14,10 @@
 #define TEXT_COLS 32
 #define TEXT_ROWS 16
 
+/* The character ROM's glyph for an ASCII character, in the MC6847's
+ * own order; anything it has no glyph for is a blank. */
+uint8_t textpage_glyph(char c);
+
 void textpage_clear(uint8_t *vram);
 void textpage_put(uint8_t *vram, int row, int col, const char *s, bool inverse);
 

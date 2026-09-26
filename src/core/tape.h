@@ -38,12 +38,18 @@ struct atom_s;
  * with A = 4 for PLAY TAPE, 5 for REWIND and 6 for RECORD; the point
  * after it has read the key that answers it; and OSLOAD's one exit,
  * shared by the named and nameless paths. A *RUN's OSLOAD returns to
- * TAPE_RUN_RETURN + 1. */
+ * TAPE_RUN_RETURN + 1. OSSAVE has two exits, the PLP after the named
+ * path's record loop and after the nameless path's bytes (#FA86). The
+ * recorder's switch-off at #FB78 runs after every block, so it is not
+ * the end of a save. */
 #define TAPE_PROMPT_PC   0xFC40u
 #define TAPE_ANSWERED_PC 0xFC79u
 #define TAPE_LOADED_PC   0xF953u
+#define TAPE_SAVED_PC           0xFB39u
+#define TAPE_SAVED_NAMELESS_PC  0xFAB9u
 #define TAPE_RUN_RETURN  0xFA22u
-#define TAPE_PROMPT_PLAY 4u
+#define TAPE_PROMPT_PLAY   4u
+#define TAPE_PROMPT_RECORD 6u
 
 /* The MOS takes a name of at most 13 characters and a CR; a longer one
  * is its NAME error (#F85C), which the trap leaves to the ROM. */
@@ -69,6 +75,10 @@ typedef enum {
     TAPE_NONE = 0,
     TAPE_LOAD,
     TAPE_SAVE,
+    /* Not the guest's: the recorder stopped at the end of a save, and the
+     * deck's image is to go to the card before the guest runs on, so
+     * that nothing recorded is lost to a pulled card (§11.3). */
+    TAPE_RECORDED,
 } tape_op_t;
 
 typedef struct {
@@ -96,6 +106,7 @@ typedef struct {
 
     bool      pass;        /* declined: let the ROM run this call once   */
     bool      cue_play;    /* PLAY TAPE is up: its key starts the deck    */
+    bool      cue_record;  /* RECORD TAPE is up: its key starts recording */
     uint32_t  served;      /* requests completed, for the heartbeat      */
 } tape_t;
 
@@ -111,6 +122,9 @@ const tape_t *atom_tape_pending(const struct atom_s *m);
 /* No file: run the ROM routine instead, which prompts and reads the
  * cassette input as the real machine would. */
 void atom_tape_decline(struct atom_s *m);
+
+/* TAPE_RECORDED served: the port has written the image, or tried to. */
+void atom_tape_written(struct atom_s *m);
 
 /* Serving a TAPE_LOAD: begin with the file's header, which returns the
  * address the data will land at; write the data in as many pieces as

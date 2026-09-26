@@ -19,6 +19,14 @@
  * a tape plays (main.c) — loads faster by exactly as much.
  *
  * The image is the caller's buffer and must outlive the insertion.
+ *
+ * The recorder is the other half (§11.3): port C bit 0, or the 2.4 kHz
+ * reference while bit 1 gates it on, read back as half-cycles and
+ * decoded as the reader at #FBEE would, into UEF chunks appended to the
+ * image in the deck. It too is brought up to date only when something
+ * changes the line — a write to port C (bus.c) — and when it stops, so a
+ * 1 bit's sixteen short half-cycles cost no more than the write that
+ * starts them. A tape inserted without room to write to is protected.
  */
 #ifndef PICO_ATOM_CASSETTE_H
 #define PICO_ATOM_CASSETTE_H
@@ -28,6 +36,35 @@
 #include <stdint.h>
 
 #include "uef.h"
+
+/* Why the recorder would not start. */
+typedef enum {
+    CAS_REC_OK = 0,
+    CAS_REC_NO_TAPE,      /* no UEF in the deck                        */
+    CAS_REC_PROTECTED,    /* inserted read-only: the tab broken off    */
+    CAS_REC_FULL,         /* no room left in the deck's buffer         */
+} cas_rec_status_t;
+
+typedef struct {
+    bool     on;
+    bool     full;          /* ran out of room, and records nothing more */
+    uint8_t  out;           /* port C bits 0-1, the line's source        */
+    bool     level;         /* the line just before `at`                 */
+    uint64_t at;            /* the line is decoded up to here            */
+    uint64_t last_edge;
+
+    /* The frame being read: bits so far, and the half-cycles of the bit
+     * in progress, all of one kind (§11.3). */
+    bool     framing;
+    uint8_t  bit, halves, kind;
+    uint16_t frame;
+
+    uint32_t tone;          /* short half-cycles not yet written          */
+    uint32_t gap;           /* silence not yet written, in 1/2400 s       */
+    uint32_t data_at;       /* the open &0100 chunk's offset, 0 if none   */
+    uint32_t bytes;         /* bytes recorded since it started            */
+    uint32_t errors;        /* bytes that did not frame, dropped          */
+} cassette_rec_t;
 
 typedef struct {
     uef_t    uef;
@@ -49,6 +86,14 @@ typedef struct {
      * tape's next edge if that is sooner. atom.h's inline check. */
     uint32_t ref_next;
     uint32_t edges;         /* level changes played, for the heartbeat   */
+
+    /* Writable: the image may grow to `cap`. NULL for a protected tape. */
+    uint8_t *wbuf;
+    uint32_t cap;
+    bool     dirty;         /* recorded onto since the card last had it  */
+    cas_rec_status_t refused;   /* the last start that failed, until the
+                                   next start or insertion               */
+    cassette_rec_t rec;
 } cassette_t;
 
 void cassette_init(cassette_t *c);
@@ -57,6 +102,10 @@ void cassette_init(cassette_t *c);
  * deck left empty, if it is not one. */
 bool cassette_insert(cassette_t *c, const uint8_t *img, size_t len);
 void cassette_eject(cassette_t *c);
+
+/* The same, writable: a recording is appended to the image in `img`,
+ * which may grow to `cap` bytes. */
+bool cassette_insert_rw(cassette_t *c, uint8_t *img, size_t len, size_t cap);
 
 void cassette_play(cassette_t *c, uint64_t now, bool on);
 void cassette_rewind(cassette_t *c, uint64_t now);
@@ -73,5 +122,18 @@ bool cassette_input(cassette_t *c, uint64_t now);
 bool cassette_ref_2400(cassette_t *c, uint64_t now);
 
 unsigned cassette_percent(const cassette_t *c);
+
+/* Start or stop the recorder, with port C's output latch as it is now.
+ * Starting stops the tape playing; stopping writes what is still
+ * pending and leaves the tape at its end, as recording forward does. */
+cas_rec_status_t cassette_record(cassette_t *c, uint64_t now, bool on, uint8_t out_c);
+
+/* Port C's output latch is `out_c` from `now`: bring the recorder up to
+ * date with the line as it was, then follow the new one. Only while
+ * recording. */
+void cassette_output(cassette_t *c, uint64_t now, uint8_t out_c);
+
+/* How much of the deck's room the image takes, 0-100. */
+unsigned cassette_room_percent(const cassette_t *c);
 
 #endif /* PICO_ATOM_CASSETTE_H */

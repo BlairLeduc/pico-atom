@@ -122,9 +122,10 @@ bool tape_trap(atom_t *m) {
     else return false;
 
     /* A UEF in the deck holds the program as a signal, and the ROM
-     * routine reads it from there (§11.3). Saves still go to files:
-     * recording at signal level is not modelled. */
-    if (op == TAPE_LOAD && m->cas.loaded) return false;
+     * routine reads it from there (§11.3); a save is recorded onto it,
+     * or onto nothing if the tape is protected, as with a cassette
+     * whose tab is broken off. */
+    if (m->cas.loaded) return false;
 
     /* The block is X,0..9 in page zero, wrapping as LDA &00,X does. */
     uint8_t x = m->cpu.x;
@@ -158,19 +159,35 @@ bool tape_trap(atom_t *m) {
  * from the stock kernel. Anything that reads the tape without OSLOAD gets
  * none, and the deck is played by hand, as on the real machine. */
 
-static void cue(atom_t *m) {
+static bool cue(atom_t *m) {
     tape_t *t = &m->tape;
-    if (!m->cfg.tape_cues || !signature(m, TAPE_OSLOAD_PC, sig_load)) return;
+    /* Stalled while the port writes the recording out. */
+    if (t->op == TAPE_RECORDED) return true;
+    if (!m->cfg.tape_cues || !signature(m, TAPE_OSLOAD_PC, sig_load)) return false;
     switch (m->cpu.pc) {
     case TAPE_PROMPT_PC:
-        /* PLAY TAPE: stopped until the key that answers it. */
+        /* PLAY TAPE: stopped until the key that answers it. RECORD TAPE
+         * the same, and then the key starts the recorder. */
         t->cue_play = m->cpu.a == TAPE_PROMPT_PLAY;
-        if (t->cue_play) atom_cassette_play(m, false);
+        t->cue_record = m->cpu.a == TAPE_PROMPT_RECORD && m->cas.loaded;
+        if (t->cue_play || t->cue_record) atom_cassette_play(m, false);
         break;
     case TAPE_ANSWERED_PC:
         if (t->cue_play) atom_cassette_play(m, true);
+        if (t->cue_record) (void)atom_cassette_record(m, true);
         t->cue_play = false;
+        t->cue_record = false;
         break;
+    case TAPE_SAVED_PC:
+    case TAPE_SAVED_NAMELESS_PC:
+        /* The save is over: stop recording, and stall here while the
+         * port writes the tape to the card (§11.3). Once it has, the
+         * recorder is off and this passes. */
+        if (!atom_cassette_recording(m)) break;
+        (void)atom_cassette_record(m, false);
+        if (!m->cas.dirty) break;
+        t->op = TAPE_RECORDED;
+        return true;
     case TAPE_LOADED_PC: {
         /* A load is over: stop, unless it was a *RUN, whose program may
          * go straight on reading the tape. The return address is under
@@ -181,13 +198,19 @@ static void cue(atom_t *m) {
         break;
     }
     }
+    return false;
 }
 
 bool tape_at(atom_t *m) {
     uint16_t pc = m->cpu.pc;
     if (pc == TAPE_OSLOAD_PC || pc == TAPE_OSSAVE_PC) return tape_trap(m);
-    if (pc == TAPE_PROMPT_PC || pc == TAPE_ANSWERED_PC || pc == TAPE_LOADED_PC) cue(m);
+    if (pc == TAPE_PROMPT_PC || pc == TAPE_ANSWERED_PC || pc == TAPE_LOADED_PC ||
+        pc == TAPE_SAVED_PC || pc == TAPE_SAVED_NAMELESS_PC) return cue(m);
     return false;
+}
+
+void atom_tape_written(atom_t *m) {
+    if (m->tape.op == TAPE_RECORDED) m->tape.op = TAPE_NONE;
 }
 
 const tape_t *atom_tape_pending(const atom_t *m) {

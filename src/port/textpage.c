@@ -16,6 +16,10 @@ static uint8_t glyph(char c, bool inverse) {
     return inverse ? (uint8_t)(g | VDG_BYTE_INV) : g;
 }
 
+uint8_t textpage_glyph(char c) {
+    return glyph(c, false);
+}
+
 void textpage_clear(uint8_t *vram) {
     memset(vram, glyph(' ', false), TEXT_COLS * TEXT_ROWS);
 }

@@ -63,7 +63,10 @@ void i8271_reset(i8271_t *f) {
     f->nparams = f->need = 0;
     f->req.op = I8271_REQ_NONE;
     f->due = I8271_NEVER;
+    /* The head unloads with the reset, rather than staying loaded with
+     * its idle count cancelled and nothing left to unload it. */
     f->unload_armed = false;
+    f->special[I8271_SR_OUTPUT] &= (uint8_t)~I8271_OUT_LOAD;
 }
 
 /* ---- ending a command -------------------------------------------------- */

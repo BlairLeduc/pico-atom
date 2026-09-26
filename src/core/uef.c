@@ -47,6 +47,12 @@ unsigned uef_percent(const uef_t *u) {
     return (unsigned)((uint64_t)(at - UEF_HEADER_LEN) * 100u / (u->len - UEF_HEADER_LEN));
 }
 
+void uef_to_end(uef_t *u, size_t len) {
+    uef_rewind(u);
+    u->len = (uint32_t)len;
+    u->next = u->len;
+}
+
 static bool open_chunk(uef_t *u) {
     if (u->next + 6u > u->len) return false;
     const uint8_t *h = u->img + u->next;

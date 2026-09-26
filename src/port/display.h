@@ -36,6 +36,14 @@ void display_set_look(bool mono, bool border, bool dark_bg);
  * then become the shadow. */
 void display_present(const uint8_t *vram, uint8_t mode, display_stats_t *st);
 
+/* The status line (design.md §8.2): ATOM_STATUS_COLS characters in the
+ * panel's bottom rows, drawn only when the text differs from what is
+ * there, or the palette has changed since. Green on black in the
+ * screen's palette, so in mono it is the screen's grey. An invalidate
+ * does not touch it: nothing else draws there. Nothing is drawn without
+ * a character ROM. */
+void display_status(const char *text);
+
 /* Forget what is on the panel, so the next present redraws everything.
  * This is how an overlay is dismissed (design.md §13), and how the
  * measurement forces full redraws. */

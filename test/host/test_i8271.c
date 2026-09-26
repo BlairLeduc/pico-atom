@@ -180,5 +180,18 @@ int main(void) {
     CHECK(f.status == 0 && f.due == I8271_NEVER, "reset drops the command");
     CHECK(f.drv[0].loaded && f.special[I8271_SR_TRACK0] == 0, "and keeps the disc");
 
+    /* A reset during the idle count after a command unloads the head
+     * rather than leaving it loaded with nothing to unload it. */
+    cmd(0x40 | 0x13, (const uint8_t[]){ 0, 0, 0x21 }, 3);
+    run(got, sizeof got, NULL);
+    (void)result();
+    CHECK((f.special[I8271_SR_OUTPUT] & I8271_OUT_LOAD) && f.unload_armed,
+          "the head is loaded, counting down to its unload");
+    i8271_write(&f, I8271_REG_RESET, 1, now);
+    i8271_write(&f, I8271_REG_RESET, 0, now);
+    CHECK(!(f.special[I8271_SR_OUTPUT] & I8271_OUT_LOAD), "reset unloads the head");
+    cmd(0x40 | 0x2C, NULL, 0);
+    CHECK(!(result() & 0x04u), "and READY drops with it");
+
     TEST_DONE();
 }

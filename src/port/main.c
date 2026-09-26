@@ -38,6 +38,7 @@
 #include "settingsio.h"
 #include "snappool.h"
 #include "southbridge.h"
+#include "status.h"
 #include "storage.h"
 #include "tapeio.h"
 
@@ -109,9 +110,14 @@ static volatile struct {
 
 static volatile uint32_t g_handoff = HANDOFF_NONE;
 
+/* What the settings file said at boot, and what a save from the menu
+ * wrote since (design.md §11.6, §11.7). Core 1's. */
+static settings_t g_file;
+
 /* Written by the menu on core 1 while core 0 is parked, applied by core
  * 0 once it has the machine back. */
-static menu_settings_t g_settings = { .volume = 8, .turbo = true };
+static menu_settings_t g_settings = { .volume = 8, .turbo = true, .status = true,
+                                      .file = &g_file };
 
 /* ---- the snapshot handoff (§4.2): every transition under one lock ---- */
 
@@ -272,9 +278,28 @@ static void keys_for_tape(const char *name) {
     printf("  keymaps      : loading %s chose \"%s\"\n", name, l->name);
 }
 
-/* Core 0's: the settings file may turn turbo off (§11.3, §11.7). */
+/* Core 0's: the settings file may turn turbo off (§11.3, §11.7). The
+ * recorder is clocked in guest cycles as the player is, so a save runs
+ * unpaced too. */
 static bool turbo_now(void) {
-    return PICO_ATOM_TURBO && g_settings.turbo && atom_cassette_playing(&g_atom);
+    return PICO_ATOM_TURBO && g_settings.turbo &&
+           (atom_cassette_playing(&g_atom) || atom_cassette_recording(&g_atom));
+}
+
+/* Core 1's: the status line from a snapshot's few bytes and the names of
+ * what is in the deck and the drives, which are core 1's own (§8.2). The
+ * presenter draws it only when the text changes. */
+static void draw_status(const atom_status_t *st) {
+    char text[ATOM_STATUS_COLS + 1];
+    if (g_settings.status) {
+        const char *drive[ATOM_FDC_DRIVES];
+        for (unsigned d = 0; d < ATOM_FDC_DRIVES; d++) drive[d] = discio_inserted(d);
+        status_format(st, tapeio_inserted(), drive, text);
+    } else {
+        memset(text, ' ', ATOM_STATUS_COLS);
+        text[ATOM_STATUS_COLS] = 0;
+    }
+    display_status(text);
 }
 
 /* A bare name in the settings file is in the card's own folder for it;
@@ -296,14 +321,14 @@ static void boot_media(const settings_t *b) {
     }
     char buf[ATOM_PATH_MAX];
     if (b->tape[0]) {
-        const char *p = card_path(buf, "/atom/tapes", b->tape);
+        const char *p = card_path(buf, SETTINGS_TAPE_DIR, b->tape);
         const char *err = p ? tapeio_insert(&g_atom, p) : "path too long";
         if (err) settingsio_fail("tape", err);
         else printf("  tape         : %s in the deck\n", p);
     }
     for (unsigned d = 0; d < SETTINGS_DRIVES; d++) {
         if (!b->drive[d][0]) continue;
-        const char *p = card_path(buf, "/atom/discs", b->drive[d]);
+        const char *p = card_path(buf, SETTINGS_DISC_DIR, b->drive[d]);
         const char *err = p ? discio_insert(&g_atom, d, p) : "path too long";
         char what[8];
         snprintf(what, sizeof what, "drive%u", d);
@@ -337,21 +362,23 @@ static void core1_main(void) {
     /* 3. The settings file, before the ROMs, because some of it is the
      *    machine: RAM and AtomDOS decide what loads (design.md §11.7).
      *    Core 0 is waiting, so the machine is core 1's to configure. */
-    static settings_t boot;
+    settings_t *boot = &g_file;
     if (storage_mount() == 0) {
-        settingsio_load(&boot);
+        settingsio_load(boot);
         storage_unmount();
     } else {
-        settings_default(&boot);
+        settings_default(boot);
     }
-    atom_init(&g_atom, &boot.machine);
-    g_settings.mono    = boot.mono;
-    g_settings.border  = boot.border;
-    g_settings.dark_bg = boot.dark_bg;
-    g_settings.volume  = boot.volume;
-    g_settings.turbo   = boot.turbo;
+    atom_init(&g_atom, &boot->machine);
+    g_settings.mono      = boot->mono;
+    g_settings.border    = boot->border;
+    g_settings.dark_bg   = boot->dark_bg;
+    g_settings.status    = boot->status;
+    g_settings.volume    = boot->volume;
+    g_settings.backlight = boot->backlight;
+    g_settings.turbo     = boot->turbo;
     display_set_look(g_settings.mono, g_settings.border, g_settings.dark_bg);
-    if (boot.backlight) (void)sb_write(SB_REG_BKL, (uint8_t)(boot.backlight * 16u), NULL);
+    if (boot->backlight) (void)sb_write(SB_REG_BKL, (uint8_t)(boot->backlight * 16u), NULL);
 #if PICO_ATOM_MEASURE_PRESENT
     display_test_pattern();
     printf("  M3 pattern   : white border on (32,64)-(287,255); corners "
@@ -372,13 +399,18 @@ static void core1_main(void) {
      *    opens. */
     if (ok && storage_mount() == 0) {
         keymapio_scan();
-        boot_media(&boot);
+        boot_media(boot);
 #ifdef PICO_ATOM_BOOT_TAPE
         /* In the deck, stopped, for a run driven over the UART, where
          * the menu cannot be reached. Over the settings file's. */
         const char *err = tapeio_insert(&g_atom, PICO_ATOM_BOOT_TAPE);
         printf("  tape         : boot tape %s: %s\n", PICO_ATOM_BOOT_TAPE,
                err ? err : "in the deck");
+#endif
+#ifdef PICO_ATOM_BOOT_NEW_TAPE
+        /* A blank to record onto, for the same kind of run (§11.3). */
+        const char *nerr = tapeio_new(&g_atom);
+        printf("  tape         : boot new tape: %s\n", nerr ? nerr : tapeio_inserted());
 #endif
 #ifdef PICO_ATOM_BOOT_DISC
         /* In drive 0, for a run driven over the UART, where the menu
@@ -402,7 +434,9 @@ static void core1_main(void) {
         if (i >= 0) {
             display_stats_t st;
             display_present(g_pool.buf[i].vram, g_pool.buf[i].mode, &st);
+            atom_status_t line = g_pool.buf[i].status;
             pool_release(i);
+            draw_status(&line);
 
             g_c1.presents++;
             if (st.full) g_c1.full_presents++;
@@ -616,6 +650,11 @@ int main(void) {
     uint64_t hb_insns = g_atom.instructions;
     uint32_t run_us = 0;   /* inside atom_run_field since the heartbeat */
     uint32_t turbo_fields = 0;
+    /* The status line's (§8.2): the tape's position and the turbo ratio
+     * change the text at most once a wall-clock second. */
+    atom_status_t shown = { 0 };
+    uint64_t sec_us = hb_us, sec_cycles = hb_cycles;
+    bool sec_turbo = false;
     const uint32_t clk_mhz = clock_get_hz(clk_sys) / 1000000u;
     for (;;) {
 #if !PICO_ATOM_AUDIO
@@ -655,17 +694,39 @@ int main(void) {
         atom_run_field(&g_atom);
         run_us += time_us_32() - t0;
 
+        bool turbo = turbo_now();
+        if (turbo) turbo_fields++;
+
+        atom_status_t now_st;
+        atom_status(&g_atom, &now_st);
+        uint64_t now_us = time_us_64();
+        if (now_st.deck != shown.deck) shown.percent = now_st.percent;
+        if (now_us - sec_us >= 1000000u) {
+            /* Guest cycles per microsecond is times real time. */
+            uint64_t tenths = (g_atom.cpu.cycles - sec_cycles) * 10u / (now_us - sec_us);
+            shown.turbo10 = sec_turbo ? (uint8_t)(tenths > 255u ? 255u : tenths) : 0u;
+            shown.percent = now_st.percent;
+            sec_us = now_us;
+            sec_cycles = g_atom.cpu.cycles;
+            sec_turbo = true;
+        }
+        if (!turbo) {
+            sec_turbo = false;
+            shown.turbo10 = 0;
+        }
+        shown.deck = now_st.deck;
+        shown.heads = now_st.heads;
+        shown.errors = now_st.errors;
+
         int i = pool_claim();
         if (i >= 0) {
             snapshot_t *s = &g_pool.buf[i];
             memcpy(s->vram, atom_vram(&g_atom), ATOM_VRAM_SIZE);
             s->mode = atom_vdg_mode(&g_atom);
             s->field = field;
+            s->status = shown;
             pool_publish(i);
         }
-
-        bool turbo = turbo_now();
-        if (turbo) turbo_fields++;
 #if PICO_ATOM_AUDIO
         size_t n = atom_audio_drain(&g_atom, pcm, ATOM_AUDIO_BUF_LEN);
         if (turbo) {
@@ -754,10 +815,17 @@ int main(void) {
             /* The deck: where the tape is, and how many of these fields
              * ran unpaced. rt above is the turbo factor while it plays. */
             if (g_atom.cas.loaded) {
-                log_printf("  cassette     : %s %u%%, %lu edges, %lu turbo fields\n",
-                           g_atom.cas.ended ? "end" : g_atom.cas.playing ? "playing" : "stopped",
-                           cassette_percent(&g_atom.cas), (unsigned long)g_atom.cas.edges,
-                           (unsigned long)turbo_fields);
+                const cassette_t *cas = &g_atom.cas;
+                log_printf("  cassette     : %s %u%%, %lu edges, %lu turbo fields | %s, "
+                           "%lu bytes recorded, %lu unframed, image %lu of %lu bytes%s\n",
+                           cas->ended ? "end" : cas->playing ? "playing" : "stopped",
+                           cassette_percent(cas), (unsigned long)cas->edges,
+                           (unsigned long)turbo_fields,
+                           cas->rec.on ? (cas->rec.full ? "recording, full" : "recording")
+                                       : cas->wbuf ? "writable" : "protected",
+                           (unsigned long)cas->rec.bytes, (unsigned long)cas->rec.errors,
+                           (unsigned long)cas->uef.len, (unsigned long)cas->cap,
+                           cas->dirty ? ", not on the card" : "");
             }
             turbo_fields = 0;
 #if PICO_ATOM_AUDIO

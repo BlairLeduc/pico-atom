@@ -165,6 +165,20 @@ void atom_cassette_play(atom_t *m, bool on);
 void atom_cassette_rewind(atom_t *m);
 static inline bool atom_cassette_playing(const atom_t *m) { return m->cas.playing; }
 
+/* A tape that can be recorded onto: the image may grow to `cap` bytes
+ * in `img` (§11.3). One inserted with atom_cassette_insert is
+ * protected. */
+bool atom_cassette_insert_rw(atom_t *m, uint8_t *img, size_t len, size_t cap);
+
+/* The recorder (cassette.h), fed from port C's output latch. The deck's
+ * cues start and stop it (tape.h); so does the menu. */
+cas_rec_status_t atom_cassette_record(atom_t *m, bool on);
+static inline bool atom_cassette_recording(const atom_t *m) { return m->cas.rec.on; }
+
+/* A write to port C may have moved the line out; bus.c calls this after
+ * one while recording, and only then. */
+void atom_cassette_output(atom_t *m);
+
 /* Bring port C's cassette inputs, bits 4 and 5, up to the current cycle.
  * bus.c calls this before every read of port C: that is the only time
  * they can be seen, so they are not clocked per instruction. */

@@ -9,6 +9,7 @@
 #include "config.h"
 #include "lcd.h"
 #include "mc6847.h"
+#include "textpage.h"
 
 #define RGB565(r, g, b) \
     (uint16_t)((((r) & 0xF8u) << 8) | (((g) & 0xFCu) << 3) | ((b) >> 3))
@@ -27,6 +28,12 @@ static bool     s_valid;
 static bool     s_border;
 static uint16_t s_border_rgb = 0x0000u;
 
+/* What the status line shows now: blank, as lcd_init left the panel.
+ * Stale once the palette changes, so the next call redraws it in the new
+ * one whatever its text. */
+static char s_status[ATOM_STATUS_COLS + 1];
+static bool s_status_stale;
+
 #define ATOM_BORDER_PIXELS \
     ((ATOM_SCREEN_W + 2u * ATOM_BORDER_X) * (ATOM_SCREEN_H + 2u * ATOM_BORDER_Y) - \
      ATOM_SCREEN_W * ATOM_SCREEN_H)
@@ -35,6 +42,11 @@ _Static_assert(ATOM_SCREEN_X >= ATOM_BORDER_X && ATOM_SCREEN_Y >= ATOM_BORDER_Y 
                ATOM_SCREEN_X + ATOM_SCREEN_W + ATOM_BORDER_X <= ATOM_PANEL_W &&
                ATOM_SCREEN_Y + ATOM_SCREEN_H + ATOM_BORDER_Y <= ATOM_PANEL_H,
                "the border must fit on the panel");
+
+_Static_assert(ATOM_STATUS_COLS * 8u == ATOM_PANEL_W &&
+               ATOM_STATUS_Y >= ATOM_SCREEN_Y + ATOM_SCREEN_H + ATOM_BORDER_Y &&
+               ATOM_STATUS_Y + ATOM_FONT_ROWS <= ATOM_PANEL_H,
+               "the status line must span the panel, below the border");
 
 /* DMA ping-pong (§4.6); sized for the full panel width so the status
  * band can use them too. */
@@ -54,6 +66,7 @@ void display_set_look(bool mono, bool border, bool dark_bg) {
     mc6847_set_mono(&s_vdg, mono);
     mc6847_set_dark_bg(&s_vdg, dark_bg);
     s_border = border;
+    s_status_stale = true;
     display_invalidate();
 }
 
@@ -129,6 +142,30 @@ void display_present(const uint8_t *vram, uint8_t mode, display_stats_t *st) {
 
     s.us = time_us_32() - t0;
     if (st) *st = s;
+}
+
+void display_status(const char *text) {
+    if (!s_status[0]) memset(s_status, ' ', ATOM_STATUS_COLS);
+    if (!s_vdg.font) return;
+    if (!s_status_stale && strncmp(text, s_status, ATOM_STATUS_COLS) == 0) return;
+    memcpy(s_status, text, ATOM_STATUS_COLS);
+    s_status_stale = false;
+
+    /* The screen's own green, so mono shows it as the screen's grey. */
+    const uint16_t ink = s_vdg.pal[VDG_GREEN], paper = 0x0000u;
+    unsigned cur = 0;
+    lcd_blit_begin(0, ATOM_STATUS_Y, ATOM_PANEL_W, ATOM_FONT_ROWS);
+    for (unsigned r = 0; r < ATOM_FONT_ROWS; r++) {
+        cur ^= 1u;
+        uint16_t *px = s_line[cur];
+        for (unsigned c = 0; c < ATOM_STATUS_COLS; c++) {
+            /* Drawn as the byte stands, bit 7 leftmost (mc6847.h). */
+            uint8_t bits = s_vdg.font[textpage_glyph(s_status[c]) * ATOM_FONT_ROWS + r];
+            for (unsigned b = 0; b < 8u; b++) *px++ = (bits & (0x80u >> b)) ? ink : paper;
+        }
+        lcd_blit_row(s_line[cur], ATOM_PANEL_W);
+    }
+    lcd_blit_end();
 }
 
 void display_test_pattern(void) {
