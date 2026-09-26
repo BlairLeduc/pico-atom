@@ -1943,6 +1943,10 @@ main page: left and right choose the slot on any row, and the page lists all
 four slots, saved or empty. A volume change takes effect at once and beeps
 at the new level: core 0, parked, plays 120 ms of the bell's pitch at the
 guest's own loudness in place of the silence it feeds the queue.
+The title row ends in the battery's charge, `BAT 87%`, or `CHG 87%` while it
+charges: southbridge register `0x0B` (§6), read when the menu opens and every
+5 s after, since the MCU refreshes it only every 20 s. A failed read shows
+nothing. Verified on a Plus 2 W on 2026-09-26.
 The table below is the full intent; machine and display settings wait
 for the milestones that give them something to set, and settings are not yet
 persisted to flash (§11.6). What the machine powers up with comes from the
