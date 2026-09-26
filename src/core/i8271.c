@@ -35,8 +35,18 @@ enum {
     P_DONE,       /* due is when the completion arrives     */
 };
 
+/* The disc turns in wall time, so each of config.h's 1 MHz counts is
+ * times the guest's clock (§12.1). Every one is used where `f` is the
+ * chip. */
+#define BYTE_CYCLES   (ATOM_FDC_BYTE_CYCLES * (uint32_t)f->mhz)
+#define SECTOR_CYCLES (ATOM_FDC_SECTOR_CYCLES * (uint32_t)f->mhz)
+#define STEP_CYCLES   (ATOM_FDC_STEP_CYCLES * (uint32_t)f->mhz)
+#define SETTLE_CYCLES (ATOM_FDC_SETTLE_CYCLES * (uint32_t)f->mhz)
+#define CMD_CYCLES    (ATOM_FDC_CMD_CYCLES * (uint32_t)f->mhz)
+#define REV_CYCLES    (I8271_REV_CYCLES * (uint32_t)f->mhz)
+
 /* The gap between one sector's last byte and the next one's first. */
-#define GAP_CYCLES (ATOM_FDC_SECTOR_CYCLES - ATOM_DISC_SECTOR_LEN * ATOM_FDC_BYTE_CYCLES)
+#define GAP_CYCLES (SECTOR_CYCLES - ATOM_DISC_SECTOR_LEN * BYTE_CYCLES)
 
 static uint8_t param_count(uint8_t cmd) {
     switch (cmd) {
@@ -52,6 +62,7 @@ static uint8_t param_count(uint8_t cmd) {
 
 void i8271_init(i8271_t *f) {
     memset(f, 0, sizeof(*f));
+    f->mhz = 1;
     f->drive = -1;
     f->due = I8271_NEVER;
 }
@@ -77,7 +88,7 @@ void i8271_reset(i8271_t *f) {
 static void complete(i8271_t *f, uint8_t code, uint64_t now) {
     f->phase = P_IDLE;
     f->unload_armed = f->unload_revs != 0;
-    f->due = f->unload_armed ? now + (uint64_t)f->unload_revs * I8271_REV_CYCLES : I8271_NEVER;
+    f->due = f->unload_armed ? now + (uint64_t)f->unload_revs * REV_CYCLES : I8271_NEVER;
     f->req.op = I8271_REQ_NONE;
     f->result = code;
     f->status = I8271_ST_RES_FULL | I8271_ST_INT;
@@ -143,7 +154,7 @@ static uint32_t seek(i8271_t *f, uint8_t target) {
     uint32_t steps = (uint32_t)(to > head ? to - head : head - to);
     if (d) d->head = (uint8_t)to;
     *reg = target;
-    return steps ? steps * ATOM_FDC_STEP_CYCLES + ATOM_FDC_SETTLE_CYCLES : 0u;
+    return steps ? steps * STEP_CYCLES + SETTLE_CYCLES : 0u;
 }
 
 /* How many of `want` sectors from `first` exist under the head: the
@@ -183,7 +194,7 @@ static void next_chunk(i8271_t *f, uint64_t now) {
     uint8_t n = sectors_here(f, f->sector, f->left);
     if (n == 0) {
         /* A revolution looking for it, then the error. */
-        finish_at(f, I8271_ERR_NOT_FOUND, now + 10u * ATOM_FDC_SECTOR_CYCLES);
+        finish_at(f, I8271_ERR_NOT_FOUND, now + 10u * SECTOR_CYCLES);
         return;
     }
     f->pos = 0;
@@ -201,17 +212,17 @@ static void next_chunk(i8271_t *f, uint64_t now) {
 static void on_track(i8271_t *f, uint64_t now) {
     i8271_drive_t *d = selected(f);
     if (!d || !d->loaded) {
-        finish_at(f, I8271_ERR_NOT_READY, now + ATOM_FDC_CMD_CYCLES);
+        finish_at(f, I8271_ERR_NOT_READY, now + CMD_CYCLES);
         return;
     }
     bool writes = is_write(f->cmd) || f->cmd == CMD_FORMAT;
     if (writes && d->protect) {
-        finish_at(f, I8271_ERR_PROTECT, now + ATOM_FDC_CMD_CYCLES);
+        finish_at(f, I8271_ERR_PROTECT, now + CMD_CYCLES);
         return;
     }
 
     if (f->cmd == CMD_SEEK) {
-        finish_at(f, I8271_OK, now + ATOM_FDC_CMD_CYCLES);
+        finish_at(f, I8271_OK, now + CMD_CYCLES);
         return;
     }
 
@@ -243,14 +254,14 @@ static void on_track(i8271_t *f, uint64_t now) {
     f->sector = f->params[1];
     f->left = f->params[2] & 0x1Fu;
     if ((f->params[2] >> 5) != 1u && f->left) {
-        finish_at(f, I8271_ERR_DATA_CRC, now + ATOM_FDC_SECTOR_CYCLES);
+        finish_at(f, I8271_ERR_DATA_CRC, now + SECTOR_CYCLES);
         return;
     }
     if (f->cmd == CMD_VERIFY) {
         uint8_t n = f->left ? sectors_here(f, f->sector, f->left) : 0;
         uint8_t code = n == f->left ? I8271_OK : I8271_ERR_NOT_FOUND;
         uint32_t turns = n == f->left ? n : 10u;
-        finish_at(f, code, now + (uint64_t)turns * ATOM_FDC_SECTOR_CYCLES + GAP_CYCLES);
+        finish_at(f, code, now + (uint64_t)turns * SECTOR_CYCLES + GAP_CYCLES);
         return;
     }
     next_chunk(f, now);
@@ -294,14 +305,14 @@ static void execute(i8271_t *f, uint64_t now) {
         f->track = f->params[0];
         f->status = I8271_ST_BUSY;
         f->phase = P_SEEK;
-        f->due = now + ATOM_FDC_CMD_CYCLES + seek(f, f->track);
+        f->due = now + CMD_CYCLES + seek(f, f->track);
         return;
 
     default:
         /* Not modelled: the scans, the 128-byte forms, and whatever
          * else. They end at once as though the sector were missing. */
         f->status = I8271_ST_BUSY;
-        finish_at(f, I8271_ERR_NOT_FOUND, now + ATOM_FDC_CMD_CYCLES);
+        finish_at(f, I8271_ERR_NOT_FOUND, now + CMD_CYCLES);
         return;
     }
 }
@@ -381,13 +392,13 @@ void i8271_event(i8271_t *f, uint64_t now) {
             f->left--;
             f->sectors_read++;
             if (f->pos == f->end) {
-                next_chunk(f, now + ATOM_FDC_BYTE_CYCLES);
+                next_chunk(f, now + BYTE_CYCLES);
                 return;
             }
-            f->due = now + ATOM_FDC_BYTE_CYCLES + GAP_CYCLES;
+            f->due = now + BYTE_CYCLES + GAP_CYCLES;
             return;
         }
-        f->due = now + ATOM_FDC_BYTE_CYCLES;
+        f->due = now + BYTE_CYCLES;
         return;
 
     case P_WRITE:
@@ -407,7 +418,7 @@ void i8271_event(i8271_t *f, uint64_t now) {
             }
         }
         want(f);
-        f->due = now + ATOM_FDC_BYTE_CYCLES;
+        f->due = now + BYTE_CYCLES;
         return;
 
     case P_IDS: {
@@ -422,10 +433,10 @@ void i8271_event(i8271_t *f, uint64_t now) {
                 finish_at(f, I8271_OK, now + GAP_CYCLES);
                 return;
             }
-            f->due = now + ATOM_FDC_SECTOR_CYCLES;
+            f->due = now + SECTOR_CYCLES;
             return;
         }
-        f->due = now + ATOM_FDC_BYTE_CYCLES;
+        f->due = now + BYTE_CYCLES;
         return;
     }
 
@@ -439,7 +450,7 @@ void i8271_event(i8271_t *f, uint64_t now) {
                 const i8271_drive_t *d = selected(f);
                 uint8_t n = f->left < ATOM_DISC_SECTORS ? f->left : ATOM_DISC_SECTORS;
                 if (d->head >= d->tracks || side(f) >= d->sides || n == 0) {
-                    finish_at(f, I8271_ERR_WRITE_FAULT, now + ATOM_FDC_SECTOR_CYCLES);
+                    finish_at(f, I8271_ERR_WRITE_FAULT, now + SECTOR_CYCLES);
                     return;
                 }
                 memset(f->buf, 0xE5, (size_t)n * ATOM_DISC_SECTOR_LEN);
@@ -450,7 +461,7 @@ void i8271_event(i8271_t *f, uint64_t now) {
             }
         }
         want(f);
-        f->due = now + (f->pos % 4u == 0 && f->pos ? ATOM_FDC_SECTOR_CYCLES : ATOM_FDC_BYTE_CYCLES);
+        f->due = now + (f->pos % 4u == 0 && f->pos ? SECTOR_CYCLES : BYTE_CYCLES);
         return;
 
     case P_DONE:
@@ -476,7 +487,7 @@ void i8271_served(i8271_t *f, bool ok, uint64_t now) {
 
     if (op == I8271_REQ_READ) {
         if (!ok) {
-            finish_at(f, I8271_ERR_DATA_CRC, now + ATOM_FDC_SECTOR_CYCLES);
+            finish_at(f, I8271_ERR_DATA_CRC, now + SECTOR_CYCLES);
             return;
         }
         f->phase = P_READ;
@@ -486,7 +497,7 @@ void i8271_served(i8271_t *f, bool ok, uint64_t now) {
     }
 
     if (!ok) {
-        finish_at(f, I8271_ERR_WRITE_FAULT, now + ATOM_FDC_SECTOR_CYCLES);
+        finish_at(f, I8271_ERR_WRITE_FAULT, now + SECTOR_CYCLES);
         return;
     }
     f->sectors_written += n;

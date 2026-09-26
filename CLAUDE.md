@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
-**Implementation status: M0–M11 are done** (`docs/design.md` §17); only
-M11's check of a recorded `.uef` in another emulator is outstanding.
+**Implementation status: M0–M12 are done** (`docs/design.md` §17); only
+M11's check of a recorded `.uef` in another emulator is outstanding. M12 is
+done.
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -163,10 +164,12 @@ measurable, M11 within 1 % of the tree before it (§6.3). Not checked: the
 recorded `.uef` in another Atom emulator.
 `-DPICO_ATOM_BOOT_NEW_TAPE=ON` boots with a new tape in the deck, so a
 recording can be driven over the UART.
+`-DPICO_ATOM_BOOT_CLOCK=2` and `-DPICO_ATOM_BOOT_PERF=ON` set the clock and
+the perf line over the settings file, for the same reason (M12).
 
 The settings file (design.md §11.7): `/atom/pico-atom.cfg` sets what the
-machine powers up with: screen, border, background, status line, backlight, volume, keys, tape, turbo,
-drives 0 and 1, upper RAM and AtomDOS. `settings_default()` is
+machine powers up with: screen, border, background, status line, perf line, backlight, volume, keys, tape, turbo,
+drives 0 and 1, upper RAM, AtomDOS, the clock and the utility ROM. `settings_default()` is
 where every default lives. Core 1 reads the file once, before the ROMs, and
 re-runs `atom_init` with its machine configuration while core 0 waits. A wrong
 line is skipped, and the first problem goes to the menu's status row. The
@@ -180,7 +183,26 @@ On a Plus 2 W on 2026-09-24 ASTEROI showed its rocks, which it had not with
 a zero seed and a snapshot at `FS`'s rise, and `RND` differed across power
 cycles.
 
-Nothing after M11 is named in design.md §17 yet.
+M12 is built (design.md §13.1, §12.1, §17), and checked on the host on
+2026-09-26. On a Plus 2 W the same day the four perf workloads ran at 2 MHz
+with zero underruns and zero late refills (design.md §6.3), and M12 at 1 MHz
+was within 0.7 % of M11. The Machine page, the About page, Pause and the
+perf line were then checked by hand on the board, and about ten minutes paused
+left zero I²C errors. It adds the Machine page
+(RAM, a 1 or 2 MHz clock, AtomDOS and the utility ROM, applied by
+`machine_power_on()`, a power-on restart that checks the card's ROMs first
+and refuses rather than leave a broken machine), the About page, a perf line
+in the top band (`display_perf`, `status_perf_format`), and Pause on
+`Alt`+`P` (`HANDOFF_PAUSE`), which dims the backlight. `|`, BASIC's OR, and
+the other shifted `@ [ \ ] ^` are mapped (§10.3): `PRINT 5|3` answers 7.
+**A 2 MHz guest** is `atom_config_t.clock_mhz`: what is fixed in wall time
+(the field, the beeper's period, port C bit 4, a UEF's half-cycles, the
+8271) is worked out from it in `atom_init`, and the VIA and software loops
+simply run faster. **The MOS cannot read a tape at 2 MHz** and can write
+one, settled by executing it (`test_cassette_2mhz`, §16), so the deck plays
+only at 1 MHz and says `NEEDS 1 MHZ`. A snapshot records the clock in bit 7
+of its configuration byte and refuses the other clock (`SNAP_OTHER_CLOCK`).
+Snow and the scaled display are dropped, and so is a 4 MHz clock.
 
 ## The two documents
 
@@ -241,6 +263,13 @@ in the script and in hardware-notes.md §2.7. `uart-log.sh` refuses to open a
 port something else is reading — two readers split the byte stream and both
 logs come out scrambled. `out/` is ignored scratch space for logs.
 
+Tests whose subject has a clock run twice: `test_field`, `test_audio`,
+`test_i8271`, `test_boot`, `test_disc`, `test_tape`, `test_snapshot` and
+`test_cassette` are registered again as `<name>_2mhz` with
+`PICO_ATOM_TEST_MHZ=2`, which `test_mhz()` (`test_util.h`) and `guest_boot`
+read. `guest_boot_at(g, mhz)` builds a machine at a given clock whatever the
+variable says.
+
 `test_m6502_functional` runs Klaus Dormann's suite and reports as **skipped**
 unless the binary is present. `./tools/fetch-test-suites.sh` downloads it into
 `test/suites/` (gitignored — the tree ships no binaries it did not build); the
@@ -278,14 +307,14 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/core/keymap_picocalc.c` | PicoCalc code -> Atom cell; the cells are the kernel ROM's, by execution; the built-in game layouts and the names a `.map` file may use |
 | `src/core/keylayout.c` | §10.5's `.map` parser and tape matching |
 | `src/core/settings.*` | every default, host and guest, §11.7's parser for `/atom/pico-atom.cfg`, and §11.6's `settings_rewrite` |
-| `src/core/status.*` | §8.2's status line: the bytes core 0 puts in each snapshot, and the text |
+| `src/core/status.*` | §8.2's status line: the bytes core 0 puts in each snapshot, and the text; §13.1's perf line (`perf_line_t`) and `PAUSED` |
 | `src/core/sha1.*`, `romset.*` | identify ROM images by hash; the slot table from §11.1 |
 | `src/port/board.*` | clocks and board identification |
 | `src/port/southbridge.*` | i2c1 register layer; refuses to read `RST` (`0x08`), which resets the MCU |
 | `src/port/lcd.*` | panel init, windows, fills, polled-DMA ping-pong blit |
 | `src/port/display.*` | the §8.4 presenter; owns the renderer, its LUT, the shadow and line buffers; §8.7's mono palette and border, which it fills only when its colour changes; §8.2's status line, drawn only when its text changes |
 | `src/port/sd.*`, `diskio.c` | spi0 SD driver and FatFs's disk layer; FatFs itself is copied from the SDK at configure time |
-| `src/port/roms.*` | loads `/atom/roms/` into the machine before the guest starts; the no-ROMs page |
+| `src/port/roms.*` | loads `/atom/roms/` into the machine, the utility socket from the settings, keeping each slot's SHA-1; `roms_check`, a restart's first pass; the utility ROM list; the no-ROMs page |
 | `src/port/kbd.*` | core 1 drains the southbridge FIFO into an SPSC ring for core 0 |
 | `src/port/audio.*` | PWM slice, chained ping-pong DMA, PCM queue; the throttle (§9.4, §12.2) |
 | `src/port/log.*` | core 0's UART lines, formatted into a ring that core 1 drains |
@@ -295,8 +324,8 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `src/port/snapio.*` | snapshot slots in `/atom/snaps/`: temp file, publish, recovery on load |
 | `src/port/settingsio.*` | reads `/atom/pico-atom.cfg` at boot; the first problem for the menu's status row; *Save settings*, through `/atom/pico-atom.new` |
 | `src/port/keymapio.*` | the layouts the menu offers: built-in, then `/atom/keymaps/`; the first parse error for the status row |
-| `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer |
-| `src/port/main.c` | core 0's field loop, turbo while a tape plays, core 1's bring-up and live present; the park/handoff that gives core 1 the machine for tape calls and the menu; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
+| `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer; the Machine and About pages (§13.1) |
+| `src/port/main.c` | core 0's field loop, turbo while a tape plays, core 1's bring-up and live present; `machine_power_on()`, for boot and the Machine page's restart; Pause; the perf line's counters; the park/handoff that gives core 1 the machine for tape calls, the menu and Pause; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot`, `test_tape` and `test_snapshot` run the real MOS when `roms/` holds the images |
 | `test/host/test_uef.c`, `test_cassette.c` | inflate against the system's `gzip`; the waveform to the cycle; the ROM's own SAVE recorded off port C, decoded, and loaded back by its own LOAD; the same SAVE through the core's recorder, compared with the test's decoder. `test_cassette` writes `m8-two-part.uef`, the hardware check's tape |
 | `test/host/test_disc.c`, `test_i8271.c` | the real DOS against an in-memory image, served as `main.c` serves one; the chip's timing and the commands the DOS does not use |
@@ -306,6 +335,7 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` |
 | `tools/mkfont.py` | character ROM -> `mc6847_font.h`, and `--dump` to proof it |
 | `tools/vdg-ppm.c` | renders the scenes to PPM; `vdg-ppm test/golden` regenerates the goldens |
+| `cmake/version.cmake` | `pico_atom_version.h` from `git describe`, at build time, for the banner and the About page |
 | `tools/build.sh`, `flash.sh` | build the firmware with the newest SDK and toolchain under `~/.pico-sdk/` when `PICO_SDK_PATH` is stale; program it over SWD |
 | `tools/uart-log.sh`, `uart-type.sh` | capture UART1 to a file; type at the guest over it |
 | `tools/perf-run.sh`, `perf-summary.sh` | M7's measurement: one boot per workload, then one line per workload from the heartbeats |
@@ -376,7 +406,7 @@ a plausible-looking change silently breaks:
 - **Fixed capacities live in one header** (`src/core/config.h`). SRAM is the
   scarce resource; the budget in §5 is only a link-time fact if capacities stay
   in one place. Check growth with `arm-none-eabi-size build/pico/pico-atom.elf`;
-  at M11 `.bss` is ~225 KiB, of which 64 KiB is the UEF deck, and `.data`
+  at M12 `.bss` is 234,348 bytes (~229 KiB), of which 64 KiB is the UEF deck, and `.data`
   ~27 KiB (the SRAM-resident interpreter) of the 520 KiB budget.
 - **Copy a machine with `atom_copy`, never `=`.** The page table points into
   `ram[]`, so a struct assignment leaves the copy reading and writing the

@@ -28,11 +28,19 @@ static bool     s_valid;
 static bool     s_border;
 static uint16_t s_border_rgb = 0x0000u;
 
-/* What the status line shows now: blank, as lcd_init left the panel.
- * Stale once the palette changes, so the next call redraws it in the new
- * one whatever its text. */
-static char s_status[ATOM_STATUS_COLS + 1];
-static bool s_status_stale;
+/* A line of text outside the Atom's rectangle: the status line at the
+ * bottom (§8.2) and the perf line at the top (§13.1). What each shows
+ * now: blank, as lcd_init left the panel. Stale once the palette
+ * changes, so the next call redraws it in the new one whatever its
+ * text. */
+typedef struct {
+    unsigned y;
+    char     text[ATOM_STATUS_COLS + 1];
+    bool     stale;
+} text_line_t;
+
+static text_line_t s_status = { .y = ATOM_STATUS_Y };
+static text_line_t s_perf   = { .y = ATOM_PERF_Y };
 
 #define ATOM_BORDER_PIXELS \
     ((ATOM_SCREEN_W + 2u * ATOM_BORDER_X) * (ATOM_SCREEN_H + 2u * ATOM_BORDER_Y) - \
@@ -47,6 +55,9 @@ _Static_assert(ATOM_STATUS_COLS * 8u == ATOM_PANEL_W &&
                ATOM_STATUS_Y >= ATOM_SCREEN_Y + ATOM_SCREEN_H + ATOM_BORDER_Y &&
                ATOM_STATUS_Y + ATOM_FONT_ROWS <= ATOM_PANEL_H,
                "the status line must span the panel, below the border");
+
+_Static_assert(ATOM_PERF_Y + ATOM_FONT_ROWS <= ATOM_SCREEN_Y - ATOM_BORDER_Y,
+               "the perf line must sit above the border");
 
 /* DMA ping-pong (§4.6); sized for the full panel width so the status
  * band can use them too. */
@@ -66,7 +77,8 @@ void display_set_look(bool mono, bool border, bool dark_bg) {
     mc6847_set_mono(&s_vdg, mono);
     mc6847_set_dark_bg(&s_vdg, dark_bg);
     s_border = border;
-    s_status_stale = true;
+    s_status.stale = true;
+    s_perf.stale = true;
     display_invalidate();
 }
 
@@ -144,28 +156,36 @@ void display_present(const uint8_t *vram, uint8_t mode, display_stats_t *st) {
     if (st) *st = s;
 }
 
-void display_status(const char *text) {
-    if (!s_status[0]) memset(s_status, ' ', ATOM_STATUS_COLS);
+static void draw_line(text_line_t *l, const char *text) {
+    if (!l->text[0]) memset(l->text, ' ', ATOM_STATUS_COLS);
     if (!s_vdg.font) return;
-    if (!s_status_stale && strncmp(text, s_status, ATOM_STATUS_COLS) == 0) return;
-    memcpy(s_status, text, ATOM_STATUS_COLS);
-    s_status_stale = false;
+    if (!l->stale && strncmp(text, l->text, ATOM_STATUS_COLS) == 0) return;
+    memcpy(l->text, text, ATOM_STATUS_COLS);
+    l->stale = false;
 
     /* The screen's own green, so mono shows it as the screen's grey. */
     const uint16_t ink = s_vdg.pal[VDG_GREEN], paper = 0x0000u;
     unsigned cur = 0;
-    lcd_blit_begin(0, ATOM_STATUS_Y, ATOM_PANEL_W, ATOM_FONT_ROWS);
+    lcd_blit_begin(0, l->y, ATOM_PANEL_W, ATOM_FONT_ROWS);
     for (unsigned r = 0; r < ATOM_FONT_ROWS; r++) {
         cur ^= 1u;
         uint16_t *px = s_line[cur];
         for (unsigned c = 0; c < ATOM_STATUS_COLS; c++) {
             /* Drawn as the byte stands, bit 7 leftmost (mc6847.h). */
-            uint8_t bits = s_vdg.font[textpage_glyph(s_status[c]) * ATOM_FONT_ROWS + r];
+            uint8_t bits = s_vdg.font[textpage_glyph(l->text[c]) * ATOM_FONT_ROWS + r];
             for (unsigned b = 0; b < 8u; b++) *px++ = (bits & (0x80u >> b)) ? ink : paper;
         }
         lcd_blit_row(s_line[cur], ATOM_PANEL_W);
     }
     lcd_blit_end();
+}
+
+void display_status(const char *text) {
+    draw_line(&s_status, text);
+}
+
+void display_perf(const char *text) {
+    draw_line(&s_perf, text);
 }
 
 void display_test_pattern(void) {

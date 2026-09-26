@@ -56,7 +56,12 @@ static uint8_t result(void) {
 
 int main(void) {
     static uint8_t got[4096];
+    /* The disc turns in wall time, so at 2 MHz every time is twice the
+     * guest cycles (§12.1). */
+    const unsigned mhz = test_mhz();
+    printf("clock: %u MHz\n", mhz);
     i8271_init(&f);
+    f.mhz = (uint8_t)mhz;
     i8271_insert(&f, 0, 40, 1, false);
 
     /* ---- READ: two sectors, a byte every 64 cycles ------------------- */
@@ -65,8 +70,8 @@ int main(void) {
     uint64_t gap = 0;
     unsigned n = run(got, sizeof got, &gap);
     CHECK(n == 512, "two sectors are 512 bytes: %u", n);
-    CHECK(gap == ATOM_FDC_BYTE_CYCLES, "a byte every %u cycles: %llu",
-          (unsigned)ATOM_FDC_BYTE_CYCLES, (unsigned long long)gap);
+    CHECK(gap == ATOM_FDC_BYTE_CYCLES * mhz, "a byte every %u cycles: %llu",
+          (unsigned)ATOM_FDC_BYTE_CYCLES * mhz, (unsigned long long)gap);
     CHECK(got[0] == 3 * 16 + 4 && got[511] == 3 * 16 + 5, "sectors 4 and 5 of track 3");
     CHECK((f.status & (I8271_ST_RES_FULL | I8271_ST_INT | I8271_ST_BUSY)) ==
           (I8271_ST_RES_FULL | I8271_ST_INT), "a completion raises INT: %02X", f.status);
@@ -156,7 +161,9 @@ int main(void) {
     cmd(0x40 | 0x2C, NULL, 0);
     CHECK(result() & 0x04u, "ready while the head is loaded");
     CHECK(f.due != I8271_NEVER, "the idle count is running");
-    uint64_t unload = now + 12u * I8271_REV_CYCLES;
+    uint64_t unload = now + 12u * I8271_REV_CYCLES * mhz;
+    CHECK(f.due == unload, "twelve revolutions of %u cycles: due in %llu",
+          (unsigned)I8271_REV_CYCLES * mhz, (unsigned long long)(f.due - now));
     i8271_event(&f, f.due);
     now = unload;
     cmd(0x40 | 0x2C, NULL, 0);

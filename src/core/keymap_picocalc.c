@@ -145,11 +145,15 @@ const keymap_t keymap_picocalc[] = {
     { ':', AK_COLON, 0 }, { '*', AK_COLON, KM_SHIFT },
     { '.', AK_STOP,  0 }, { '>', AK_STOP,  KM_SHIFT },
     { '/', AK_SLASH, 0 }, { '?', AK_SLASH, KM_SHIFT },
-    { '@', AK_AT, 0 },
-    { '^', AK_CARET, 0 },
-    { '[', AK_LBRACKET, 0 },
-    { '\\', AK_BSLASH, 0 },
-    { ']', AK_RBRACKET, 0 },
+    /* The shifted five are the characters the MCU sends for Shift and
+     * the PicoCalc's own keys, mapped by what they are onto the Atom's
+     * shifted cells (§10.3); the VDG shows each as its key inverse.
+     * '|' is BASIC's OR (#C1DC), which is why they matter. */
+    { '@', AK_AT, 0 },          { '`', AK_AT, KM_SHIFT },
+    { '^', AK_CARET, 0 },       { '~', AK_CARET, KM_SHIFT },
+    { '[', AK_LBRACKET, 0 },    { '{', AK_LBRACKET, KM_SHIFT },
+    { '\\', AK_BSLASH, 0 },     { '|', AK_BSLASH, KM_SHIFT },
+    { ']', AK_RBRACKET, 0 },    { '}', AK_RBRACKET, KM_SHIFT },
     { ' ', AK_SPACE, 0 },
 
     { PC_ENTER,     AK_RETURN, 0 },
@@ -178,6 +182,7 @@ const keymap_t keymap_picocalc[] = {
     { 'L', AK_LOCK, KM_ALT },
     { 'K', NOCELL,  KM_ALT | KM_BREAK },
     { 'M', NOCELL,  KM_ALT | KM_MENU },
+    { 'P', NOCELL,  KM_ALT | KM_PAUSE },
 };
 
 const size_t keymap_picocalc_len = sizeof keymap_picocalc / sizeof keymap_picocalc[0];

@@ -164,11 +164,12 @@ static bool call(atom_t *m, uint16_t entry, bool reference) {
     m->cpu.x = BLOCK;
     m->cpu.pc = entry;
 
-    uint32_t per_field = ATOM_CYCLES_PER_FIELD;
+    /* The machine's own schedule, which follows its clock (§12.1). */
+    uint32_t per_field = atom_cycles_per_field(m);
     for (int field = 0; field < 60 * 600; field++) {
         for (uint32_t done = 0; done < per_field;) {
-            atom_field_sync(m, done >= ATOM_ACTIVE_CYCLES &&
-                               done < ATOM_ACTIVE_CYCLES + ATOM_FS_LOW_CYCLES);
+            atom_field_sync(m, done >= m->field_active &&
+                               done < m->field_active + m->field_fs_low);
             if (m->cpu.pc == RET) {
                 atom_field_sync(m, false);
                 m->cfg.tape_traps = true;

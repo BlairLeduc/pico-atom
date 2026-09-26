@@ -17,7 +17,9 @@
 #include <stdint.h>
 
 #include "atom.h"
+#include "board.h"
 #include "keymatrix.h"
+#include "roms.h"
 #include "settings.h"
 
 typedef struct {
@@ -33,6 +35,7 @@ typedef struct {
     bool     border;
     bool     dark_bg;
     bool     status;      /* the status line (§8.2); core 1 draws it too */
+    bool     perf;        /* the perf line (§13.1); core 1 draws it too  */
 
     /* 1-15 once the settings file or the menu has set it; 0 leaves the
      * southbridge's own level, and a save leaves the file's line. */
@@ -51,6 +54,19 @@ typedef struct {
     /* What the settings file said at boot, updated by each save: the
      * keys the menu does not set are saved from here (§11.6). */
     settings_t *file;
+
+    /* The running machine's utility ROM, "" for none (§13.1); the rest
+     * of the machine is the atom_t's cfg. */
+    char     utility[ROMS_NAME_MAX];
+
+    /* What the About page shows (§13.1): the board from boot, and the
+     * ROMs as the last power-on loaded them. */
+    const board_info_t  *board;
+    const roms_report_t *roms;
+
+    /* The Machine page's Apply and restart: main.c's machine_power_on,
+     * with core 0 parked. NULL, or why the machine was left running. */
+    const char *(*restart)(const atom_config_t *cfg, const char *utility);
 } menu_settings_t;
 
 /* Run the menu until it is closed. `vram` is a page core 1 owns. */

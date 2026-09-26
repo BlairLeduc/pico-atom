@@ -72,6 +72,9 @@ typedef struct {
     bool     playing;
     bool     ended;         /* played to the end since the last rewind  */
     bool     level;         /* port C bit 5                              */
+    /* A play was refused because the guest runs at 2 MHz, where the
+     * MOS cannot read a tape (§12.1, §16); until the next insertion. */
+    bool     needs_1mhz;
 
     /* The next change on the input, in guest cycles, and whether it
      * changes the level (a half-cycle) or only ends a gap. */
@@ -79,6 +82,12 @@ typedef struct {
     bool     edge_toggles;
     uint32_t acc;           /* remainder of units x CPU Hz / (4 x base)  */
     uint64_t paused_left;   /* edge - now, while stopped                 */
+
+    /* The guest's clock, and bit 4's period in its cycles: fixed in
+     * wall time, so twice as many at 2 MHz (§12.1). The deck keeps
+     * them whatever goes in or out of it. */
+    uint32_t cpu_hz;
+    uint32_t ref;
 
     uint32_t hz_ref;        /* a cycle count at which bit 4 went high    */
     /* The first cycle, low 32 bits, at which port C bits 4-5 may next
@@ -96,7 +105,12 @@ typedef struct {
     cassette_rec_t rec;
 } cassette_t;
 
+/* An empty deck on a 1 MHz guest. */
 void cassette_init(cassette_t *c);
+
+/* The guest's clock in MHz, 1 or 2 (§12.1). Only at power-on: every
+ * count in flight is in guest cycles. */
+void cassette_set_clock(cassette_t *c, unsigned mhz);
 
 /* Load an uncompressed UEF image, rewound and stopped. False, and the
  * deck left empty, if it is not one. */

@@ -14,6 +14,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include "hardware/clocks.h"
 #include "hardware/sync.h"
@@ -34,6 +35,7 @@
 #include "log.h"
 #include "mc6847.h"
 #include "menu.h"
+#include "pico_atom_version.h"
 #include "roms.h"
 #include "settingsio.h"
 #include "snappool.h"
@@ -96,6 +98,16 @@ static volatile struct {
     uint32_t max_us;
 } g_c1;
 
+/* The perf line's host counters (design.md §13.1): core 0 closes a
+ * window once a wall-clock second and writes its words here, each a
+ * single 32-bit store; core 1 adds its own present time and drops. */
+static volatile perf_line_t g_perf;
+
+/* Bumped by core 1 after the Machine page's restart, while core 0 is
+ * parked: core 0's counters kept against the old machine's clock start
+ * again (§13.1). */
+static volatile uint32_t g_power_ons;
+
 /* ---- the machine handoff (§4.2, §11.1) ------------------------------ *
  * Card work belongs to core 1 and can outlast both the field and the
  * audio deadline, so it happens with the guest parked. Core 0 stops at a
@@ -107,6 +119,7 @@ static volatile struct {
 #define HANDOFF_TAPE 1u   /* the CPU is stalled on OSLOAD/OSSAVE (tape.h) */
 #define HANDOFF_MENU 2u   /* Alt+M (design.md §13)                      */
 #define HANDOFF_DISC 3u   /* the FDC is waiting on sectors (i8271.h)    */
+#define HANDOFF_PAUSE 4u  /* Alt+P (design.md §13.1)                    */
 
 static volatile uint32_t g_handoff = HANDOFF_NONE;
 
@@ -114,10 +127,22 @@ static volatile uint32_t g_handoff = HANDOFF_NONE;
  * wrote since (design.md §11.6, §11.7). Core 1's. */
 static settings_t g_file;
 
+/* What the About page shows (design.md §13.1): the board, from boot, and
+ * the ROMs, from boot and renewed by each restart. Core 1's. */
+static board_info_t  g_board;
+static roms_report_t g_roms;
+
+static const char *machine_power_on(const atom_config_t *cfg, const char *utility,
+                                    bool restart);
+static const char *menu_restart(const atom_config_t *cfg, const char *utility) {
+    return machine_power_on(cfg, utility, true);
+}
+
 /* Written by the menu on core 1 while core 0 is parked, applied by core
  * 0 once it has the machine back. */
 static menu_settings_t g_settings = { .volume = 8, .turbo = true, .status = true,
-                                      .file = &g_file };
+                                      .file = &g_file, .board = &g_board, .roms = &g_roms,
+                                      .restart = menu_restart };
 
 /* ---- the snapshot handoff (§4.2): every transition under one lock ---- */
 
@@ -337,6 +362,144 @@ static void boot_media(const settings_t *b) {
     }
 }
 
+/* The machine powered on with `cfg` and `utility` (design.md §13.1): the
+ * boot's configuration step, and the Machine page's restart. Core 1, with
+ * core 0 waiting at boot or parked in the menu, so the machine is core
+ * 1's to write (§4.2); the card is mounted.
+ *
+ * A restart checks the card first, in two passes as a snapshot loads
+ * (§11.5): every file the new machine needs is read and hashed, and a
+ * missing or wrong one refuses the restart and leaves the machine
+ * running as it was. Then it is a power-on: the tape goes back in the
+ * deck at its start and the discs back in their drives, as at boot
+ * (§11.7), and the layout in force stays. At boot there is no machine to
+ * keep, so nothing is checked: a missing ROM is the no-ROMs page.
+ *
+ * The old machine is not kept for the second pass: its ROMs are in its
+ * ram[], and a second atom_t is ~70 KiB (§5). A card changed between the
+ * passes, a few milliseconds apart, is the no-ROMs page, as at boot,
+ * rather than a guest running without its kernel. NULL, or why not. */
+static const char *machine_power_on(const atom_config_t *cfg, const char *utility,
+                                    bool restart) {
+    static char why[40];
+    char tape[ATOM_PATH_MAX], drive[ATOM_FDC_DRIVES][ATOM_PATH_MAX];
+    if (restart) {
+        const char *err = roms_check(cfg, utility);
+        if (err) {
+            printf("  machine      : not restarted: %s\n", err);
+            snprintf(why, sizeof why, "%.20s: NOT RESTARTED", err);
+            return why;
+        }
+        snprintf(tape, sizeof tape, "%s", tapeio_inserted());
+        for (unsigned d = 0; d < ATOM_FDC_DRIVES; d++)
+            snprintf(drive[d], sizeof drive[d], "%s", discio_inserted(d));
+    }
+
+    atom_init(&g_atom, cfg);
+    bool ok = roms_load(&g_atom, utility, &g_roms);
+    snprintf(g_settings.utility, sizeof g_settings.utility, "%s", utility);
+    atom_seed_rnd(&g_atom, get_rand_64());   /* power-on RAM is not zero (§7.2) */
+    atom_reset(&g_atom);                     /* the vectors arrived with the kernel */
+    /* The beeper's rate is the PWM's, which core 0 finds at audio_init;
+     * before that, at boot, core 0 sets it itself. */
+    uint32_t num = 0, den = 0;
+#if PICO_ATOM_AUDIO
+    audio_rate(&num, &den);
+#endif
+    if (num) atom_audio_set_rate(&g_atom, num, den);
+    printf("  machine      : %s, %s KiB, %u MHz, %s, utility %s\n",
+           restart ? "restarted" : "powered on", cfg->upper_ram ? "32" : "16",
+           atom_clock_mhz(cfg), cfg->atomdos ? "AtomDOS" : "no DOS",
+           utility[0] ? utility : "none");
+
+    if (restart) {
+        roms_log(&g_roms);
+        if (!ok) no_roms(&g_roms);
+        const char *err = tape[0] ? tapeio_insert(&g_atom, tape) : NULL;
+        if (err) printf("  tape         : %s not back in: %s\n", tape, err);
+        for (unsigned d = 0; d < ATOM_FDC_DRIVES; d++) {
+            err = drive[d][0] ? discio_insert(&g_atom, d, drive[d]) : NULL;
+            if (err) printf("  disc         : %s not back in drive %u: %s\n", drive[d], d, err);
+        }
+        __dmb();
+        g_power_ons++;
+    }
+    return ok ? NULL : "NO ROMS";
+}
+
+/* Pause (design.md §13.1): the guest is parked, its last frame stays on
+ * the panel, the status line says PAUSED whether or not it is on, and the
+ * backlight goes to its lowest step. Any key resumes, and is not typed;
+ * Alt+M goes to the menu instead, the backlight restored first. The card
+ * is not mounted and no page is drawn. The keyboard is polled at 30 Hz,
+ * which keeps the MCU's bus watchdog fed (hardware-notes.md §6.1).
+ * Returns true for the menu. */
+#define BKL_LOWEST 16u
+
+static bool pause_run(void) {
+    char line[ATOM_STATUS_COLS + 1];
+    status_paused_format(line);
+    display_status(line);
+
+    /* The level may be the southbridge's own, not the settings' or the
+     * menu's (§11.7), so it is read, and written back on resume. */
+    uint8_t r[2] = {0};
+    bool read = sb_read(SB_REG_BKL, r) == SB_OK;
+    uint8_t level = read ? r[1] : BKL_LOWEST;
+    bool dimmed = read && level != BKL_LOWEST && sb_write(SB_REG_BKL, BKL_LOWEST, NULL) == SB_OK;
+    printf("  pause        : paused, backlight %s\n",
+           !read ? "unread, left" : dimmed ? "dimmed" : "already lowest");
+
+    /* It was asked for with Alt held. */
+    bool alt = true, menu = false, done = false;
+    uint32_t last_poll = time_us_32();
+    while (!done) {
+        if (time_us_32() - last_poll >= KBD_POLL_US) {
+            last_poll = time_us_32();
+            g_c1.key_events += kbd_poll();
+            uint8_t st, c;
+            while (!done && kbd_pop(&st, &c)) {
+                if (c == PICOCALC_KEY_ALT) { alt = st != KEY_EV_RELEASED; continue; }
+                if (st != KEY_EV_PRESSED) continue;
+                /* A modifier alone resumes nothing, so Alt+M can be had;
+                 * nor does the pause chord's own auto-repeat. */
+                if (c == PICOCALC_KEY_CTRL || c == PICOCALC_KEY_SHIFT_L ||
+                    c == PICOCALC_KEY_SHIFT_R) continue;
+                if (alt && (c == 'P' || c == 'p')) continue;
+                menu = alt && (c == 'M' || c == 'm');
+                done = true;
+            }
+        }
+        log_pump();
+        busy_wait_us_32(500);
+    }
+
+    if (dimmed) (void)sb_write(SB_REG_BKL, level, NULL);
+    printf("  pause        : resumed%s\n", menu ? " into the menu" : "");
+    return menu;
+}
+
+/* The perf line (design.md §13.1): core 0's window, and core 1's own
+ * present time and drops over the same wall-clock second. Drawn only when
+ * the text changes, so at most once a second. */
+static void draw_perf(uint32_t present_max, uint32_t dropped) {
+    char text[ATOM_STATUS_COLS + 1];
+    if (g_settings.perf) {
+        perf_line_t p;
+        p.busy1000 = g_perf.busy1000;
+        p.head100 = g_perf.head100;
+        p.underruns = g_perf.underruns;
+        p.late = g_perf.late;
+        p.present_us = present_max;
+        p.dropped = dropped;
+        status_perf_format(&p, text);
+    } else {
+        memset(text, ' ', ATOM_STATUS_COLS);
+        text[ATOM_STATUS_COLS] = 0;
+    }
+    display_perf(text);
+}
+
 static void core1_main(void) {
     printf("  core 1       : up\n");
 
@@ -360,16 +523,13 @@ static void core1_main(void) {
     display_init(FONT);
 
     /* 3. The settings file, before the ROMs, because some of it is the
-     *    machine: RAM and AtomDOS decide what loads (design.md §11.7).
-     *    Core 0 is waiting, so the machine is core 1's to configure. */
+     *    machine: RAM, the clock, AtomDOS and the utility ROM decide what
+     *    loads (design.md §11.7). Core 0 is waiting, so the machine is
+     *    core 1's to configure. */
     settings_t *boot = &g_file;
-    if (storage_mount() == 0) {
-        settingsio_load(boot);
-        storage_unmount();
-    } else {
-        settings_default(boot);
-    }
-    atom_init(&g_atom, &boot->machine);
+    int mount_error = storage_mount();
+    if (mount_error == 0) settingsio_load(boot);
+    else settings_default(boot);
     g_settings.mono      = boot->mono;
     g_settings.border    = boot->border;
     g_settings.dark_bg   = boot->dark_bg;
@@ -377,6 +537,10 @@ static void core1_main(void) {
     g_settings.volume    = boot->volume;
     g_settings.backlight = boot->backlight;
     g_settings.turbo     = boot->turbo;
+    g_settings.perf      = boot->perf;
+#ifdef PICO_ATOM_BOOT_PERF
+    g_settings.perf      = true;   /* over the file's */
+#endif
     display_set_look(g_settings.mono, g_settings.border, g_settings.dark_bg);
     if (boot->backlight) (void)sb_write(SB_REG_BKL, (uint8_t)(boot->backlight * 16u), NULL);
 #if PICO_ATOM_MEASURE_PRESENT
@@ -388,16 +552,31 @@ static void core1_main(void) {
 #endif
     display_invalidate();
 
-    /* 4. The ROMs, while core 0 waits: loading writes the ROMs into the
-     *    machine, the one time core 1 touches atom_t (roms.h). */
-    roms_report_t report;
-    bool ok = roms_load(&g_atom, &report);
-    roms_log(&report);
+    /* 4. The machine and its ROMs, while core 0 waits: loading writes the
+     *    ROMs into the machine, which is core 1's until it says so
+     *    (roms.h, §13.1). */
+#ifdef PICO_ATOM_BOOT_CLOCK
+    boot->machine.clock_mhz = PICO_ATOM_BOOT_CLOCK;   /* over the file's */
+#endif
+    bool ok = false;
+    if (mount_error == 0) {
+        ok = machine_power_on(&boot->machine, boot->utility, false) == NULL;
+    } else {
+        memset(&g_roms, 0, sizeof g_roms);
+        g_roms.mount_error = mount_error;
+    }
+    roms_log(&g_roms);
+    /*    A utility ROM the file names and the card lacks is its problem;
+     *    the default, missing, is an empty socket, as it always was. */
+    if (ok && boot->utility[0] && strcasecmp(boot->utility, SETTINGS_UTILITY) != 0) {
+        if (g_roms.slot[ROM_UTILITY] == ROM_MISSING) settingsio_fail("utility", "no such file");
+        else if (g_roms.slot[ROM_UTILITY] == ROM_BAD_SIZE) settingsio_fail("utility", "not 4096 bytes");
+    }
 
     /*    The card's game keymaps too, so that the first tape load can
      *    choose one (design.md §10.5). The menu reads them again when it
      *    opens. */
-    if (ok && storage_mount() == 0) {
+    if (ok) {
         keymapio_scan();
         boot_media(boot);
 #ifdef PICO_ATOM_BOOT_TAPE
@@ -419,16 +598,18 @@ static void core1_main(void) {
         printf("  disc         : boot disc %s: %s\n", PICO_ATOM_BOOT_DISC,
                derr ? derr : "in drive 0");
 #endif
-        storage_unmount();
     }
+    if (mount_error == 0) storage_unmount();
     g_c1.roms_ok = ok;
     __dmb();
     g_c1.ready = true;
-    if (!ok) no_roms(&report);
+    if (!ok) no_roms(&g_roms);
 
     /* Live: present the newest snapshot, drop superseded ones (§12.2),
      * and poll the keyboard at 30 Hz. */
     uint32_t last_poll = time_us_32();
+    /* The perf line's second, core 1's half of it (§13.1). */
+    uint32_t sec_start = last_poll, sec_max_us = 0, sec_dropped = g_pool.dropped;
     for (;;) {
         int i = pool_take();
         if (i >= 0) {
@@ -442,6 +623,7 @@ static void core1_main(void) {
             if (st.full) g_c1.full_presents++;
             g_c1.last_us = st.us;
             if (st.us > g_c1.max_us) g_c1.max_us = st.us;
+            if (st.us > sec_max_us) sec_max_us = st.us;
         }
 
         log_pump();
@@ -453,11 +635,20 @@ static void core1_main(void) {
                 if (tapeio_serve(&g_atom, loaded)) keys_for_tape(loaded);
             } else if (g_handoff == HANDOFF_DISC) {
                 (void)discio_serve(&g_atom);
+            } else if (g_handoff == HANDOFF_PAUSE) {
+                if (pause_run()) menu_run(&g_atom, &g_settings, s_scene);
             } else {
                 menu_run(&g_atom, &g_settings, s_scene);
             }
             __dmb();
             g_handoff = HANDOFF_NONE;
+        }
+
+        if (time_us_32() - sec_start >= 1000000u) {
+            sec_start = time_us_32();
+            draw_perf(sec_max_us, g_pool.dropped - sec_dropped);
+            sec_max_us = 0;
+            sec_dropped = g_pool.dropped;
         }
 
         if (time_us_32() - last_poll >= KBD_POLL_US) {
@@ -514,7 +705,7 @@ static void uart_keys(void) {
         keymatrix_event(&g_keys, KEY_EV_RELEASED, PICOCALC_KEY_CTRL);
         return;
     }
-    bool shifted = c != 0 && strchr("!\"#$%&'()=<+*>?", c) != NULL;
+    bool shifted = c != 0 && strchr("!\"#$%&'()=<+*>?|{}~", c) != NULL;
     if (c >= 'A' && c <= 'Z') c = (uint8_t)(c + 32u);   /* unshifted = capitals */
     else if (c >= 'a' && c <= 'z') { c = (uint8_t)(c - 32u); shifted = true; }
     if (shifted) keymatrix_event(&g_keys, KEY_EV_PRESSED, PICOCALC_KEY_SHIFT_L);
@@ -568,17 +759,33 @@ static void park(uint32_t why) {
     __dmb();
 }
 
+/* Park for the menu or a pause, which own the keyboard while they last
+ * (§13, §13.1): the keys, the chord's own releases among them, were core
+ * 1's, so the held set starts again empty, and the key that resumes a
+ * pause is never typed. True if the Machine page restarted the machine
+ * meanwhile. */
+static bool park_for_ui(uint32_t why) {
+    uint32_t power_ons = g_power_ons;
+    park(why);
+    keymatrix_init(&g_keys);
+    keymatrix_set_layout(&g_keys, g_settings.layout);
+#if PICO_ATOM_AUDIO
+    audio_set_volume(g_settings.volume * 32u);
+#endif
+    return g_power_ons != power_ons;
+}
+
 int main(void) {
     stdio_init_all();
 
     bool clocks_ok = board_init_clocks();
 
-    board_info_t info;
-    board_identify(&info);
+    board_identify(&g_board);
 
     /* A startup banner plus consecutive heartbeats is more useful boot
      * evidence than a single line (hardware-notes.md §2.7). */
-    board_log_banner(&info);
+    board_log_banner(&g_board);
+    printf("  firmware     : %s\n", PICO_ATOM_VERSION);
     if (!clocks_ok) {
         printf("  WARNING: clk_sys is not at 150 MHz; SPI and audio rates "
                "will not be the ones this build assumes\n");
@@ -604,9 +811,9 @@ int main(void) {
      * (design.md §1, §11.1). */
     while (!g_c1.ready) sleep_ms(1);
     __dmb();
-    printf("  guest        : %u cycles/field at %u Hz, FS low %u, %u KiB address space\n",
-           (unsigned)ATOM_CYCLES_PER_FIELD, ATOM_FIELD_HZ,
-           (unsigned)ATOM_FS_LOW_CYCLES,
+    printf("  guest        : %u MHz, %u cycles/field at %u Hz, FS low %u, %u KiB address space\n",
+           atom_clock_mhz(&g_atom.cfg), (unsigned)atom_cycles_per_field(&g_atom),
+           ATOM_FIELD_HZ, (unsigned)g_atom.field_fs_low,
            (unsigned)(ATOM_ADDR_SPACE / 1024u));
     if (!g_c1.roms_ok) {
         printf("  guest        : not started — no ROMs (the panel says which)\n");
@@ -632,8 +839,8 @@ int main(void) {
 #endif
     keymatrix_set_layout(&g_keys, g_settings.layout);
 
-    atom_seed_rnd(&g_atom, get_rand_64());   /* power-on RAM is not zero (§7.2) */
-    atom_reset(&g_atom);   /* the vectors arrived with the kernel */
+    /* Core 1 seeded RND and reset the machine once the kernel was in
+     * (machine_power_on). */
     printf("  guest        : started at #%04X; hot code in SRAM to tier %u "
            "(hot.h)\n", g_atom.cpu.pc, (unsigned)PICO_ATOM_RAM_TIER);
 
@@ -654,6 +861,7 @@ int main(void) {
      * change the text at most once a wall-clock second. */
     atom_status_t shown = { 0 };
     uint64_t sec_us = hb_us, sec_cycles = hb_cycles;
+    uint32_t sec_run_us = 0;   /* inside atom_run_field this second (§13.1) */
     bool sec_turbo = false;
     const uint32_t clk_mhz = clock_get_hz(clk_sys) / 1000000u;
     for (;;) {
@@ -678,21 +886,23 @@ int main(void) {
         uint8_t kstate, kcode;
         while (kbd_pop(&kstate, &kcode)) keymatrix_event(&g_keys, kstate, kcode);
         keymatrix_field(&g_keys, &g_atom);
-        if (g_keys.menu_request) {
-            /* The menu pauses the guest (§13). Its keys, the chord's own
-             * releases among them, are core 1's while it is open, so the
-             * held set starts again empty. */
-            park(HANDOFF_MENU);
-            keymatrix_init(&g_keys);
-            keymatrix_set_layout(&g_keys, g_settings.layout);
-#if PICO_ATOM_AUDIO
-            audio_set_volume(g_settings.volume * 32u);
-#endif
+        /* The menu pauses the guest (§13), and so does Pause (§13.1):
+         * both park it, with the PCM queue fed silence, so everything
+         * counted in guest cycles stops with it. */
+        if (g_keys.menu_request || g_keys.pause_request) {
+            if (park_for_ui(g_keys.menu_request ? HANDOFF_MENU : HANDOFF_PAUSE)) {
+                /* A new machine, its clock started again (§13.1). */
+                hb_cycles = sec_cycles = g_atom.cpu.cycles;
+                hb_insns = g_atom.instructions;
+                shown = (atom_status_t){ 0 };
+            }
         }
 
         uint32_t t0 = time_us_32();
         atom_run_field(&g_atom);
-        run_us += time_us_32() - t0;
+        uint32_t ran_us = time_us_32() - t0;
+        run_us += ran_us;
+        sec_run_us += ran_us;
 
         bool turbo = turbo_now();
         if (turbo) turbo_fields++;
@@ -702,12 +912,26 @@ int main(void) {
         uint64_t now_us = time_us_64();
         if (now_st.deck != shown.deck) shown.percent = now_st.percent;
         if (now_us - sec_us >= 1000000u) {
-            /* Guest cycles per microsecond is times real time. */
-            uint64_t tenths = (g_atom.cpu.cycles - sec_cycles) * 10u / (now_us - sec_us);
+            /* Guest cycles per microsecond, over the clock, is times
+             * real time. */
+            const unsigned mhz = atom_clock_mhz(&g_atom.cfg);
+            uint64_t guest = g_atom.cpu.cycles - sec_cycles, wall = now_us - sec_us;
+            uint64_t tenths = guest * 10u / (wall * mhz);
             shown.turbo10 = sec_turbo ? (uint8_t)(tenths > 255u ? 255u : tenths) : 0u;
             shown.percent = now_st.percent;
+            /* The perf line's window (§13.1): whole words, each written
+             * once, for core 1 to read. */
+            g_perf.busy1000 = (uint32_t)((uint64_t)sec_run_us * 1000u / wall);
+            g_perf.head100 = (uint32_t)(guest * 100u / (((uint64_t)sec_run_us + 1u) * mhz));
+#if PICO_ATOM_AUDIO
+            audio_stats_t pst;
+            audio_stats(&pst, false);
+            g_perf.underruns = pst.underrun_samples;
+            g_perf.late = pst.late_refills;
+#endif
             sec_us = now_us;
             sec_cycles = g_atom.cpu.cycles;
+            sec_run_us = 0;
             sec_turbo = true;
         }
         if (!turbo) {
@@ -770,7 +994,7 @@ int main(void) {
              * thousandths: the headline number (§12.3). */
             uint64_t now = time_us_64();
             uint64_t guest = g_atom.cpu.cycles - hb_cycles;
-            uint32_t rt1000 = (uint32_t)(guest * 1000u * 1000000u / ATOM_CPU_HZ /
+            uint32_t rt1000 = (uint32_t)(guest * 1000u * 1000000u / g_atom.cpu_hz /
                                          (now - hb_us + 1u));
             const mc6847_mode_info_t *vdg = mc6847_mode_info(atom_vdg_mode(&g_atom));
             log_printf("  heartbeat    : %lu fields, rt %lu.%03lu, %llu guest cycles, "
@@ -798,18 +1022,21 @@ int main(void) {
              * times real time the guest would run unpaced. */
             uint64_t insns = g_atom.instructions - hb_insns;
             uint32_t busy1000 = (uint32_t)((uint64_t)run_us * 1000u / (now - hb_us + 1u));
-            uint32_t head100 = (uint32_t)(guest * 100u / (run_us + 1u));
+            /* Over the clock, so it is times real time at 2 MHz too. */
+            uint32_t head100 = (uint32_t)(guest * 100u /
+                                          (((uint64_t)run_us + 1u) * atom_clock_mhz(&g_atom.cfg)));
             uint32_t hpi10 = (uint32_t)((uint64_t)run_us * clk_mhz * 10u / (insns + 1u));
             uint32_t gpi100 = (uint32_t)(guest * 100u / (insns + 1u));
-            log_printf("  perf         : tier %u, guest %lu.%lu%% of wall, headroom "
+            log_printf("  perf         : tier %u, %u MHz, guest %lu.%lu%% of wall, headroom "
                    "%lu.%02lux, %lu.%lu host cycles/insn, %lu.%02lu guest cycles/insn, "
-                   "%llu insns\n",
-                   (unsigned)PICO_ATOM_RAM_TIER,
+                   "%llu insns, %lu guest cycles/s\n",
+                   (unsigned)PICO_ATOM_RAM_TIER, atom_clock_mhz(&g_atom.cfg),
                    (unsigned long)(busy1000 / 10u), (unsigned long)(busy1000 % 10u),
                    (unsigned long)(head100 / 100u), (unsigned long)(head100 % 100u),
                    (unsigned long)(hpi10 / 10u), (unsigned long)(hpi10 % 10u),
                    (unsigned long)(gpi100 / 100u), (unsigned long)(gpi100 % 100u),
-                   (unsigned long long)insns);
+                   (unsigned long long)insns,
+                   (unsigned long)(guest * 1000000u / (now - hb_us + 1u)));
             hb_insns = g_atom.instructions;
             run_us = 0;
             /* The deck: where the tape is, and how many of these fields

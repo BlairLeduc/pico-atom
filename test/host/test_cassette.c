@@ -39,7 +39,7 @@ static bool out_level(const atom_t *m, uint8_t out_c, uint64_t t) {
     if (!(out_c & 0x01u)) return false;
     if (!(out_c & 0x02u)) return true;
     uint32_t d = (uint32_t)t - m->cas.hz_ref;
-    return d % ATOM_CASSETTE_REF_CYCLES < ATOM_CASSETTE_REF_CYCLES / 2u;
+    return d % m->cas.ref < m->cas.ref / 2u;
 }
 
 static uint64_t edges[400000];
@@ -67,11 +67,11 @@ static void fields_recorded(int n) {
     atom_t *m = &g.m;
     for (int i = 0; i < n; i++) {
         keymatrix_field(&g.k, m);
-        run_recorded(m, ATOM_ACTIVE_CYCLES);
+        run_recorded(m, m->field_active);
         atom_field_sync(m, true);
-        run_recorded(m, ATOM_FS_LOW_CYCLES);
+        run_recorded(m, m->field_fs_low);
         atom_field_sync(m, false);
-        run_recorded(m, ATOM_BLANK_CYCLES);
+        run_recorded(m, m->field_blank);
         int16_t discard[ATOM_AUDIO_BUF_LEN];
         (void)atom_audio_drain(m, discard, ATOM_AUDIO_BUF_LEN);
     }
@@ -110,9 +110,11 @@ static void flush(void) {
 }
 
 /* Half-cycles classified by length: 2400 Hz ~208, 1200 Hz ~417,
- * anything else a gap in the signal. */
+ * anything else a gap in the signal. In microseconds, so the recording
+ * of a 2 MHz guest is read in its own cycles (§12.1). */
 enum { H_SHORT, H_LONG, H_GAP };
 static int kind(uint64_t d) {
+    d /= guest_mhz();
     if (d >= 150 && d <= 280) return H_SHORT;
     if (d >= 330 && d <= 500) return H_LONG;
     return H_GAP;
@@ -140,7 +142,7 @@ static unsigned decode(void) {
         }
         if (k == H_GAP) {
             flush();
-            uint32_t units = (uint32_t)(d * 2400u / 1000000u);
+            uint32_t units = (uint32_t)(d * 2400u / (1000000u * guest_mhz()));
             if (units) put16(0x0112, units);
             i++;
             continue;
@@ -170,7 +172,8 @@ static unsigned decode(void) {
     flush();
     /* The silence after the last edge, which no edge closes. */
     if (n_edges && rec_end > edges[n_edges - 1]) {
-        uint32_t units = (uint32_t)((rec_end - edges[n_edges - 1]) * 2400u / 1000000u);
+        uint32_t units = (uint32_t)((rec_end - edges[n_edges - 1]) * 2400u /
+                                    (1000000u * guest_mhz()));
         if (units) put16(0x0112, units);
     }
     return errors;
@@ -572,11 +575,82 @@ static int test_record(void) {
     return 0;
 }
 
+/* ---- M12: a 2 MHz guest (§12.1, §16) ----------------------------------- *
+ * §16's open question, settled by execution: the ROM's writer times each
+ * bit against port C bit 4's reference, which is the crystal's and keeps
+ * wall time, so it writes a real tape at 2 MHz; its reader times the
+ * tape with its own loops, so at 2 MHz it reads nothing. The deck
+ * therefore plays only at 1 MHz and records at either. */
+static int test_2mhz(void) {
+    static const char *const prog[] = { "10 PRINT \"SIGNAL OK\"\n", "20 END\n", NULL };
+    static uint8_t fast[sizeof uef];
+    bool recorded;
+
+    /* The ROM's own SAVE at 2 MHz, off port C, framed by the model. */
+    if (record_program(prog, "SAVE \"PROG\"\n")) return 1;
+    uint16_t load = 0;
+    unsigned len = 0;
+    CHECK(block_header("PROG", &load, &len), "a PROG block is on the tape written at 2 MHz");
+    static uint8_t saved[256];
+    memcpy(saved, &g.m.ram[load], len);
+    memcpy(fast, uef, uef_len);
+    size_t fast_len = uef_len;
+
+    /* It is a tape: a 1 MHz Atom loads it. */
+    guest_boot_at(&g, 1);
+    CHECK(atom_cassette_insert(&g.m, fast, fast_len), "the 2 MHz recording is a UEF");
+    if (load_and_run("PROG", "SIGNAL OK")) return 1;
+
+    /* At 2 MHz the deck will not play, and says why. */
+    guest_boot(&g);
+    atom_cassette_insert(&g.m, fast, fast_len);
+    guest_type(&g, "LOAD \"PROG\"\n");
+    CHECK(screen_has(&g.m, "PLAY TAPE"), "the MOS asks for the tape at 2 MHz too");
+    guest_tap(&g, 0x0Au);
+    guest_fields(&g, 5);
+    CHECK(!g.m.cas.playing && g.m.cas.needs_1mhz, "the key does not start the deck at 2 MHz");
+    atom_status_t st;
+    atom_status(&g.m, &st);
+    CHECK(st.deck == STATUS_DECK_NEEDS_1MHZ, "the status line says NEEDS 1 MHZ: %u", st.deck);
+
+    /* Control: the reason. Played by hand, past the refusal, the ROM's
+     * reader sees the signal at the wrong speed and loads nothing. */
+    cassette_play(&g.m.cas, g.m.cpu.cycles, true);
+    atom_cassette_sync_slow(&g.m);
+    for (int i = 0; i < 1800 && g.m.cas.playing; i++) guest_fields(&g, 1);
+    printf("  2 MHz read   : deck %s, %u edges played\n",
+           g.m.cas.ended ? "ran to the end" : "stopped", (unsigned)g.m.cas.edges);
+    CHECK(g.m.cas.edges > 1000, "the tape was played at the ROM: %u edges",
+          (unsigned)g.m.cas.edges);
+    CHECK(memcmp(&g.m.ram[load], saved, len) != 0,
+          "the MOS read the tape at 2 MHz, which §16 says it cannot: remove the refusal");
+
+    /* The core's recorder at 2 MHz, onto a new tape, loaded at 1 MHz. */
+    guest_boot(&g);
+    size_t blank = new_tape(deck);
+    atom_cassette_insert_rw(&g.m, deck, blank, sizeof deck);
+    guest_type(&g, "10 PRINT \"RECORDED FAST\"\n");
+    guest_type(&g, "20 END\n");
+    unsigned w = save_to_deck("SAVE \"FAST\"\n", &recorded);
+    CHECK(recorded && w == 1, "SAVE at 2 MHz recorded, and went to the card");
+    CHECK(g.m.cas.rec.errors == 0, "every byte framed at 2 MHz: %u did not",
+          (unsigned)g.m.cas.rec.errors);
+    size_t rec_len = g.m.cas.uef.len;
+    guest_boot_at(&g, 1);
+    atom_cassette_insert_rw(&g.m, deck, rec_len, sizeof deck);
+    if (load_and_run("FAST", "RECORDED FAST")) return 1;
+    return 0;
+}
+
 int main(void) {
     const char *dir;
     if (!guest_find_roms(&dir)) {
         printf("skipped: no kernel and BASIC images in %s\n", dir);
         return TEST_SKIP_CODE;
+    }
+    if (guest_mhz() == 2u) {
+        if (test_2mhz()) return 1;
+        TEST_DONE();
     }
     if (test_round_trip()) return 1;
     if (test_headerless()) return 1;

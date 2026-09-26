@@ -25,14 +25,24 @@
 #define SETTINGS_TAPE_DIR "/atom/tapes"
 #define SETTINGS_DISC_DIR "/atom/discs"
 
+/* The utility socket's default file, in /atom/roms/ (§11.1, §13.1). */
+#define SETTINGS_UTILITY "utility.rom"
+
 typedef struct {
-    /* The guest (§7.2): RAM at #4000-#7FFF, AtomDOS. */
+    /* The guest (§7.2): RAM at #4000-#7FFF, AtomDOS, the clock (§12.1). */
     atom_config_t machine;
+
+    /* The utility socket at #A000 (§13.1): a file in /atom/roms/, or ""
+     * for none, which the file writes as `none`. The default is
+     * SETTINGS_UTILITY, and a card without it leaves the socket empty
+     * with nothing said. */
+    char     utility[ATOM_PATH_MAX];
 
     bool     mono;          /* the Display page's screen (§8.7)          */
     bool     border;        /* and its border                            */
     bool     dark_bg;       /* text on dark green or orange, not black   */
     bool     status;        /* the status line in the bottom rows (§8.2) */
+    bool     perf;          /* the perf line in the top rows (§13.1)     */
     unsigned volume;        /* 0-8, as the menu shows it                 */
     unsigned backlight;     /* 1-15, as the menu shows it; 0 leaves the
                                southbridge's own level alone             */
@@ -69,9 +79,10 @@ settings_status_t settings_parse(settings_t *s, const char *text, size_t len,
 const char *settings_status_str(settings_status_t st);
 
 /* The menu's settings written into the file's text (§11.6): screen,
- * border, background, status, backlight, volume, keys, tape, drive0 and
- * drive1. A backlight of 0 is left as the file has it. The text is
- * edited, not regenerated:
+ * border, background, status, perf, backlight, volume, keys, tape,
+ * drive0 and drive1, and the Machine page's upper_ram, dos, clock and
+ * utility (§13.1). turbo is the file's alone. A backlight of 0 is left
+ * as the file has it. The text is edited, not regenerated:
  *
  *   - a key the file already gives keeps its line, its place, its
  *     indentation and its comment; only the value changes, and not even

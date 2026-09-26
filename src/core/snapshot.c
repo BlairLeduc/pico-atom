@@ -55,12 +55,17 @@ enum {
 
 _Static_assert(S_END <= SNAP_STATE_LEN, "the state section has outgrown its length");
 
-/* The configuration bits that change what the address space is. */
+/* The configuration bits that change what the address space is, and
+ * bit 7 for the 2 MHz clock (§12.1). Zero there is 1 MHz, so every file
+ * from before M12 loads as 1 MHz. */
+#define CFG_2MHZ 0x80u
+
 static uint8_t cfg_bits(const atom_config_t *c) {
     return (uint8_t)((c->block_zero ? 0x01u : 0) | (c->text_space ? 0x02u : 0) |
                      (c->video ? 0x04u : 0) | (c->video_aperture ? 0x08u : 0) |
                      (c->via_fitted ? 0x10u : 0) | (c->atomdos ? 0x20u : 0) |
-                     (c->upper_ram ? 0x40u : 0));
+                     (c->upper_ram ? 0x40u : 0) |
+                     (atom_clock_mhz(c) == 2u ? CFG_2MHZ : 0));
 }
 
 /* Every ROM page, with its page number, so the same images in different
@@ -200,7 +205,10 @@ static snap_status_t read_header(snap_read_fn read, void *ctx, uint32_t *crc) {
 
 /* Would this state resume on this machine? */
 static snap_status_t compatible(const atom_t *m, const uint8_t st[SNAP_STATE_LEN]) {
-    if (st[S_CFG] != cfg_bits(&m->cfg)) return SNAP_OTHER_MACHINE;
+    uint8_t want = cfg_bits(&m->cfg);
+    if ((st[S_CFG] ^ want) & (uint8_t)~CFG_2MHZ) return SNAP_OTHER_MACHINE;
+    /* Every count in the file is in the other clock's cycles. */
+    if (st[S_CFG] != want) return SNAP_OTHER_CLOCK;
     if (get16(st + S_FIELD_HZ) != ATOM_FIELD_HZ) return SNAP_OTHER_MACHINE;
     uint8_t roms[SHA1_DIGEST_LEN];
     rom_hash(m, roms);
@@ -338,6 +346,7 @@ const char *snapshot_status_str(snap_status_t st) {
     case SNAP_NEWER:         return "FROM A NEWER VERSION";
     case SNAP_CORRUPT:       return "DAMAGED (CRC)";
     case SNAP_OTHER_MACHINE: return "OTHER MACHINE CONFIG";
+    case SNAP_OTHER_CLOCK:   return "TAKEN AT THE OTHER CLOCK";
     case SNAP_OTHER_ROMS:    return "OTHER ROMS";
     case SNAP_BUSY:          return "TAPE OR DISC BUSY";
     }

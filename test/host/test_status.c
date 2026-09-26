@@ -111,5 +111,56 @@ int main(void) {
     atom_status(&m, &st);
     CHECK(st.heads == 2u, "drive 1's head is loaded: %u", st.heads);
 
+    /* ---- the perf line (§13.1) ---------------------------------------- */
+    {
+        perf_line_t p = { .busy1000 = 431, .head100 = 231, .present_us = 11500,
+                          .dropped = 0, .underruns = 0, .late = 0 };
+        status_perf_format(&p, line);
+        CHECK(strlen(line) == ATOM_STATUS_COLS, "the perf line fills the width");
+        CHECK(strcmp(trimmed(), "C0 43% 2.31X  LCD 11.5MS  DROP 0  UR 0 0") == 0,
+              "§13.1's example: '%s'", trimmed());
+
+        /* At 2 MHz the guest may take most of core 0 (§12.1), and a blip
+         * in the audio shows until the next boot. */
+        p = (perf_line_t){ .busy1000 = 868, .head100 = 115, .present_us = 16749,
+                           .dropped = 3, .underruns = 611, .late = 2 };
+        status_perf_format(&p, line);
+        CHECK(strcmp(trimmed(), "C0 87% 1.15X LCD 16.7MS DROP 3 UR 611 2") == 0,
+              "a busy second closes up to fit: '%s'", trimmed());
+
+        /* Figures past their width are clamped, and the line never
+         * spills. */
+        p = (perf_line_t){ .busy1000 = 5000, .head100 = 0xFFFFFFFFu, .present_us = 0xFFFFFFFFu,
+                           .dropped = 0xFFFFFFFFu, .underruns = 0xFFFFFFFFu,
+                           .late = 0xFFFFFFFFu };
+        status_perf_format(&p, line);
+        CHECK(strlen(line) == ATOM_STATUS_COLS && strncmp(line, "C0 100% 999.99X", 15) == 0,
+              "clamped: '%s'", line);
+    }
+
+    /* ---- PAUSED -------------------------------------------------------- */
+    status_paused_format(line);
+    CHECK(strlen(line) == ATOM_STATUS_COLS && strncmp(trimmed(), "PAUSED", 6) == 0,
+          "the paused line: '%s'", trimmed());
+
+    /* ---- a UEF at 2 MHz (§12.1) -------------------------------------- */
+    {
+        static atom_t fast;
+        atom_config_t cfg;
+        atom_config_default(&cfg);
+        cfg.clock_mhz = 2;
+        atom_init(&fast, &cfg);
+        atom_cassette_insert(&fast, img, 12);
+        atom_cassette_play(&fast, true);
+        atom_status(&fast, &st);
+        CHECK(!fast.cas.playing && st.deck == STATUS_DECK_NEEDS_1MHZ,
+              "at 2 MHz the deck does not play, and says so: %u", st.deck);
+        fmt(&st, "/atom/tapes/cchuck.uef", "", "");
+        CHECK(strcmp(trimmed(), "NEEDS 1 MHZ CCHUCK") == 0, "'%s'", trimmed());
+        atom_cassette_insert(&fast, img, 12);
+        atom_status(&fast, &st);
+        CHECK(st.deck == STATUS_DECK_STOP, "a new insertion forgets it: %u", st.deck);
+    }
+
     TEST_DONE();
 }

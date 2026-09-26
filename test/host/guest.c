@@ -45,6 +45,11 @@ bool guest_find_roms(const char **dir) {
     return have[ROM_KERNEL] && have[ROM_BASIC];
 }
 
+unsigned guest_mhz(void) {
+    const char *e = getenv("PICO_ATOM_TEST_MHZ");
+    return e && e[0] == '2' ? 2u : 1u;
+}
+
 bool guest_have_rom(rom_slot_t s) {
     return s >= 0 && s < ROM_SLOT_COUNT && have[s];
 }
@@ -63,8 +68,13 @@ void guest_fields(guest_t *g, int n) {
 }
 
 void guest_boot(guest_t *g) {
+    guest_boot_at(g, guest_mhz());
+}
+
+void guest_boot_at(guest_t *g, unsigned mhz) {
     atom_config_t cfg;
     atom_config_default(&cfg);
+    cfg.clock_mhz = (uint8_t)mhz;
     atom_init(&g->m, &cfg);
     keymatrix_init(&g->k);
     for (int s = 0; s < ROM_SLOT_COUNT; s++) {
@@ -104,7 +114,7 @@ void guest_type(guest_t *g, const char *s) {
          * PicoCalc user waits to see characters appear. */
         while (g->k.q_len + g->k.n_open + 8u > ATOM_KEY_EVENT_QUEUE) guest_fields(g, 1);
         uint8_t c = (uint8_t)*s;
-        bool shifted = strchr("!\"#$%&'()=<+*>?", c) != NULL;
+        bool shifted = strchr("!\"#$%&'()=<+*>?|{}~", c) != NULL;
         if (c >= 'A' && c <= 'Z') c = (uint8_t)(c + 32);   /* unshifted = capitals */
         if (c == '\n') c = 0x0Au;
         if (!shifted) { guest_tap(g, c); continue; }

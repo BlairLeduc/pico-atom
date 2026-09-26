@@ -42,6 +42,10 @@
 #define ATOM_STATUS_COLS       40u
 #define ATOM_STATUS_Y         306u
 
+/* §13.1's perf line: the same 40 cells, in the top band's outer 16
+ * rows, opposite the status line, which the border never fills either. */
+#define ATOM_PERF_Y             2u
+
 #define ATOM_SNAPSHOT_COUNT     3u  /* §4.2: three, and the third is the point */
 #define ATOM_BAND_ROWS          8u  /* 24 bands over 192 rows (§8.4)      */
 #define ATOM_BAND_COUNT     (ATOM_SCREEN_H / ATOM_BAND_ROWS)
@@ -61,6 +65,13 @@
 /* ---- Timing (design.md §12.1) ---------------------------------------- */
 
 #define ATOM_CPU_HZ       1000000u  /* stock 1 MHz; turbo is a multiplier */
+
+/* The guest's clock in MHz, atom_config_t.clock_mhz (§12.1): 1, or an
+ * owner's 2 MHz. What is fixed in wall time — the field, the beeper's
+ * sample period, port C bit 4's reference, a UEF's half-cycles and the
+ * 8271's timing — is these 1 MHz values times the clock, worked out
+ * once in atom_init. 4 MHz is not offered: core 0 has not the room. */
+#define ATOM_CLOCK_MHZ_MAX      2u
 
 /* 60 Hz on every Atom, UK machines included (§16, confirmed): the
  * MC6847 is an NTSC part, and software times itself on it — BASIC's
@@ -140,11 +151,13 @@
 #define ATOM_ATM_NAME_LEN      16u
 #define ATOM_PATH_MAX         128u
 #define ATOM_TAPE_LIST_MAX     48u  /* tape files the menu lists (§13)     */
+#define ATOM_ROM_LIST_MAX      16u  /* utility ROMs the menu lists (§13.1) */
 
 /* Port C bit 4, the 2.4 kHz reference the MOS times each recorded bit
- * against (#FCD8), in guest cycles per period. §16, medium: 4 MHz / 1664
- * is 2403.8 Hz, which MAME's Atom driver also uses; the ROM reads the
- * tape by its own loop timing, so only saving depends on it. */
+ * against (#FCD8), in guest cycles per period at 1 MHz; it comes from
+ * the crystal, so a 2 MHz guest sees twice as many (§12.1). §16, medium:
+ * 4 MHz / 1664 is 2403.8 Hz, which MAME's Atom driver also uses; the ROM
+ * reads the tape by its own loop timing, so only saving depends on it. */
 #define ATOM_CASSETTE_REF_CYCLES 416u
 
 /* The largest UEF image the deck holds, decompressed (§11.3). The
@@ -165,11 +178,12 @@
 #define ATOM_DISC_TRACKS_MAX    80u
 #define ATOM_FDC_BUF_LEN   (ATOM_DISC_SECTORS * ATOM_DISC_SECTOR_LEN)
 
-/* Guest cycles, at 1 MHz. FM at 125 kbit/s is a byte every 64 us: the
- * DOS's NMI handler (#E87B) takes 52 cycles a byte, so it keeps up. A
- * 300 rpm revolution is 200 ms, a tenth of it per sector. Stepping and
- * settling are not taken from SPECIFY's parameters, whose units are
- * unconfirmed; nothing the DOS does depends on them. */
+/* Guest cycles, at 1 MHz; times the clock at 2 (§12.1). FM at
+ * 125 kbit/s is a byte every 64 us: the DOS's NMI handler (#E87B) takes
+ * 52 cycles a byte, so it keeps up. A 300 rpm revolution is 200 ms, a
+ * tenth of it per sector. Stepping and settling are not taken from
+ * SPECIFY's parameters, whose units are unconfirmed; nothing the DOS
+ * does depends on them. */
 #define ATOM_FDC_BYTE_CYCLES     64u
 #define ATOM_FDC_SECTOR_CYCLES 20000u
 #define ATOM_FDC_STEP_CYCLES    6000u

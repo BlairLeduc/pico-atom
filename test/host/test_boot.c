@@ -127,6 +127,15 @@ int main(void) {
      * prompt follows on the same row. */
     CHECK(strcmp(row_text(3), "       4>") == 0, "answer: '%s'", row_text(3));
 
+    /* ---- BASIC's OR is '|', SHIFT+\ on the Atom (§10.3) -------------- *
+     * #C1DC's operators are - + | : then * / % ! ? &, so ':' is EOR. */
+    restore();
+    type("PRINT 5|3\n");
+    CHECK(strcmp(row_text(3), "       7>") == 0, "PRINT 5|3: '%s'", row_text(3));
+    restore();
+    type("PRINT 6:3\n");
+    CHECK(strcmp(row_text(3), "       5>") == 0, "PRINT 6:3: '%s'", row_text(3));
+
     /* And a program, which exercises the floating-point ROM if present. */
     restore();
     type("10 FOR I=1 TO 3;P.I*I;N.\n20 END\nRUN\n");
@@ -250,6 +259,10 @@ int main(void) {
         chord(PICOCALC_KEY_ALT, 'M');
         CHECK(g.k.menu_request, "Alt+M should request the menu");
         CHECK(strcmp(row_text(2), ">") == 0, "Alt+M reached the guest: '%s'", row_text(2));
+        restore();
+        chord(PICOCALC_KEY_ALT, 'P');
+        CHECK(g.k.pause_request, "Alt+P should request a pause");
+        CHECK(strcmp(row_text(2), ">") == 0, "Alt+P reached the guest: '%s'", row_text(2));
     }
 
     /* ---- game keymaps (§10.5) ----------------------------------------- *
@@ -353,14 +366,17 @@ int main(void) {
      * CTRL-G reaches the kernel's bell at #FD18, which toggles PC2 through
      * the 8255's BSR path: STA #B003 (4), DEX/BNE over X = 0, so 256 turns
      * (5 x 256 - 1), EOR (2), INY (2), BPL (3). That is 1290 cycles a half
-     * period, 387.6 Hz, and Y runs from 5 to 128, so 123 half periods. */
+     * period, 387.6 Hz, and Y runs from 5 to 128, so 123 half periods. At
+     * 2 MHz the same cycles pass in half the time: an octave up, 775.2 Hz
+     * (§12.1). T is the sample period in guest cycles. */
     {
+        const unsigned mhz = guest_mhz();
         restore();
         audio_n = 0;
         chord(PICOCALC_KEY_CTRL, 'g');
         fields(30);
 
-        const double T = 2048.0 / 75.0;
+        const double T = 2048.0 * mhz / 75.0;
         double first = -1, last = -1;
         unsigned rising = 0;
         size_t lit_first = 0, lit_last = 0;
@@ -375,11 +391,11 @@ int main(void) {
                 rising++;
             }
         }
-        double hz = rising > 1 ? (rising - 1) * 1e6 / (last - first) : 0;
-        double want = 1e6 / 2580.0;
-        double ms = (double)(lit_last - lit_first) * T / 1000.0;
-        printf("bell: %.2f Hz over %.1f ms, %u cycles; the loop counts %.2f Hz over %.1f ms\n",
-               hz, ms, rising, want, 122 * 1290 / 1000.0);
+        double hz = rising > 1 ? (rising - 1) * 1e6 * mhz / (last - first) : 0;
+        double want = 1e6 * mhz / 2580.0;
+        double ms = (double)(lit_last - lit_first) * T / (1000.0 * mhz);
+        printf("bell: %.2f Hz over %.1f ms, %u cycles; the loop counts %.2f Hz over %.1f ms "
+               "at %u MHz\n", hz, ms, rising, want, 122 * 1290 / (1000.0 * mhz), mhz);
         CHECK(rising >= 60 && rising <= 62, "the bell should be ~61 cycles, got %u", rising);
         CHECK(fabs(hz - want) / want < 1e-3, "the bell at %.2f Hz, expected %.2f Hz", hz, want);
         CHECK(strcmp(row_text(2), ">") == 0, "CTRL-G should not print: '%s'", row_text(2));

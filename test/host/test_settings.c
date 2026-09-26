@@ -26,6 +26,8 @@ int main(void) {
         CHECK(d.mono && d.border && !d.dark_bg && d.status && d.volume == 8u &&
               d.backlight == 0u && d.turbo, "host defaults");
         CHECK(!d.keys[0] && !d.tape[0] && !d.drive[0][0] && !d.drive[1][0], "nothing inserted");
+        CHECK(atom_clock_mhz(&d.machine) == 1u && !d.perf && strcmp(d.utility, "utility.rom") == 0,
+              "1 MHz, no perf line, utility.rom in the socket (§13.1)");
     }
 
     /* ---- an empty file, and one of comments, change nothing ----------- */
@@ -50,7 +52,10 @@ int main(void) {
             "drive0    = games1.dsk\r\n"
             "drive1    = /atom/discs/My Disc.ssd\r\n"
             "upper_ram = off\r\n"
-            "dos       = off\r\n";
+            "dos       = off\r\n"
+            "clock     = 2\r\n"
+            "utility   = AXR1.ROM\r\n"
+            "perf      = on\r\n";
         CHECK(parse(&s, all, &line) == SET_OK && line == 0, "every setting: line %u", line);
         CHECK(!s.mono && !s.border && s.dark_bg && !s.status && s.backlight == 12u &&
               s.volume == 0u && !s.turbo, "host");
@@ -60,7 +65,11 @@ int main(void) {
         CHECK(strcmp(s.drive[1], "/atom/discs/My Disc.ssd") == 0, "drive1: %s", s.drive[1]);
         CHECK(!s.machine.upper_ram && !s.machine.atomdos, "machine");
         CHECK(s.machine.via_fitted && s.machine.text_space, "the rest of the machine kept");
+        CHECK(s.machine.clock_mhz == 2u && strcmp(s.utility, "AXR1.ROM") == 0 && s.perf,
+              "clock %u, utility %s, perf", s.machine.clock_mhz, s.utility);
     }
+    CHECK(parse(&s, "utility = None\n", &line) == SET_OK && !s.utility[0], "an empty socket");
+    CHECK(parse(&s, "clock = 1\n", &line) == SET_OK && s.machine.clock_mhz == 1u, "1 MHz"); 
     CHECK(parse(&s, "screen = mono\nkeys = Standard\n", &line) == SET_OK, "mono, standard");
     CHECK(s.mono && !s.keys[0], "mono, standard");
     CHECK(parse(&s, "screen = color\n", &line) == SET_OK && !s.mono, "American colour");
@@ -94,6 +103,12 @@ int main(void) {
             { "backlight = 0\n",      SET_BAD_VALUE },
             { "backlight = 16\n",     SET_BAD_VALUE },
             { "field_hz = 60\n",     SET_UNKNOWN },   /* a constant (§16) */
+            { "clock = 4\n",          SET_BAD_VALUE },  /* not offered (§12.1) */
+            { "clock = 0\n",          SET_BAD_VALUE },
+            { "clock = 1MHz\n",       SET_BAD_VALUE },
+            { "utility = /atom/roms/axr1.rom\n", SET_BAD_VALUE },   /* a name, in /atom/roms/ */
+            { "utility =\n",          SET_SYNTAX },
+            { "perf = yes\n",         SET_BAD_VALUE },
             { "keys = A NAME LONGER THAN 16\n", SET_TOO_LONG },
         };
         for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
@@ -239,6 +254,31 @@ int main(void) {
               strstr(out, "tape      = A-MUCH-LONGER-NAME.uef # a file"),
               "a value too long for the column pushes its comment one space on:\n%.*s",
               (int)out_len, out);
+    }
+
+    /* The Machine page's keys and the perf line (§13.1): written as the
+     * others are, in the order the README lists them; turbo is the
+     * file's alone and never written. */
+    {
+        settings_default(&s);
+        s.machine.upper_ram = false;
+        s.machine.atomdos = false;
+        s.machine.clock_mhz = 2u;
+        strcpy(s.utility, "AXR1.ROM");
+        s.perf = true;
+        s.turbo = false;
+        CHECK(REWRITE("", &s) == SET_OK &&
+              IS("upper_ram = off\ndos = off\nclock = 2\nutility = AXR1.ROM\nperf = on\n"),
+              "the machine appended: %.*s", (int)out_len, out);
+        CHECK(REWRITE("utility = axr1.rom # the socket\nclock = 2\n", &s) == SET_OK &&
+              IS("utility = axr1.rom # the socket\nclock = 2\nupper_ram = off\ndos = off\n"
+                 "perf = on\n"),
+              "a name in either case is left as written: %.*s", (int)out_len, out);
+        s.utility[0] = 0;
+        s.machine.clock_mhz = 1u;
+        CHECK(REWRITE("utility = axr1.rom\nclock = 2\n", &s) == SET_OK &&
+              strncmp(out, "utility = none\nclock = 1\n", 25) == 0,
+              "an empty socket is none, and the clock goes back: %.*s", (int)out_len, out);
     }
 
     /* The backlight: left alone at 0, which is the southbridge's own. */

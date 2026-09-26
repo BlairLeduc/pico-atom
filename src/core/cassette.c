@@ -9,12 +9,26 @@
 
 void cassette_init(cassette_t *c) {
     memset(c, 0, sizeof *c);
+    cassette_set_clock(c, 1u);
+}
+
+void cassette_set_clock(cassette_t *c, unsigned mhz) {
+    c->cpu_hz = ATOM_CPU_HZ * mhz;
+    c->ref = ATOM_CASSETTE_REF_CYCLES * mhz;
+}
+
+/* Empty the deck, keeping what belongs to the machine: its clock, and
+ * the reference, which runs whatever the deck holds. */
+static void empty(cassette_t *c) {
+    uint32_t hz_ref = c->hz_ref, cpu_hz = c->cpu_hz, ref = c->ref;
+    memset(c, 0, sizeof *c);
+    c->hz_ref = hz_ref;
+    c->cpu_hz = cpu_hz;
+    c->ref = ref;
 }
 
 bool cassette_insert(cassette_t *c, const uint8_t *img, size_t len) {
-    uint32_t ref = c->hz_ref;
-    cassette_init(c);
-    c->hz_ref = ref;           /* the reference runs whatever the deck holds */
+    empty(c);
     if (!uef_open(&c->uef, img, len)) return false;
     c->loaded = true;
     return true;
@@ -28,10 +42,8 @@ bool cassette_insert_rw(cassette_t *c, uint8_t *img, size_t len, size_t cap) {
 }
 
 void cassette_eject(cassette_t *c) {
-    uint32_t ref = c->hz_ref;
     bool level = c->level;
-    cassette_init(c);
-    c->hz_ref = ref;
+    empty(c);
     c->level = level;
 }
 
@@ -48,7 +60,7 @@ static void schedule(cassette_t *c) {
     }
     uint32_t den = 4u * c->uef.base_hz;
     if (c->acc >= den) c->acc = 0;          /* the base frequency changed */
-    uint64_t num = (uint64_t)units * ATOM_CPU_HZ + c->acc;
+    uint64_t num = (uint64_t)units * c->cpu_hz + c->acc;
     c->edge += num / den;
     c->acc = (uint32_t)(num % den);
     c->edge_toggles = edge;
@@ -105,7 +117,7 @@ void cassette_retime(cassette_t *c, uint64_t from, uint64_t to) {
     /* The reference's base is always a multiple of its period, so its
      * phase is the cycle count's alone; a restored machine reads bit 4
      * as the original did. */
-    c->hz_ref = (uint32_t)(to - to % ATOM_CASSETTE_REF_CYCLES);
+    c->hz_ref = (uint32_t)(to - to % c->ref);
     c->ref_next = (uint32_t)to;     /* the next read recomputes bit 4 */
 }
 
@@ -122,13 +134,13 @@ bool ATOM_HOT1(cassette_input)(cassette_t *c, uint64_t now) {
  * 2^32 cycles apart. */
 bool ATOM_HOT1(cassette_ref_2400)(cassette_t *c, uint64_t now) {
     uint32_t d = (uint32_t)now - c->hz_ref;
-    if (d >= ATOM_CASSETTE_REF_CYCLES) {
-        uint32_t r = d % ATOM_CASSETTE_REF_CYCLES;
+    if (d >= c->ref) {
+        uint32_t r = d % c->ref;
         c->hz_ref += d - r;
         d = r;
     }
-    bool high = d < ATOM_CASSETTE_REF_CYCLES / 2u;
-    c->ref_next = c->hz_ref + (high ? ATOM_CASSETTE_REF_CYCLES / 2u : ATOM_CASSETTE_REF_CYCLES);
+    bool high = d < c->ref / 2u;
+    c->ref_next = c->hz_ref + (high ? c->ref / 2u : c->ref);
     return high;
 }
 
@@ -139,16 +151,17 @@ unsigned cassette_percent(const cassette_t *c) {
 
 /* ---- the recorder (§11.3) ------------------------------------------------ */
 
-#define REF  ATOM_CASSETTE_REF_CYCLES
-#define HALF (ATOM_CASSETTE_REF_CYCLES / 2u)
+/* The reference's period and half, in this clock's cycles. */
+#define REF  (c->ref)
+#define HALF (c->ref / 2u)
 
-/* A half-cycle by its length: 2400 Hz is HALF, 208 cycles, and 1200 Hz
- * REF, 416. The boundary between them is halfway; anything shorter
- * than half a short one, or longer than a long one and a quarter, is
- * no signal at all. */
+/* A half-cycle by its length: 2400 Hz is HALF, 208 cycles at 1 MHz, and
+ * 1200 Hz REF, 416. The boundary between them is halfway; anything
+ * shorter than half a short one, or longer than a long one and a
+ * quarter, is no signal at all. */
 enum { H_SHORT, H_LONG, H_GAP };
 
-static unsigned half_kind(uint64_t d) {
+static unsigned half_kind(const cassette_t *c, uint64_t d) {
     if (d < REF * 3u / 8u || d >= REF * 5u / 4u) return H_GAP;
     return d < REF * 3u / 4u ? H_SHORT : H_LONG;
 }
@@ -162,7 +175,7 @@ static unsigned half_kind(uint64_t d) {
 
 /* The line at cycle t: bit 0, or the reference while bit 1 gates it.
  * The reference's phase is the cycle count's alone (cassette_retime). */
-static bool rec_line(uint8_t out, uint64_t t) {
+static bool rec_line(const cassette_t *c, uint8_t out, uint64_t t) {
     if (!(out & 0x01u)) return false;
     if (!(out & 0x02u)) return true;
     return t % REF < HALF;
@@ -274,7 +287,7 @@ static void rec_half(cassette_t *c, unsigned k, uint64_t d) {
     case H_GAP:
         if (r->tone) put_tone(c);
         r->data_at = 0;
-        r->gap += (uint32_t)(d * 2400u / ATOM_CPU_HZ);
+        r->gap += (uint32_t)(d * 2400u / c->cpu_hz);
         break;
     default:
         /* A start bit's first half-cycle. */
@@ -314,7 +327,7 @@ static void rec_shorts(cassette_t *c, uint64_t n) {
 static void rec_edge(cassette_t *c, uint64_t t) {
     uint64_t d = t - c->rec.last_edge;
     c->rec.last_edge = t;
-    rec_half(c, half_kind(d), d);
+    rec_half(c, half_kind(c, d), d);
 }
 
 /* The line from rec.at up to `to` under rec.out. An edge is where the
@@ -326,7 +339,7 @@ static void rec_advance(cassette_t *c, uint64_t to) {
     if (to <= r->at) return;
     if (r->full) { r->at = to; return; }
     uint64_t a = r->at;
-    bool l = rec_line(r->out, a);
+    bool l = rec_line(c, r->out, a);
     if (l != r->level) rec_edge(c, a);
     if ((r->out & 0x03u) == 0x03u) {
         uint64_t f = (a / HALF + 1u) * HALF;
@@ -338,7 +351,7 @@ static void rec_advance(cassette_t *c, uint64_t to) {
                 r->last_edge = f + n * HALF;
             }
         }
-        l = rec_line(r->out, to - 1u);
+        l = rec_line(c, r->out, to - 1u);
     }
     r->level = l;
     r->at = to;
@@ -357,7 +370,7 @@ static void rec_stop(cassette_t *c, uint64_t now) {
         if (r->framing) r->errors++;
         r->framing = false;
         /* The silence since the last edge, which no edge closes. */
-        if ((r->out & 0x03u) != 0x03u && half_kind(now - r->last_edge) == H_GAP)
+        if ((r->out & 0x03u) != 0x03u && half_kind(c, now - r->last_edge) == H_GAP)
             rec_half(c, H_GAP, now - r->last_edge);
         if (r->tone) put_tone(c);
         if (r->gap) put_gap(c);
@@ -392,7 +405,7 @@ cas_rec_status_t cassette_record(cassette_t *c, uint64_t now, bool on, uint8_t o
     r->out = out_c & 0x03u;
     r->at = now;
     r->last_edge = now;
-    r->level = rec_line(r->out, now);
+    r->level = rec_line(c, r->out, now);
     return CAS_REC_OK;
 }
 

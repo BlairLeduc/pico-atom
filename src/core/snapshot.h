@@ -47,6 +47,7 @@ typedef enum {
     SNAP_NEWER,           /* a version this build does not know         */
     SNAP_CORRUPT,         /* the CRC does not match                     */
     SNAP_OTHER_MACHINE,   /* RAM populated differently, or another rate */
+    SNAP_OTHER_CLOCK,     /* the same machine at the other clock (§12.1) */
     SNAP_OTHER_ROMS,      /* the ROMs fitted are not the ones it ran on */
     SNAP_BUSY,            /* a tape call, or the FDC mid-command        */
 } snap_status_t;

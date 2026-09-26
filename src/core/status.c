@@ -17,6 +17,7 @@ void atom_status(const atom_t *m, atom_status_t *st) {
         else if (c->refused == CAS_REC_PROTECTED) st->deck = STATUS_DECK_PROTECTED;
         else if (c->refused == CAS_REC_FULL) st->deck = STATUS_DECK_FULL;
         else if (c->playing) st->deck = STATUS_DECK_PLAY;
+        else if (c->needs_1mhz) st->deck = STATUS_DECK_NEEDS_1MHZ;
         else if (c->ended) st->deck = c->rec.full ? STATUS_DECK_FULL : STATUS_DECK_END;
         else st->deck = STATUS_DECK_STOP;
         st->percent = (uint8_t)(c->rec.on ? cassette_room_percent(c) : cassette_percent(c));
@@ -54,6 +55,7 @@ static const char *deck_word(uint8_t deck) {
     case STATUS_DECK_REC:       return "REC";
     case STATUS_DECK_FULL:      return "FULL";
     case STATUS_DECK_PROTECTED: return "PROTECTED";
+    case STATUS_DECK_NEEDS_1MHZ: return "NEEDS 1 MHZ";
     }
     return "";
 }
@@ -105,4 +107,41 @@ void status_format(const atom_status_t *st, const char *tape,
         put(out, &at, tail);
     }
     if (rn && rn <= W) memcpy(out + W - rn, right, rn);
+}
+
+/* ---- the perf line and PAUSED (§13.1) ---------------------------------- */
+
+static unsigned clamp(uint32_t v, unsigned max) {
+    return v > max ? max : (unsigned)v;
+}
+
+void status_perf_format(const perf_line_t *p, char out[ATOM_STATUS_COLS + 1]) {
+    enum { W = ATOM_STATUS_COLS };
+    unsigned pct = clamp((p->busy1000 + 5u) / 10u, 100u);
+    unsigned head = clamp(p->head100, 999u * 100u + 99u);
+    unsigned ms10 = clamp((p->present_us + 50u) / 100u, 9999u);
+    /* Two spaces between the groups while they fit, one when the counts
+     * have grown, so the last figure is never the one that goes. */
+    char text[64];
+    int n = 0;
+    for (unsigned gap = 2; gap >= 1; gap--) {
+        const char *sp = gap == 2 ? "  " : " ";
+        n = snprintf(text, sizeof text, "C0 %u%% %u.%02uX%sLCD %u.%uMS%sDROP %u%sUR %u %u",
+                     pct, head / 100u, head % 100u, sp, ms10 / 10u, ms10 % 10u, sp,
+                     clamp(p->dropped, 999u), sp, clamp(p->underruns, 99999u),
+                     clamp(p->late, 9999u));
+        if (n >= 0 && (size_t)n <= W) break;
+    }
+    size_t len = n < 0 ? 0u : (size_t)n < W ? (size_t)n : W;
+    memset(out, ' ', W);
+    memcpy(out, text, len);
+    out[W] = 0;
+}
+
+void status_paused_format(char out[ATOM_STATUS_COLS + 1]) {
+    enum { W = ATOM_STATUS_COLS };
+    static const char text[] = "PAUSED: ANY KEY RESUMES";
+    memset(out, ' ', W);
+    memcpy(out, text, sizeof text - 1u);
+    out[W] = 0;
 }
