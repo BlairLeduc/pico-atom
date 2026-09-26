@@ -17,6 +17,7 @@ void settings_default(settings_t *s) {
     s->volume    = 8u;
     s->backlight = 0u;
     s->turbo     = true;
+    memcpy(s->utility, SETTINGS_UTILITY, sizeof SETTINGS_UTILITY);
 }
 
 /* strcasecmp is POSIX, not C11. */
@@ -73,6 +74,21 @@ static settings_status_t background(settings_t *s, const char *v) {
     return SET_OK;
 }
 
+/* 1 or 2 MHz (§12.1). */
+static settings_status_t guest_clock(settings_t *s, const char *v) {
+    unsigned mhz;
+    if (number(v, 1u, ATOM_CLOCK_MHZ_MAX, &mhz) != SET_OK) return SET_BAD_VALUE;
+    s->machine.clock_mhz = (uint8_t)mhz;
+    return SET_OK;
+}
+
+/* A file in /atom/roms/, by name, or none (§13.1). */
+static settings_status_t utility(settings_t *s, const char *v) {
+    if (same_name(v, "none")) { s->utility[0] = 0; return SET_OK; }
+    if (strchr(v, '/')) return SET_BAD_VALUE;
+    return path(v, s->utility);
+}
+
 static settings_status_t keys(settings_t *s, const char *v) {
     if (!*v) return SET_BAD_VALUE;
     if (same_name(v, "standard")) { s->keys[0] = 0; return SET_OK; }
@@ -86,12 +102,12 @@ static settings_status_t keys(settings_t *s, const char *v) {
  * Only the tape and the drives may be left empty, meaning none. */
 enum {
     K_SCREEN, K_BORDER, K_BACKGROUND, K_STATUS, K_BACKLIGHT, K_VOLUME, K_KEYS, K_TAPE,
-    K_TURBO, K_DRIVE0, K_DRIVE1, K_UPPER_RAM, K_DOS, K_COUNT
+    K_TURBO, K_DRIVE0, K_DRIVE1, K_UPPER_RAM, K_DOS, K_CLOCK, K_UTILITY, K_PERF, K_COUNT
 };
 
 static const char *const k_names[K_COUNT] = {
     "screen", "border", "background", "status", "backlight", "volume", "keys", "tape",
-    "turbo", "drive0", "drive1", "upper_ram", "dos",
+    "turbo", "drive0", "drive1", "upper_ram", "dos", "clock", "utility", "perf",
 };
 
 static settings_status_t apply(settings_t *s, unsigned k, const char *v) {
@@ -110,6 +126,9 @@ static settings_status_t apply(settings_t *s, unsigned k, const char *v) {
     case K_DRIVE1:    return path(v, s->drive[1]);
     case K_UPPER_RAM: return on_off(v, &s->machine.upper_ram);
     case K_DOS:       return on_off(v, &s->machine.atomdos);
+    case K_CLOCK:     return guest_clock(s, v);
+    case K_UTILITY:   return utility(s, v);
+    case K_PERF:      return on_off(v, &s->perf);
     }
     return SET_UNKNOWN;
 }
@@ -203,12 +222,7 @@ const char *settings_status_str(settings_status_t st) {
 /* ---- saving the menu's settings (§11.6) ----------------------------------- */
 
 static bool saved_key(unsigned k) {
-    switch (k) {
-    case K_SCREEN: case K_BORDER: case K_BACKGROUND: case K_STATUS: case K_BACKLIGHT:
-    case K_VOLUME: case K_KEYS: case K_TAPE: case K_DRIVE0: case K_DRIVE1:
-        return true;
-    }
-    return false;
+    return k != K_TURBO;
 }
 
 /* A bare name is in `dir`; FAT's names are the same in either case. */
@@ -242,6 +256,11 @@ static bool key_equal(unsigned k, const settings_t *a, const settings_t *b) {
     case K_TAPE:       return same_path(SETTINGS_TAPE_DIR, a->tape, b->tape);
     case K_DRIVE0:     return same_path(SETTINGS_DISC_DIR, a->drive[0], b->drive[0]);
     case K_DRIVE1:     return same_path(SETTINGS_DISC_DIR, a->drive[1], b->drive[1]);
+    case K_UPPER_RAM:  return a->machine.upper_ram == b->machine.upper_ram;
+    case K_DOS:        return a->machine.atomdos == b->machine.atomdos;
+    case K_CLOCK:      return atom_clock_mhz(&a->machine) == atom_clock_mhz(&b->machine);
+    case K_UTILITY:    return same_name(a->utility, b->utility);
+    case K_PERF:       return a->perf == b->perf;
     }
     return true;
 }
@@ -265,6 +284,11 @@ static const char *value_of(unsigned k, const settings_t *s, char num[4]) {
     case K_TAPE:       return s->tape;
     case K_DRIVE0:     return s->drive[0];
     case K_DRIVE1:     return s->drive[1];
+    case K_UPPER_RAM:  return s->machine.upper_ram ? "on" : "off";
+    case K_DOS:        return s->machine.atomdos ? "on" : "off";
+    case K_CLOCK:      return atom_clock_mhz(&s->machine) == 2u ? "2" : "1";
+    case K_UTILITY:    return s->utility[0] ? s->utility : "none";
+    case K_PERF:       return s->perf ? "on" : "off";
     }
     return "";
 }

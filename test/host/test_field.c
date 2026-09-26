@@ -39,7 +39,7 @@ static const uint8_t poll_fs[] = {
  * #1011  INC #72                 frame drawn
  * #1013  LDA #B002 ; BPL #1013   wait for FS high
  * #1018  JMP #1000 */
-static const uint8_t redraw[] = {
+static uint8_t redraw[] = {
     0xAD, 0x02, 0xB0,  0x30, 0xFB,
     0xE6, 0x70,
     0xA0, 0x03,
@@ -54,6 +54,7 @@ static const uint8_t redraw[] = {
 static atom_t *load(const uint8_t *code, unsigned len) {
     atom_config_t cfg;
     atom_config_default(&cfg);
+    cfg.clock_mhz = (uint8_t)test_mhz();
     atom_init(&g_machine, &cfg);
     for (unsigned i = 0; i < len; i++)
         bus_write(&g_machine, (uint16_t)(0x1000u + i), code[i]);
@@ -65,6 +66,15 @@ static atom_t *machine(void) { return load(poll_fs, sizeof poll_fs); }
 
 int main(void) {
     const unsigned fields = 100;
+    /* The field is the VDG's, fixed in wall time: at 2 MHz it is twice
+     * the cycles, and the guest must still see FS low once in each
+     * (§12.1). */
+    const unsigned mhz = test_mhz();
+    const uint32_t per_field = ATOM_CPU_HZ * mhz / ATOM_FIELD_HZ;
+    printf("clock: %u MHz, %u cycles a field\n", mhz, (unsigned)per_field);
+    /* The redraw takes as long in wall time at either clock, so it still
+     * runs past FS's rise into the blank lines. */
+    redraw[8] = (uint8_t)(3u * mhz);
 
     /* ---- the real loop: FS is observed low once per field ------------ */
     {
@@ -85,7 +95,9 @@ int main(void) {
     /* ---- debt carries across both halves and across fields ----------- */
     {
         atom_t *m = machine();
-        uint64_t want = (uint64_t)fields * ATOM_CYCLES_PER_FIELD;
+        CHECK(atom_cycles_per_field(m) == per_field, "a field is %u cycles at %u MHz, not %u",
+              (unsigned)per_field, mhz, (unsigned)atom_cycles_per_field(m));
+        uint64_t want = (uint64_t)fields * per_field;
         uint64_t start = m->cpu.cycles;   /* the reset sequence counts too */
         uint64_t ran = 0;
         for (unsigned f = 0; f < fields; f++) ran += atom_run_field(m);
@@ -105,7 +117,7 @@ int main(void) {
     {
         atom_t *m = machine();
         for (unsigned f = 0; f < fields; f++) {
-            m->budget += (int32_t)ATOM_CYCLES_PER_FIELD;
+            m->budget += (int32_t)per_field;
             if (m->budget > 0) m->budget -= (int32_t)atom_run(m, (uint32_t)m->budget);
             atom_field_sync(m, true);
             atom_field_sync(m, false);
@@ -154,10 +166,10 @@ int main(void) {
         atom_t *m = load(redraw, sizeof redraw);
         unsigned torn = 0;
         for (unsigned f = 0; f < fields; f++) {
-            m->budget += (int32_t)(ATOM_CYCLES_PER_FIELD - 999u);
+            m->budget += (int32_t)(per_field - 999u * mhz);
             if (m->budget > 0) m->budget -= (int32_t)atom_run(m, (uint32_t)m->budget);
             atom_field_sync(m, true);
-            m->budget += 999;
+            m->budget += (int32_t)(999u * mhz);
             if (m->budget > 0) m->budget -= (int32_t)atom_run(m, (uint32_t)m->budget);
             atom_field_sync(m, false);
             if (m->ram[0x72] != m->ram[0x70]) torn++;
@@ -167,6 +179,15 @@ int main(void) {
     }
 
     /* ---- the parts are §12.1's line counts --------------------------- */
+    {
+        /* At 2 MHz, §12.1's figures: FS low for 4,071, then 4,834. */
+        atom_t *m = machine();
+        uint32_t fs = mhz == 2u ? 4071u : 2035u, blank = mhz == 2u ? 4834u : 2417u;
+        CHECK(m->field_fs_low == fs && m->field_blank == blank &&
+              m->field_active == per_field - fs - blank,
+              "at %u MHz FS is low for %u and the blank is %u, got %u and %u", mhz, fs,
+              blank, (unsigned)m->field_fs_low, (unsigned)m->field_blank);
+    }
     CHECK(ATOM_BLANK_LINES == 38u, "38 lines of blank and top border, got %u",
           (unsigned)ATOM_BLANK_LINES);
     CHECK(ATOM_ACTIVE_CYCLES == 12214u && ATOM_FS_LOW_CYCLES == 2035u &&

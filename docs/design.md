@@ -7,7 +7,7 @@ Companion document: [`hardware-notes.md`](hardware-notes.md). Section references
 of the form §4.7 point there unless stated otherwise; that document is the
 authority on the host, this one on the guest and on the shape of the code.
 
-**Status:** M0–M10 are built and verified on a Pimoroni Plus 2 W (§17).
+**Status:** M0–M12 are built and verified on a Pimoroni Plus 2 W (§17).
 The document began as a design written before any code, and much of it still
 reads that way. Where a section has been built, it says so and gives the
 measured figures, which replace the arithmetic estimates the design started
@@ -62,7 +62,8 @@ settled.
 ### Non-goals (for v1)
 
 - Cycle-exact video bus contention between the 6502 and the MC6847 ("Atom snow",
-  §8.6). Planned as an option, off by default; not built.
+  §8.6). It was once planned as an option and is dropped.
+- A scaled display. The Atom's 256×192 is drawn 1:1 (§8.2).
 - Analogue-accurate cassette audio, UHF artefact colour, or composite blur.
 - Second-processor, Econet, colour-board or other third-party expansions.
 - Wi-Fi. The radio costs SRAM (§2.6) and buys the Atom nothing. Leave GP0–GP1
@@ -257,7 +258,9 @@ only other free SPI divider point, it needs `VREG_VOLTAGE_1_20` raised before
 the PLL and lowered after, and it is outside the RP2350 datasheet. Its purpose
 is a 2–4 MHz "turbo Atom" mode, not the stock machine. If it is ever enabled,
 every derived clock in the hardware notes' §3 checklist must be recomputed: SPI
-baud and the PWM audio carrier are the two this project uses.
+baud and the PWM audio carrier are the two this project uses. M12's 2 MHz
+guest (§12.1) runs at the stock 150 MHz. A 4 MHz guest would
+need this build, and M12 does not offer one.
 
 ### 3.3 Peripheral assignment
 
@@ -438,6 +441,14 @@ buffer `settings_rewrite()` returns its text in, the recorder's state in
 `g_atom` (72,952 to 73,016 bytes), and the status line's six bytes in each
 of the three snapshots (`g_pool`, 18,492). A recording adds nothing, since it
 goes into the UEF deck.
+
+M12 added 1,336 bytes to `.bss`, measured on 2026-09-26 against the M11
+tree built with the same toolchain, which comes to 233,012 bytes, not the
+figure above: 234,348. The utility ROM list (`s_utils`, 576), the ROM report
+with each slot's SHA-1 (`g_roms`, 148), the utility's name in the settings
+(`g_file`, +128), the machine's clock and field parts (`g_atom`, +40), the
+board for the About page (36), the perf line's words (24), and the restart's
+messages.
 
 The MC6847 character ROM is `const` and stays in flash. The largest items that
 are not the machine are the UEF deck and buffers that sit idle once the guest
@@ -629,6 +640,30 @@ workload is within 1 %, scroll the most at +0.8 %, inside the ~2 % spread of
 hardware notes §9.1. M11 and the hookless build were each run twice and read
 within 0.1 both times; a second run of the tree before M11 was lost to the
 Debug Probe dropping off USB. The control read 36,620 Hz in every row.
+
+**At M12** the four workloads were run in one sitting on a Plus 2 W on
+2026-09-26: the M11 tree as the control, M12 with the perf line off and on
+(§13.1), and M12 at 2 MHz (§12.1). The overrides `PICO_ATOM_BOOT_CLOCK` and
+`PICO_ATOM_BOOT_PERF` set the clock and the line over the settings file.
+Host cycles per instruction, and at 2 MHz the share of core 0 and the
+headroom, which is times real time:
+
+| Workload | M11 | M12 | M12, perf line on | M12 at 2 MHz | 2 MHz: core 0 | 2 MHz: headroom |
+|---|---:|---:|---:|---:|---:|---:|
+| idle | 205.9 | 206.6 | 206.6 | 203.3 | 86.1 % | 1.16× |
+| compute | 163.0 | 164.1 | 164.1 | 160.7 | 62.8 % | 1.58× |
+| scroll | 224.6 | 224.8 | 224.8 | 221.2 | 84.3 % | 1.18× |
+| bell | 147.0 | 146.9 | 146.9 | 144.6 | 76.8 % | 1.30× |
+
+M12 is within 0.7 % of M11 on every workload, compute the most, inside the
+~2 % spread: the clock's fields and bit 4's divide by a field cost nothing
+measurable. The perf line costs core 0 nothing, since core 1 draws it, and
+core 1's longest present did not move (11,622 µs off, 11,623 µs on), with no
+snapshot dropped. At 2 MHz every workload ran with zero underruns, zero late
+refills, zero dropped snapshots and zero I²C errors, at 1,999,300–2,000,700
+guest cycles a second. The queue's low water was 385–513 samples, the same
+as at 1 MHz. Idle is the heaviest, at 86 % of core 0, at the top of §12.1's
+estimate of 63–87 %. The control read 36,620–36,621 Hz in every row.
 
 ### 6.4 Interrupts and reset
 
@@ -846,9 +881,10 @@ so they cost nothing per field — the point of hardware notes §4.7's "cost is 
 pixel, not per present". As built, the top band is never drawn after
 `lcd_init`, and the status band holds M11's status line (below). With the border on (§8.7)
 their 48 rows nearest the rectangle are the border's. A nearest-neighbour
-320×240 at (0,40) was planned as an option and has not been built; it would be
-56 % more pixels on the wire for a 1.25× stretch with visibly uneven pixel
-doubling.
+320×240 at (0,40) was planned as an option and is dropped: it would put 56 %
+more pixels on the wire for a 1.25× stretch, with visibly uneven pixel
+doubling. M12's perf line (§13.1) goes in the top band's outer 16 rows,
+opposite the status line, drawn by the same code (`display_perf`).
 
 **The status line, built at M11.** The status band is one line of text: 40
 cells of the character ROM's 8×12, in the panel's bottom 16 rows, the cells
@@ -1014,8 +1050,10 @@ milliseconds here.
 On real hardware the 6502 and the VDG contend for video RAM, so CPU writes
 during active display produce visible interference; Atom programs wait for the
 `FS` flag in port C bit 7 to avoid it. The emulator models `FS` correctly, so
-well-behaved software behaves. Reproducing the *interference* is a v3 option
-(`--snow`), off by default: it is authentic, and it is also ugly and slow.
+well-behaved software behaves. **Reproducing the interference is dropped.** It
+was planned as an option, off by default. It is authentic, but it is also ugly,
+and it would need a per-cycle beam position that the band renderer
+(§8.3) does not have.
 
 ### 8.7 Monochrome and the border
 
@@ -1290,6 +1328,7 @@ chosen because the Atom has no Alt key, so nothing is stolen from the guest:
 | `LOCK` | `Alt`+`L` | |
 | `@` `[` `\` `]` `^` | direct where present, `Alt` layer otherwise | confirm against the installed keymap |
 | Emulator menu | `Alt`+`M` | §13 |
+| Pause | `Alt`+`P` | §13.1, built at M12; `KM_PAUSE`, which asks for the park as `KM_MENU` does |
 
 **`Shift` on its own is the Atom's `SHIFT` line.** Games read port B bit 7 by
 itself (Hard Hat Harry jumps on it), so the host's `Shift` asserts the line
@@ -1297,6 +1336,20 @@ while it is down, whatever else is held. The one exception is a character from
 the standard map that the MCU sent shifted and the Atom types unshifted, such as
 `:`: while that key is down, `SHIFT` stays up. A layout's cell (§10.5) takes the
 host's `Shift` as it finds it, as it does `CTRL`.
+
+**The shifted `@` `[` `\` `]` `^`, added at M12.** The MCU
+sends `Shift`+`\` as `|`, and until M12 the map had no entry for `|`, so
+nothing was typed. Atom BASIC needs it: `|` (`#7C`) is its OR. The operator table at
+`#C1DC` reads `- + | :` and then `* / % ! ? &`, so `:` is EOR and `&` is
+AND. On the Atom, `|` is `SHIFT`+`\`, and the VDG shows it as an inverse
+`\`. M12 maps the characters the MCU sends, by what they are, onto the
+Atom's shifted cells: `|` to `SHIFT`+`\`, `{` and `}` to `SHIFT`+`[` and
+`]`, `` ` `` to `SHIFT`+`@`, and `~` to `SHIFT`+`^`. This was checked
+against the real MOS on 2026-09-26, before it was written here. With those
+five entries added, `test_boot`'s sweep of every printing entry passed, and
+`PRINT 5|3` typed through the MOS answered 7 (`PRINT 6:3` answered 5). The
+entries were then taken out again, for M12 to add, and M12 put them back:
+`test_boot` holds both answers, at 1 MHz and at 2.
 
 Three constraints from hardware notes §6.3 bind this table and must be checked
 before it is written:
@@ -1943,7 +1996,11 @@ mounted (§13), so no new handoff is needed.
 **What is written:** the keys the menu sets. These are `screen`, `border`,
 `background`, `status`, `backlight`, `volume`, `keys`, `tape`, `drive0` and
 `drive1`. `upper_ram`, `dos` and `turbo` have no menu item, so their lines
-are left as the user wrote them. The tape is saved by name, not position: at
+are left as the user wrote them. M12 added `perf`, and the Machine page's
+`upper_ram`, `dos`, `clock` and `utility` (§13.1). The machine's keys are
+saved as it is running, not as the page has them staged. `turbo` stays the
+file's alone. A utility ROM is compared by name without regard to case, as
+FAT does. The tape is saved by name, not position: at
 the next boot it goes in stopped, at its start, as §11.7 says. A tape or
 disc in `/atom/tapes/` or `/atom/discs/` is written as a bare name, anything
 else as a path (`settings_card_name()`). A layout chosen by a tape's load
@@ -2026,6 +2083,9 @@ still hold a `#`:
 | `drive0`, `drive1` | a disc image in the drive at boot (§11.4) | none |
 | `upper_ram` | `on`, `off`: RAM at `#4000`–`#7FFF` (§7.2) | `on` |
 | `dos` | `on`, `off`: the 8271 at `#0A00` (§11.4) | `on` |
+| `clock` | `1`, `2`: the guest's MHz (§12.1) | `1` |
+| `utility` | a file name in `/atom/roms/` for the socket at `#A000`, or `none` (§13.1); a path is refused | `utility.rom` |
+| `perf` | `on`, `off`: the perf line (§13.1) | `off` |
 
 A bare file name is looked for in `/atom/tapes/` or `/atom/discs/`, and a path
 from the root is taken as it stands. The VIA, the tape trap and the deck's cues
@@ -2125,6 +2185,62 @@ Within a slice, the audio integrator emits a sample every 27.31 guest cycles via
 a fixed-point accumulator, so audio and CPU share one clock by construction and
 cannot drift apart.
 
+**A 2 MHz guest, built at M12.** An Atom's 6502 ran at 1 MHz; running
+it at 2 MHz was an owner's modification. The Machine page (§13.1) offers
+1 or 2 MHz, as `atom_config_t.clock_mhz` and the settings file's `clock`
+(§11.7). 4 MHz is not offered. §6.3 measures headroom at 2.31–3.15×, so
+4 MHz would need 1.3–1.7× more than core 0 has. Only an overclock could
+supply that, which §18 lists as a risk. The rule for what changes is what
+drives each part on the real machine:
+
+| Follows the 6502's clock (the same count in guest cycles, so faster in wall time) | Fixed in wall time (twice as many guest cycles) |
+|---|---|
+| the 6522's timers and shift register, which count Φ2 (§7.4): an AGD game's 25 Hz frame clock runs at 50 Hz | the field: 33,333 cycles, `FS` low for 4,071, then 4,834 before the next active line; BASIC's `WAIT` is still 1/60 s |
+| software timing loops: the MOS's bell (`#FD18`) sounds an octave up, about 775 Hz | the beeper's sample period, 54.62 cycles (§9.3) |
+| | port C bit 4's 2.4 kHz reference, 832 cycles, which comes from the crystal and not from Φ2 (§16) |
+| | a UEF's half-cycles on port C bit 5, and the recorder's thresholds (§11.3) |
+| | the 8271's byte, sector, step and settle times (§11.4) |
+
+The quantities in the second column are worked out from the clock once in
+`atom_init` and kept where they are used. The field's parts are
+`atom_t.field_active`, `field_fs_low` and `field_blank`, recomputed from
+`cpu_hz / 60` with `config.h`'s formula rather than doubled, so they are
+33,333, 4,071 and 4,834 at 2 MHz and exactly the constants at 1. The beeper
+is given `atom_t.cpu_hz`, and its period was already a field. The cassette
+keeps `cpu_hz` and the reference's period in `cassette_t`, and the 8271 its
+`mhz`, which every one of its times is multiplied by. `ATOM_CPU_HZ` stays the
+base clock. The only per-instruction cost is bit 4's divide, which is now by
+a field, not a constant. It is on the port C read path, so it is to be
+measured against a control, as the port C hook was at M8 (§6.3).
+
+The clock changes only through the Machine page's restart (§13.1), never
+under a running program. Every in-flight count is kept in guest cycles: the
+beeper's phase, the deck's position, the FDC's next event and the field
+split. Converting all of them at a field boundary is a larger change, for
+nothing a user would notice. A snapshot records the clock in bit 7 of its
+configuration byte, which is free. Zero means 1 MHz, so every older file
+loads as 1 MHz. A file taken at the other clock is refused as another
+machine (§11.5), and the status row names the clock.
+
+**Two things to settle by execution.** Both go into §16.
+
+- *Does the MOS read a tape at signal level at 2 MHz?* **No, and it writes
+  one.** `test_cassette_2mhz` settled it on 2026-09-26. The ROM's `SAVE` at
+  2 MHz frames every byte, because it times each bit against port C bit 4,
+  which keeps wall time. A 1 MHz machine then loads the recording, and so
+  does one recorded through the core's recorder at 2 MHz. The ROM's reader
+  times the tape with its own loops. At 2 MHz it reads nothing: played past
+  the refusal, the whole tape runs by and no byte of the program arrives.
+  So the deck plays a UEF only at 1 MHz. At 2 MHz `atom_cassette_play`
+  refuses, the menu's *Play* says `TAPE NEEDS 1 MHZ`, and the status line
+  says `NEEDS 1 MHZ` once a `PLAY TAPE` cue or *Play* has been refused.
+  Recording works at either clock. The phase-1 trap (§11.2) does not care
+  about the clock, and `test_tape` passes at 2 MHz.
+- *What is left at 2 MHz?* Headroom at 1 MHz is 2.31–3.15× (§6.3), so at
+  2 MHz core 0 would spend an estimated 63–87 % of its time in the guest. Turbo
+  under a tape, 2.7–2.8× at 1 MHz, would be about 1.4×. M12 is not done until the four perf workloads run at 2 MHz with
+  zero underruns and zero late refills, and the figures go into §6.3. They did on 2026-09-26: idle, the heaviest, took 86 % of core 0.
+
 ### 12.2 Throttling
 
 The emulator runs faster than real time (§6.3), so it must be paced. **Pace on
@@ -2173,7 +2289,7 @@ the image's size against the deck's room, and whether the card has it yet.
 | Counter | Why | As built |
 |---|---|---|
 | Real-time ratio (guest s / wall s) | the headline number; paced, so it reads 1.000 whatever the code costs | `heartbeat` line, `rt` |
-| Core 0 in the guest, headroom | what the code costs: the share of wall time inside `atom_run_field`, and guest cycles per microsecond of it (§6.3) | `perf` line |
+| Core 0 in the guest, headroom | what the code costs: the share of wall time inside `atom_run_field`, and guest cycles per microsecond of it over the clock in MHz, so times real time at either clock (§6.3) | `perf` line, which from M12 also names the clock and counts guest cycles a second; on the panel, §13.1's perf line |
 | Host cycles per guest instruction | §6.3's figure; `atom_t.instructions` counts the guest's side | `perf` line |
 | Present ms, dirty bands, dirty pixels | §8.4's budget, verified | last and max present time; bands and pixels only in the M3 measurement build |
 | Presents, full presents, dropped snapshots | is core 1 keeping up? (§8.4) | `heartbeat` line |
@@ -2245,20 +2361,25 @@ settings file (§11.7), and the menu's status row names the file's first problem
 | Keys | the game keymap in force: standard, a built-in layout, or one from the card (§10.5) |
 | Disc | attach/detach drive 0/1 (phase 3) |
 | Snapshot | save, load, delete |
-| Machine | RAM population, ROM set, VIA/AtomDOS present, guest clock (1/2/4 MHz) |
-| Display | native 256×192 vs scaled 320×240, colour set override, snow |
-| System | backlight, volume, perf overlay, board and ROM identification, about |
+| Machine | RAM below the screen (16 or 32 KiB), guest clock (1 or 2 MHz), AtomDOS, the utility ROM; applied by a restart (§13.1) |
+| Display | colour or mono, border, background, status line, perf line (§13.1), backlight |
+| About | firmware, board, ROM identification by SHA-1, the settings file's state (§13.1) |
+
+Volume, Reset and *Save settings* are on the main page. Pause is a key,
+`Alt`+`P`, and not a menu item (§13.1).
 
 Of that table, as built: Tape (without a position control, since recording
 only appends), Keys, Disc and Snapshot are there; Display has colour or mono,
-the border, the background, the status line and the backlight; volume, Reset
-and *Save settings* are on the main page. The Machine page, the scaled
-display, snow, the perf overlay and the about page are not built. The
-machine's configuration is set by the settings file instead (§11.7).
+the border, the background, the status line, the perf line and the
+backlight. The Machine page, the perf line, the About page and Pause are
+M12's (§13.1). A scaled display, snow and a colour set override were in this
+table and are dropped (§8.2, §8.6). The guest's `CSS` bit, port C bit 3,
+alone chooses the colour set (§2.3). A System page is dropped too: its
+backlight moved to Display at M10, and its volume is on the main page.
 
 The backlight is southbridge register `0x05`, stepped to multiples of 16 and
 clamped to 16–240, so a fade is 15 steps and not 256 (hardware notes §4.11).
-Dimming on pause would cost one I²C transaction; it is not built.
+Pause dims it (§13.1).
 
 The menu was first designed as an overlay drawn into the top and status bands.
 As built it replaces the Atom's screen instead: the menu's page goes to the
@@ -2270,6 +2391,188 @@ mode — so there is nothing there to copy back. Instead closing the menu calls
 `display_invalidate()`, and the presenter redraws the guest's next snapshot
 whole, one 11.5 ms present. That is almost no new code, and the same forced
 redraw is what the M3 measurement uses.
+
+### 13.1 M12: the Machine page, the About page, the perf line and Pause
+
+**Built, and checked on the host; the board's checks are to come (§17).**
+This finishes the menu §13's table describes. The main page gains
+*Machine…* and *About…*, which makes eleven items. As first designed they
+went on rows 2–12, with the tape line on 13 and the drives on 14, but row 14
+is the status row. So as built the items start on row 1, under the title,
+and run to row 11, with the tape line on row 12 and the drives on row 13.
+
+**The Machine page.** Four settings, and the action that applies them:
+
+```
+ RAM             < 32K >        upper_ram: #0000-#7FFF, or #0000-#3FFF
+ CLOCK           < 1 MHZ >      clock: 1 or 2 (§12.1)
+ ATOMDOS         < ON >         dos: the 8271 at #0A00 and dosrom.rom (§11.4)
+ UTILITY ROM     < AXR1.ROM >   utility: #A000, a file or NONE
+ (APPLY AND RESTART)
+
+ 6522 VIA: FITTED, THE MOS NEEDS IT
+```
+
+Left and right stage a value. A row whose staged value differs from the
+running machine is marked `*`. **Nothing changes until *Apply and restart*.**
+Leaving the page with staged changes discards them, and the status row says
+`NOT APPLIED`. Each setting changes the machine under any program in it:
+RAM changes the page table, AtomDOS changes a ROM and eight bytes of page
+`#0A`, the utility ROM changes the ROM hash, and the clock changes every
+count kept in guest cycles (§12.1). On a real Atom, changing any of them
+meant switching off and taking the lid off. So the restart is a power-on,
+and the status row warns that it loses the program in memory: `APPLY
+RESTARTS: PROGRAM LOST` once anything is staged, and the page says so
+under the VIA's line.
+
+The VIA is shown and cannot be changed. The MOS spins before its first
+prompt without it (§7.3), so a machine without one is a dead machine, and
+§11.7 already leaves it out of the settings. The video aperture at
+`#9800` (§7.2) is not offered. Nothing uses it, and a stock machine does not
+have it. An unexpanded Atom's RAM needs finer blocks than `atom_config_t`
+has, and is not offered either.
+
+*The utility ROM* is chosen from `/atom/roms/*.rom`, leaving out the four
+names §11.1 fixes, sorted, plus `NONE`. The list is capped at
+`ATOM_ROM_LIST_MAX` (16) in `config.h`. The setting's default is
+`utility.rom`, so a card set up for M11 behaves the same: when the default
+file is missing, the socket is empty, as now, and nothing is reported. A file
+the settings name that is missing is reported, as the first problem on the
+status row.
+
+*Apply and restart* is the boot's own path. The boot's configuration step
+becomes a single function in `main.c`, `machine_power_on()`, that both boot
+and the menu call. Core 0 is already parked while the menu is open, so core
+1 may write the machine then, as it does at boot (§4.2). The steps:
+
+1. **The ROMs are checked before the machine is touched**, in two passes,
+   as a snapshot is loaded (§11.5). Each file the new configuration needs
+   is read and hashed. A required one missing, or one of the wrong size,
+   refuses the restart (`AKERNEL.ROM MISSING: NOT RESTARTED`) and leaves the
+   machine running as it was. The card may have been changed while the
+   menu was open.
+2. `atom_init` with the new `atom_config_t`, `roms_load`, and
+   `atom_seed_rnd` from `get_rand_64()` (§7.2).
+3. The tape goes back in the deck, stopped at its start, and the discs
+   back in their drives, as at boot (§11.7). The layout in force stays.
+
+The restart is refused while the deck is recording (`STOP RECORDING
+FIRST`), because the recording is not on the card until it stops (§11.3).
+As built it is also refused while a stopped recording has not reached the
+card (`RECORDING NOT ON THE CARD YET`), since step 3 reads the tape back
+from the card. *Save settings* then writes what the machine is running
+(§11.6).
+
+As built, `machine_power_on(cfg, utility, restart)` is the function. The
+boot calls it with `restart` false, since at boot there is no machine to
+keep: a missing ROM is the no-ROMs page (§11.1), as before. The menu calls
+it through `menu_settings_t.restart`. The first pass is `roms_check()` in
+`roms.c`. The card is mounted for the whole of it. Seeding RND and the reset
+after the kernel moved from core 0's start into this function, so a restart
+gets them too, and it sets the beeper's rate once audio is up. Core 0 sees a
+restart as a bump of `g_power_ons` when it comes back from the park, and
+starts the counters it keeps against the guest's clock again.
+
+**The About page.** Read-only, so that a bug report can be copied off it:
+
+```
+ PICO-ATOM <GIT DESCRIBE>
+ BOARD PIMORONI_PICO_PLUS2_W_RP2
+ RP2350 <REV>  150 MHZ  SB <VER>
+ MACHINE 32K 1 MHZ DOS VIA
+
+ #F000 AKERNEL.ROM  OK  2621F27D
+ #C000 ABASIC.ROM   OK  A8EA19F1
+ #D000 AFLOAT.ROM   OK  EBCDE5B3
+ #E000 DOSROM.ROM   OK  71EA0A4B
+ #A000 AXR1.ROM     ANY <SHA-1>
+
+ SETTINGS OK
+```
+
+The version is `git describe --always --dirty`, generated into
+`pico_atom_version.h` at build time by `cmake/version.cmake`, which a target
+runs on every build and which rewrites the header only when the text
+changes. It is not taken at configure time, because a configure-time value
+goes stale on the next commit. The startup banner prints it too. The board
+line is `board_info_t`'s SDK board name, cut to fit the page's 32 columns. The southbridge's `VER` is read when the page
+opens. Each ROM slot shows its file, its state and the first eight hex
+digits of its SHA-1. `OK` means the image §11.1 records, `??` a loaded
+image that is not it, `ANY` the utility socket, which takes any image,
+`OFF` a slot whose hardware is not fitted, and `--` nothing loaded. The
+hashes come from `roms_report_t`, which gains the digest of each slot
+(100 bytes), is kept by `main.c` from boot, and is renewed by each restart.
+The last line is the settings file's first problem, or `OK`.
+
+**The perf line.** One line of the heartbeat's figures (§12.3), on the
+panel, off by default. The setting is `perf` (§11.7) and a row on the
+Display page. It uses the top band's outer 16 rows, opposite the status
+line: 40 cells of 8×12 at y = 2–13 (`ATOM_PERF_Y`). The border never fills
+those rows (§8.7).
+
+```
+C0 43% 2.31X  LCD 11.5MS  DROP 0  UR 0 0
+```
+
+The fields are:
+
+- the share of core 0 spent in the guest, and the headroom, both over the
+  last second (§6.3);
+- the longest present in that second (§8.4);
+- the snapshots dropped in that second;
+- underrun samples and late refills since boot (§9.4). Both should read 0
+  for ever, so a count since boot keeps a single blip on show.
+
+With every count at 0 the line is exactly 40 characters. As built, when the
+counts grow the gaps close to one space, so that the last figure is not the
+one that falls off, and a figure past its width is shown at its widest
+(`test_status`). The headroom is over the clock, so it is times real time at
+2 MHz as at 1.
+
+These are host counters, not guest state, so they do not go in the display
+snapshot's `atom_status_t`. Core 0 already accumulates them for the
+heartbeat. Once a second it closes a window and writes a `perf_line_t` of
+32-bit words, each single-copy atomic, as core 1's counters already are for
+the heartbeat (`main.c`). A read that straddles a write can mix two seconds,
+which shows for a second and is harmless. Core 1 has its own figures, the
+present time and the drops. `status_perf_format()` in `status.c` makes the
+text, so `test_status` holds it. Core 1 formats it once a second, at the end
+of its own second, and `display_perf()` draws it only when the text
+changes: 3,840 pixels, under 1 ms of wire (§8.4). It is blanked while the
+menu is open, and comes back within a second of it closing.
+
+The line is for watching, and the heartbeat is for measuring. A number to
+keep still goes to a file (hardware notes §9.1). The line's own cost is measured: the four
+workloads with it on and off in one sitting must agree within the ~2 %
+spread. It is also how the 2 MHz margin (§12.1) is watched on the panel.
+
+**Pause.** `Alt`+`P` (§10.3). Keymatrix sets `pause_request` the way `KM_MENU`
+sets `menu_request`. Core 0 parks at a field boundary with a new handoff,
+`HANDOFF_PAUSE`, and feeds the PCM queue silence, as it does for the menu.
+Everything counted in guest cycles stops with it: the deck, the FDC, the
+VIA and the beeper. Core 1 does not mount the card or draw a page. The
+Atom's last frame stays on the panel, and the status line reads `PAUSED`,
+drawn by core 1 whether or not the line is on.
+
+- **The backlight dims.** Core 1 reads register `0x05` and writes the
+  lowest step, 16. That is one I²C read and one write (hardware notes
+  §4.11), and no write at all if the level is already 16. On resume it
+  writes back the level it read. The read matters because the level may
+  be the southbridge's own, not one the settings or the menu set (§11.7).
+  The keyboard's backlight is left alone.
+- **Any key resumes**, and neither its press nor its release reaches the
+  guest. Core 0 starts its held-key set afresh, as after the menu.
+  `Alt`+`M` while paused goes straight to the menu, with the backlight
+  restored first. As built a modifier alone resumes nothing, so that
+  `Alt`+`M` can be had, and neither does a `P` while `Alt` is down, which
+  is the chord's own auto-repeat. The line reads `PAUSED: ANY KEY
+  RESUMES` (`status_paused_format()`).
+- Core 1 polls the southbridge at 30 Hz, as the menu does, which also keeps
+  the MCU's 2.5 s bus watchdog fed (hardware notes §6.1). It waits with
+  `busy_wait_us_32`, never `sleep_us` (hardware notes §9.7).
+- Resuming needs no catch-up. The queue was fed silence at the pace it
+  drains, so pacing picks up where it left off, and the guest's clock
+  never saw the gap.
 
 ---
 
@@ -2459,6 +2762,8 @@ class of bug in emulation.
 | The dark green and dark orange behind alphanumeric text (§8.7) | MC6847 datasheet, Display Modes (p. 18), for the colours; nothing yet for their level | **low** for the level: the datasheet names the colours and gives no voltage, and figure 10 shows only the border. A quarter of the ink is a guess, to be judged against a real Atom or a photograph of one. In mono they are black: black's Y with chroma the mono machine does not have. `VDG_DARK_GREEN`, `VDG_DARK_ORANGE` |
 | 6522 shift rate under Φ2 (§7.4) | Rockwell R6522 datasheet, figure 23 (SR mode 2) | **high**: a bit every two cycles, 16 for a byte, as b-em shifts. The figure draws CB1's shift clock low for one Φ2 cycle and high for the next, eight pulses after the SR access; the text's "each Φ2 clock pulse" means those CB1 pulses. Nothing on the Atom uses these modes |
 | MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |
+| What a 2 MHz Atom kept in wall time (§12.1) | Atom circuit diagram: which parts take Φ2 and which the crystal | **medium**: the VIA on Φ2; the VDG, the 2.4 kHz reference and the 8271 on their own clocks. A 2 MHz Atom was an owner's modification, so there is no single machine to check against |
+| Whether the MOS reads a signal-level tape at 2 MHz (§12.1) | the kernel ROM, executed: `test_cassette` at 2 MHz | **confirmed**, 2026-09-26: it cannot. The ROM's `SAVE` at 2 MHz frames every byte and a 1 MHz machine loads it; played to the ROM at 2 MHz the same tape loads nothing. The deck plays only at 1 MHz and records at either (`atom_cassette_play`) |
 
 The last one was settled the way this section asks. The table is XRoar's
 `src/mc6847/font-6847.c`, byte for byte (`THIRD-PARTY.md`); the full 64-glyph
@@ -2501,6 +2806,8 @@ Each milestone ends with something that runs and something that is measured.
 | **M10** | The whole 6522 (§7.4); monochrome and the VDG border (§8.7) | every VIA mode driven through its pins on the host, and the new state through a snapshot; the mono palette and the border colour asserted by execution; on a Plus 2 W, both settings switched from the menu and seen on the panel, and the perf workloads measured against M9 — **done** 2026-09-23 on a Plus 2 W: both settings switched from the menu and seen on the panel; the perf workloads 3.6–6.2 % faster than M9, after the first build measured 2.5–4 % slower (§6.3) |
 | **M11** | Recording at signal level (§11.3); the status line (§8.2); the menu's settings saved to the settings file (§11.6) | on the host, the ROM's own `SAVE` recorded by the core's recorder onto a new tape, a second file appended, both loaded back by name through the ROM's `LOAD`, and the core's output matching `test_cassette`'s independent decoder; a protected tape refused and left unchanged; `settings_rewrite` keeps comments, trailing comments, unparsed lines and line endings, refuses a duplicate key, and its output parses back to the settings it was given. On a Plus 2 W: a BASIC program `SAVE`d onto a new tape, loaded back by `LOAD` after a power cycle, and the `.uef` loaded in another Atom emulator; the status line seen on the panel through a tape load and a disc access, with the border on and off; a setting changed and saved from the menu, the machine powered up with it, and the file read on a computer with the user's comments intact; the recorder's hook measured against an M10 control with `perf-run.sh` — **done** 2026-09-26, but for the `.uef` in another emulator, which could not be got working. On the host every check passes, `SAVE ""` loading back by `LOAD ""` and a full tape too. On a Plus 2 W: a new tape made from the menu (`TAPE01.UEF`), a BASIC program `SAVE`d onto it, and after a power cycle `LOAD`ed and `RUN`; a read-only tape refusing to record; the status line showing a UEF's `PLAY`, `STOP` and position and `D0 …` after a disc access, gone at once on BREAK, with the border on and off and in colour and mono; settings saved from the menu with `TAPE01.UEF` in the deck, back after a power cycle, and the file read on a computer with its comments intact (a value put into an empty line landed in the comment column, fixed after, §11.6); the recorder's hook costing nothing measurable against a build without it, and M11 within 1 % of the tree before it (§6.3) |
 
+| **M12** | The rest of the menu (§13.1): the Machine page, and a 2 MHz guest clock (§12.1); the About page; the perf line; Pause with the backlight dimmed. BASIC's OR, `|`, and the other shifted `@` `[` `\` `]` `^`, typable (§10.3) | **done** 2026-09-26. On a Plus 2 W on 2026-09-26: the four perf workloads at 2 MHz with zero underruns and zero late refills, written into §6.3; the perf line on and off at 1 MHz and M12 against M11, all within 0.7 %; BASIC's OR typed over the UART, `IF 5|3=7 P.$7` ringing the bell once and `IF 5|3=6` not. Checked by hand on the board the same day: each Machine setting changed, applied and seen from the guest, with a restart refused while recording, and the machine saved from the menu and back after a power cycle; the About page's hashes read against §11.1; Pause dimming the panel and silencing the guest, the resuming key not typed, the backlight restored, a playing tape stopping and carrying on, and `Alt`+`M` from a pause; the perf line on from the Display page. Then about ten minutes paused: the heartbeat across it read rt 0.008 for five guest seconds, about 625 s of wall time, with zero I²C errors before and after and zero underruns and late refills. On the host, all done on 2026-09-26, 31 CTest runs passing: `test_field`, `test_audio`, `test_i8271`, `test_boot`, `test_disc`, `test_tape`, `test_snapshot` and `test_cassette` each run again at 2 MHz as `_2mhz` (`PICO_ATOM_TEST_MHZ=2`). The bell measures 775.41 Hz against 775.19 Hz from its loop. `test_cassette_2mhz` answered §16: the ROM writes a tape at 2 MHz and cannot read one, so the deck plays only at 1 MHz. Asked for: `test_boot`'s sweep types `|`, `{`, `}`, `` ` `` and `~` through the MOS, and `PRINT 5|3` answers 7. `test_field`, `test_audio`, `test_i8271` and `test_boot` pass at 2 MHz as at 1. At 2 MHz, `FS` is seen and escaped once per 33,333-cycle field. The MOS bell is measured at the pitch its loop's cycle count gives at 2 MHz. `*CAT` and `*LOAD` work at 2 MHz. `test_cassette` at 2 MHz settles §16's tape question, and the deck does what the answer requires. `test_snapshot` refuses a file taken at the other clock and leaves the machine unchanged, and loads a pre-M12 file as 1 MHz. `test_settings` reads and rewrites `clock`, `utility`, `perf`, `upper_ram` and `dos`. `test_status` formats the perf line and `PAUSED`. On a Plus 2 W: each Machine setting changed and applied, and the change seen from the guest: RAM at `#4000` present or not, `*DOS` answering or not, the utility ROM's commands, and the bell an octave up with the heartbeat counting 2,000,000 guest cycles a second. A restart refused while recording. The machine saved from the menu and back after a power cycle. The four perf workloads at 2 MHz with zero underruns and zero late refills, written into §6.3. The perf line on and off at 1 MHz, within the ~2 % spread. The About page's hashes read against §11.1. `PRINT 5|3` typed on the PicoCalc keyboard answers 7. `Alt`+`P` dims the panel and silences the guest. A playing tape stops advancing and carries on after resume. The key that resumes is not typed. The backlight goes back to its level, the southbridge's own included. Ten minutes paused with zero I²C errors |
+
 M4 is the milestone that matters; everything before it is scaffolding and
 everything after it is refinement.
 
@@ -2510,7 +2817,8 @@ BASIC's `RND` seeded from the board (§12.1, §7.2); powering up in mono with
 the border on, and the border drawn as a frame (§8.7); the host's `Shift` as
 the Atom's SHIFT line on its own (§10.3); and BREAK resetting the VIA and the
 disc controller (§6.4). What was left, recording at signal level, the status
-band and saving menu changes, is M11. Nothing after M11 is named yet.
+band and saving menu changes, is M11. M12 finishes §13's menu. Snow and the
+scaled display, which the menu once listed, are dropped (§8.2, §8.6).
 
 ---
 
@@ -2527,6 +2835,7 @@ band and saving menu changes, is M11. Nothing after M11 is named yet.
 | **SRAM growth past budget** | link failure, or worse, a heap that fails at runtime | `config.h`, and CI prints `arm-none-eabi-size` on every build (it reports, it does not fail); §5 measured 49 % used, 51 % headroom, at 2026-09-25 |
 | **Shipping ROMs** | licence violation | user supplies ROMs; the build has no ROM binaries and a boot without them shows a page naming what is missing |
 | **300 MHz turbo build corrupts data** | silent, intermittent | not shipped by default; if enabled, the hardware notes' §3 clock checklist is mandatory and the flash-integrity concern is real |
+| **A 2 MHz guest leaves core 0 no margin** (§12.1) | audio underruns at 2 MHz in the heaviest workloads | estimated at 63–87 % of core 0 from §6.3's headroom. M12's done-when requires zero underruns across the four workloads at 2 MHz, and the perf line (§13.1) shows the margin live. 4 MHz is not offered for this reason |
 
 ---
 

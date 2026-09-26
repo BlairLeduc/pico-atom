@@ -18,7 +18,8 @@ and never will. The emulator reads them off the SD card at `/atom/roms/`
 are missing rather than into a dead machine.
 
 You need five files. Four are the machine; `utility.rom` is the `#A000` socket
-and is yours to fill:
+and is yours to fill. The menu's *Machine* page can put any other `.rom` in
+`/atom/roms/` in that socket instead:
 
 | File | Guest address | What it is |
 |---|---|---|
@@ -83,6 +84,16 @@ The emulator boots straight to the Atom's `>` prompt.
 | `LOCK` | `Alt`+`L` |
 | `BREAK` | `Alt`+`K` |
 | the emulator's menu | `Alt`+`M` |
+| pause | `Alt`+`P` |
+
+`|`, `{`, `}`, `` ` `` and `~` are the Atom's shifted `\`, `[`, `]`, `@` and
+`^`, and the Atom shows each as that key in inverse. `|` is BASIC's OR:
+`PRINT 5|3` prints 7.
+
+**Pause.** `Alt`+`P` stops the Atom where it is, silences it and dims the
+screen. The bottom line says `PAUSED`. Any key carries on, and that key is not
+typed. `Alt`+`M` goes to the menu instead. A tape that was playing stops with
+the Atom and carries on with it.
 
 **Tapes** are `.atm` files in `/atom/tapes/` on the card. `LOAD "NAME"` and
 `*RUN "NAME"` find the file whose header carries that name, or failing that the
@@ -101,7 +112,9 @@ The deck stops again when a `LOAD` finishes and starts at the next
 reads the tape without going through the Atom's `LOAD` needs *Play* from the
 menu. While the tape plays, the Atom runs as fast as the PicoCalc allows,
 about 2.7× real time, and makes no sound. A UEF in the deck takes every load
-and every save, so eject it to go back to `.atm` files.
+and every save, so eject it to go back to `.atm` files. The Atom reads a tape
+only at 1 MHz, as on a real one: at 2 MHz the tape will not play, and the
+bottom line says `NEEDS 1 MHZ`. `SAVE` records at either speed.
 
 **Recording.** With a UEF in the deck, `SAVE "NAME"` records onto it, as onto
 a real cassette. The Atom says `RECORD TAPE`; press a key, and the recording
@@ -185,6 +198,22 @@ A change made in the menu lasts until the power goes off, unless you choose
 *Save settings* on the menu's first page, which writes it into the settings
 file below.
 
+**The machine.** The menu's *Machine* page sets what an Atom owner would have
+changed with the lid off: 16 or 32 KB of RAM below the screen, a 1 or 2 MHz
+clock, AtomDOS and the ROM in the utility socket. Left and right choose, and a
+`*` marks each row you have changed. Nothing happens until *Apply and
+restart*, which switches the Atom off and on again with the new machine, so
+the program in memory is lost. The tape goes back in at its start and the
+discs stay in their drives. At 2 MHz BASIC runs twice as fast and the bell
+sounds an octave higher, but `WAIT` and the screen keep their speed. A snapshot
+taken at one clock does not load at the other. The *About* page shows the
+firmware's version, the board, and each ROM with the first eight digits of its
+SHA-1, to check against the list above. The *Display* page's *Perf line* puts
+the emulator's own figures along the top of the screen: how much of the
+PicoCalc's first core the Atom takes, how many times real time it could run,
+the slowest screen update in the last second, frames dropped, and sound
+underruns and late refills since power-on.
+
 **Settings** at power-on come from `/atom/pico-atom.cfg` on the card, if there
 is one. Each line sets one thing, and a setting the file leaves out keeps its
 default. This file shows every setting, at its default except the backlight,
@@ -205,6 +234,9 @@ drive0    =            # a disc image in /atom/discs/, in drive 0 at power-on
 drive1    =
 upper_ram = on         # RAM at #4000-#7FFF, the 32 KB Atom games expect
 dos       = on         # the disc controller, for AtomDOS
+clock     = 1          # the Atom's MHz: 1 or 2
+utility   = utility.rom # a file in /atom/roms/ for #A000, or none
+perf      = off        # the emulator's figures along the top; or on
 ```
 
 A name without a leading `/` is looked for in the tape or disc folder, and a
@@ -221,7 +253,8 @@ line it changes keeps its place and its comment, and only the value after the
 `=` changes. A setting the file does not mention is added at the end, but only
 if it differs from the default. Comments, blank lines and anything it does not
 understand are left as they are. It saves the screen, border, background,
-status line, backlight, volume, keys, the tape in the deck and the discs in
-the drives; `turbo`, `upper_ram` and `dos` are only ever what you wrote. If a
+status line, perf line, backlight, volume, keys, the tape in the deck, the
+discs in the drives, and the machine as it is running: `upper_ram`, `dos`,
+`clock` and `utility`. `turbo` is only ever what you wrote. If a
 setting appears twice, it saves nothing and says so, since it cannot tell
 which line you meant. With no file on the card it makes one.

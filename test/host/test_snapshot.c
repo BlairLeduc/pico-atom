@@ -155,6 +155,43 @@ int main(void) {
     h.m.cfg.video_aperture = false;
     CHECK(same(&before, &h.m, "untouched"), "refusals change nothing");
 
+    /* ---- the clock is in bit 7 of the configuration byte (§12.1) ---- *
+     * A 2 MHz machine's counts are in its own cycles, so a file taken at
+     * the other clock is refused, check and load both, and changes
+     * nothing. Zero there is 1 MHz, which is what every file from before
+     * M12 has: a 1 MHz file is byte for byte one of those. */
+    {
+        static guest_t k;
+        static mem_t one;
+        const unsigned mhz = guest_mhz(), other = 3u - mhz;
+        const unsigned cfg_at = SNAP_HEADER_LEN + 53u;   /* snapshot.c's S_CFG */
+        CHECK((snap.buf[cfg_at] & 0x80u) == (mhz == 2u ? 0x80u : 0u),
+              "a %u MHz file's configuration byte is 0x%02X", mhz, snap.buf[cfg_at]);
+        guest_boot_at(&k, other);
+        static atom_t k_before;
+        atom_copy(&k_before, &k.m);
+        CHECK(check(&k.m) == SNAP_OTHER_CLOCK, "taken at %u MHz, checked at %u: %s", mhz,
+              other, snapshot_status_str(check(&k.m)));
+        CHECK(load(&k.m) == SNAP_OTHER_CLOCK, "and refused by load");
+        CHECK(same(&k_before, &k.m, "other clock"), "a file at the other clock changes nothing");
+
+        /* A 1 MHz file, as every older one is, loads as 1 MHz. */
+        guest_boot_at(&k, 1);
+        guest_type(&k, "10 P.\"OLD\"\n");
+        CHECK(snapshot_save(&k.m, mem_write, &one) == SNAP_OK, "a 1 MHz save");
+        CHECK((one.buf[cfg_at] & 0x80u) == 0, "bit 7 clear at 1 MHz: 0x%02X", one.buf[cfg_at]);
+        guest_boot_at(&k, 1);
+        one.pos = 0;
+        CHECK(snapshot_load(&k.m, mem_read, &one) == SNAP_OK, "a 1 MHz machine loads it");
+        guest_type(&k, "RUN\n");
+        CHECK(strstr(guest_row(&k.m, 4), "OLD") != NULL, "and runs its program: '%s'",
+              guest_row(&k.m, 4));
+        guest_boot_at(&k, 2);
+        one.pos = 0;
+        CHECK(snapshot_load(&k.m, mem_read, &one) == SNAP_OTHER_CLOCK,
+              "a 2 MHz machine refuses it");
+    }
+
     /* A write that fails part-way reports it. */
     mem_t *s = &snap;
     s->len = 0;

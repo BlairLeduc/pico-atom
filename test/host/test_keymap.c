@@ -323,6 +323,16 @@ int main(void) {
         bool any = false;
         for (unsigned c = 0; c < ATOM_KEY_COLS; c++) any |= m.key_col[c] != 0;
         CHECK(!any && !m.key_shift && !m.key_rept, "Alt+M reached the matrix");
+
+        /* Alt+P asks for a pause the same way (§13.1). */
+        fresh();
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_ALT);
+        keymatrix_event(&k, KEY_EV_PRESSED, 'P');
+        keymatrix_field(&k, &m);
+        CHECK(k.pause_request && !k.menu_request, "Alt+P requests a pause");
+        any = false;
+        for (unsigned c = 0; c < ATOM_KEY_COLS; c++) any |= m.key_col[c] != 0;
+        CHECK(!any && !m.key_shift && !m.key_rept, "Alt+P reached the matrix");
     }
 
     /* ---- the queue is bounded, and never loses a release ------------- */
@@ -378,7 +388,7 @@ int main(void) {
             CHECK(keymap_picocalc_canonical(e->code) == e->code,
                   "%s: 0x%02X is not a canonical code, so it would never match", l->name,
                   e->code);
-            CHECK(!(e->flags & (KM_ALT | KM_BREAK | KM_MENU)),
+            CHECK(!(e->flags & (KM_ALT | KM_BREAK | KM_MENU | KM_PAUSE)),
                   "%s: 0x%02X takes something a layout may not", l->name, e->code);
             if (!(e->flags & KM_NOCELL)) {
                 CHECK(!(e->flags & KM_SHIFT), "%s: a cell target carries SHIFT", l->name);

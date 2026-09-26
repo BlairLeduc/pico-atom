@@ -30,6 +30,18 @@ endforeach()
 # test_audio measures pitch with lround and fabs.
 target_link_libraries(test_audio PRIVATE m)
 
+# The same binaries again on a 2 MHz guest (design.md §12.1): what is
+# fixed in wall time must hold at either clock. test_util.h's test_mhz()
+# reads the variable; guest_boot does too.
+function(pico_atom_test_2mhz t)
+    add_test(NAME ${t}_2mhz COMMAND ${t})
+    set_tests_properties(${t}_2mhz PROPERTIES ENVIRONMENT PICO_ATOM_TEST_MHZ=2
+                                              SKIP_RETURN_CODE 77)
+endfunction()
+foreach(t test_field test_audio test_i8271)
+    pico_atom_test_2mhz(${t})
+endforeach()
+
 # The Dormann and Clark suites need binaries the repository does not ship;
 # without them the test reports as skipped, not as passing.
 add_executable(test_m6502_functional test_m6502_functional.c)
@@ -98,6 +110,9 @@ foreach(t test_boot test_tape test_snapshot test_cassette test_disc)
     set_tests_properties(${t} PROPERTIES SKIP_RETURN_CODE 77)
 endforeach()
 target_link_libraries(test_boot PRIVATE m)
+foreach(t test_boot test_disc test_cassette test_snapshot test_tape)
+    pico_atom_test_2mhz(${t})
+endforeach()
 
 # test_keymap checks romset's SHA-1 table against README.md's list, which
 # is the documented source of those digests (design.md §11.1).

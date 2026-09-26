@@ -73,7 +73,7 @@
 #define I8271_OUT_SIDE    0x20u   /* side select, drive control output */
 #define I8271_OUT_LOAD    0x08u   /* load head, which runs the motor   */
 
-/* One revolution at 300 rpm, in guest cycles. */
+/* One revolution at 300 rpm, in guest cycles at 1 MHz. */
 #define I8271_REV_CYCLES  (10u * ATOM_FDC_SECTOR_CYCLES)
 
 #define I8271_NEVER       UINT64_MAX
@@ -119,6 +119,10 @@ typedef struct {
 
     uint64_t due;            /* next event, or I8271_NEVER      */
 
+    /* The guest's clock in MHz: the disc turns in wall time, so every
+     * time above is this many times config.h's (§12.1). */
+    uint8_t  mhz;
+
     i8271_drive_t drv[ATOM_FDC_DRIVES];
     i8271_req_t   req;       /* op NONE unless waiting on the port */
     uint8_t       buf[ATOM_FDC_BUF_LEN];
@@ -126,7 +130,8 @@ typedef struct {
     uint32_t sectors_read, sectors_written;   /* for the heartbeat */
 } i8271_t;
 
-/* Power on: no discs, heads at track 0, nothing in progress. */
+/* Power on: no discs, heads at track 0, nothing in progress, and a
+ * 1 MHz guest; atom_init sets mhz after. */
 void i8271_init(i8271_t *f);
 
 /* The RESET pin: the command in progress is dropped, and the head

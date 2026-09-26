@@ -48,6 +48,7 @@ typedef struct {
     bool atomdos;         /* 8271 FDC at #0A00 — steals 8 bytes of page #0A */
     bool tape_traps;      /* serve OSLOAD/OSSAVE from files (tape.h, §11.2) */
     bool tape_cues;       /* the deck follows the MOS's PLAY TAPE (§11.3) */
+    uint8_t clock_mhz;    /* 1 or 2 (§12.1); 0 is taken as 1 */
 } atom_config_t;
 
 typedef struct atom_s {
@@ -98,12 +99,26 @@ typedef struct atom_s {
     /* Cycle debt carried between field-sized slices (§12.1). */
     int32_t  budget;
 
+    /* What is fixed in wall time, in guest cycles at cfg.clock_mhz
+     * (§12.1): the clock, and the field's three parts. Set by
+     * atom_init, never under a running program. */
+    uint32_t cpu_hz;
+    uint32_t field_active, field_fs_low, field_blank;
+
     /* Instructions executed, for §12.3's host cycles per guest
      * instruction. A counter, not machine state: snapshots leave it. */
     uint64_t instructions;
 } atom_t;
 
 void atom_config_default(atom_config_t *cfg);
+
+/* cfg->clock_mhz as it runs: 1 or 2. */
+unsigned atom_clock_mhz(const atom_config_t *cfg);
+
+/* Guest cycles in one field at this clock: 16,666 at 1 MHz, 33,333 at 2. */
+static inline uint32_t atom_cycles_per_field(const struct atom_s *m) {
+    return m->field_active + m->field_fs_low + m->field_blank;
+}
 
 /* Wire up the page table from cfg and reset the CPU. */
 void atom_init(atom_t *m, const atom_config_t *cfg);
@@ -161,6 +176,8 @@ static inline const uint8_t *atom_vram(const atom_t *m) {
  * caller's and must outlive the insertion. */
 bool atom_cassette_insert(atom_t *m, const uint8_t *img, size_t len);
 void atom_cassette_eject(atom_t *m);
+/* Playing is refused at 2 MHz, where the MOS cannot read a tape
+ * (§12.1): cas.needs_1mhz says so. */
 void atom_cassette_play(atom_t *m, bool on);
 void atom_cassette_rewind(atom_t *m);
 static inline bool atom_cassette_playing(const atom_t *m) { return m->cas.playing; }

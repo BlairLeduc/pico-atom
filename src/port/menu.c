@@ -4,12 +4,14 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include "hardware/sync.h"
 #include "pico/stdlib.h"
 
 #include "discio.h"
 #include "display.h"
+#include "pico_atom_version.h"
 #include "kbd.h"
 #include "keymapio.h"
 #include "keymatrix.h"
@@ -44,15 +46,23 @@
 #define BKL_MAX   240u
 
 enum {
-    I_RESUME, I_DISCS, I_TAPES, I_SNAPS, I_DISPLAY, I_KEYS, I_VOLUME, I_RESET, I_SAVE,
-    I_COUNT
+    I_RESUME, I_DISCS, I_TAPES, I_SNAPS, I_DISPLAY, I_MACHINE, I_KEYS, I_VOLUME, I_RESET,
+    I_SAVE, I_ABOUT, I_COUNT
 };
+
+/* Eleven items fill rows 1-11 under the title, then the deck on row 12
+ * and the drives on row 13, above the status row (§13.1). */
+#define MAIN_TOP 1
 
 /* The snapshot page: left and right choose the slot on any row (§11.5). */
 enum { S_SLOT, S_SAVE, S_LOAD, S_DELETE, S_COUNT };
 
 /* The display page (§8.7). */
-enum { D_COLOUR, D_BORDER, D_BACKGROUND, D_STATUS, D_BACKLIGHT, D_COUNT };
+enum { D_COLOUR, D_BORDER, D_BACKGROUND, D_STATUS, D_PERF, D_BACKLIGHT, D_COUNT };
+
+/* The Machine page (§13.1): four settings staged, and the restart that
+ * applies them. */
+enum { M_RAM, M_CLOCK, M_DOS, M_UTILITY, M_APPLY, M_COUNT };
 
 #define TAPE_ROWS 11
 
@@ -86,6 +96,18 @@ static struct {
     bool             display;
     int              display_sel;
 
+    /* The Machine page: what is staged, against the running machine.
+     * The utility is an index into s_utils, 0 being none. */
+    bool             machine;
+    int              machine_sel;
+    bool             st_upper, st_dos;
+    unsigned         st_mhz;
+    unsigned         st_util, n_utils;
+
+    /* The About page, and the southbridge's version, read as it opens. */
+    bool             about;
+    int              sb_ver;
+
     /* The disc page: row 0 empties the drive, the images follow. */
     bool             discs;
     unsigned         n_discs;
@@ -95,6 +117,9 @@ static struct {
 
 static tapeio_entry_t s_list[ATOM_TAPE_LIST_MAX];
 static discio_entry_t s_discs[ATOM_DISC_LIST_MAX];
+/* NONE, the card's utility ROMs, and the running one if the card has
+ * lost it (§13.1). */
+static char s_utils[ATOM_ROM_LIST_MAX + 2][ROMS_NAME_MAX];
 
 static void say(const char *fmt, const char *arg) {
     snprintf(s.status, sizeof s.status, fmt, arg);
@@ -124,9 +149,11 @@ static void draw_main(void) {
         case I_RESET:  snprintf(line, sizeof line, " RESET (BREAK)"); break;
         case I_VOLUME: snprintf(line, sizeof line, " VOLUME < %u >", s.set->volume); break;
         case I_DISPLAY: snprintf(line, sizeof line, " DISPLAY..."); break;
+        case I_MACHINE: snprintf(line, sizeof line, " MACHINE..."); break;
         case I_SAVE:   snprintf(line, sizeof line, " SAVE SETTINGS"); break;
+        case I_ABOUT:  snprintf(line, sizeof line, " ABOUT..."); break;
         }
-        textpage_line(s.vram, 2 + i, line, i == s.item);
+        textpage_line(s.vram, MAIN_TOP + i, line, i == s.item);
     }
 
     const char *ins = tapeio_inserted();
@@ -139,7 +166,7 @@ static void draw_main(void) {
     }
     snprintf(line, sizeof line, " TAPE IN: %.*s%s", cas->loaded ? 12 : 21,
              ins[0] ? (base ? base + 1 : ins) : "NONE", deck);
-    textpage_line(s.vram, 12, line, false);
+    textpage_line(s.vram, MAIN_TOP + I_COUNT, line, false);
 
     /* Each drive's image, without its directory or extension. */
     char name[ATOM_FDC_DRIVES][12];
@@ -151,7 +178,7 @@ static void draw_main(void) {
         if (dot && dot != name[d]) *dot = 0;
     }
     snprintf(line, sizeof line, " DISC 0: %-9.9s 1: %.9s", name[0], name[1]);
-    textpage_line(s.vram, 13, line, false);
+    textpage_line(s.vram, MAIN_TOP + I_COUNT + 1, line, false);
 }
 
 static void draw_tapes(void) {
@@ -166,7 +193,9 @@ static void draw_tapes(void) {
             snprintf(line, sizeof line, " (EJECT)");
         } else if (i == T_PLAY) {
             snprintf(line, sizeof line, " (%s)", !cas->loaded ? "PLAY: NO UEF IN THE DECK"
-                                               : cas->playing ? "STOP" : "PLAY");
+                                               : cas->playing ? "STOP"
+                                               : s.m->cfg.clock_mhz != 1u ? "PLAY: TAPE NEEDS 1 MHZ"
+                                               : "PLAY");
         } else if (i == T_REWIND) {
             snprintf(line, sizeof line, " (REWIND)");
         } else if (i == T_RECORD) {
@@ -226,6 +255,9 @@ static void draw_display(void) {
         case D_STATUS:
             snprintf(line, sizeof line, " STATUS LINE     < %s >", s.set->status ? "ON" : "OFF");
             break;
+        case D_PERF:
+            snprintf(line, sizeof line, " PERF LINE       < %s >", s.set->perf ? "ON" : "OFF");
+            break;
         case D_BACKLIGHT:
             snprintf(line, sizeof line, " BACKLIGHT       < %u >", s.backlight / BKL_STEP);
             break;
@@ -258,6 +290,127 @@ static void draw_discs(void) {
     }
 }
 
+/* A file name as the character ROM shows it: upper case, cut short. */
+static void upper(char *out, size_t size, const char *in, size_t max) {
+    size_t i = 0;
+    for (; in[i] && i < max && i + 1 < size; i++)
+        out[i] = (char)(in[i] >= 'a' && in[i] <= 'z' ? in[i] - 32 : in[i]);
+    out[i] = 0;
+}
+
+static const char *staged_utility(void) {
+    return s.st_util ? s_utils[s.st_util] : "";
+}
+
+/* Does row r's staged value differ from the running machine? */
+static bool machine_changed(int r) {
+    const atom_config_t *c = &s.m->cfg;
+    switch (r) {
+    case M_RAM:     return s.st_upper != c->upper_ram;
+    case M_CLOCK:   return s.st_mhz != atom_clock_mhz(c);
+    case M_DOS:     return s.st_dos != c->atomdos;
+    case M_UTILITY: return strcasecmp(staged_utility(), s.set->utility) != 0;
+    }
+    return false;
+}
+
+static bool machine_staged(void) {
+    for (int r = 0; r < M_APPLY; r++)
+        if (machine_changed(r)) return true;
+    return false;
+}
+
+static void draw_machine(void) {
+    char line[TEXT_COLS + 1], name[13];
+    for (int i = 0; i < M_COUNT; i++) {
+        char mark = machine_changed(i) ? '*' : ' ';
+        switch (i) {
+        case M_RAM:
+            snprintf(line, sizeof line, "%cRAM             < %s >", mark, s.st_upper ? "32K" : "16K");
+            break;
+        case M_CLOCK:
+            snprintf(line, sizeof line, "%cCLOCK           < %u MHZ >", mark, s.st_mhz);
+            break;
+        case M_DOS:
+            snprintf(line, sizeof line, "%cATOMDOS         < %s >", mark, s.st_dos ? "ON" : "OFF");
+            break;
+        case M_UTILITY:
+            upper(name, sizeof name, s.st_util ? s_utils[s.st_util] : "NONE", 12);
+            snprintf(line, sizeof line, "%cUTILITY ROM     < %s >", mark, name);
+            break;
+        case M_APPLY:
+            snprintf(line, sizeof line, " (APPLY AND RESTART)");
+            break;
+        }
+        textpage_line(s.vram, 2 + i, line, i == s.machine_sel);
+    }
+    /* The VIA is shown and cannot be changed (§7.3). */
+    textpage_line(s.vram, 3 + M_COUNT, " 6522 VIA: FITTED, THE MOS NEEDS IT", false);
+    textpage_line(s.vram, 5 + M_COUNT, " A RESTART IS A POWER-ON: THE", false);
+    textpage_line(s.vram, 6 + M_COUNT, " PROGRAM IN MEMORY IS LOST.", false);
+}
+
+/* First eight hex digits of a digest. */
+static void hex8(char out[9], const uint8_t *d) {
+    snprintf(out, 9, "%02X%02X%02X%02X", d[0], d[1], d[2], d[3]);
+}
+
+/* A slot's state for the About page (§13.1): OK the image §11.1 records,
+ * ?? another image, ANY the utility socket's, OFF hardware not fitted,
+ * -- nothing loaded. */
+static const char *slot_word(int slot, rom_state_t st) {
+    if (slot == ROM_DOS && !s.m->cfg.atomdos) return "OFF";
+    switch (st) {
+    case ROM_LOADED:       return romset_slots[slot].has_sha1 ? "OK" : "ANY";
+    case ROM_UNRECOGNISED: return "??";
+    case ROM_SKIPPED:      return "OFF";
+    default:               return "--";
+    }
+}
+
+static void draw_about(void) {
+    char line[TEXT_COLS + 1], name[TEXT_COLS + 1];
+    const board_info_t *b = s.set->board;
+    const roms_report_t *r = s.set->roms;
+    const atom_config_t *c = &s.m->cfg;
+
+    upper(name, sizeof name, PICO_ATOM_VERSION, 21);
+    snprintf(line, sizeof line, " PICO-ATOM %.21s", name);
+    textpage_line(s.vram, 2, line, false);
+    upper(name, sizeof name, b->sdk_board, 25);
+    snprintf(line, sizeof line, " BOARD %.25s", name);
+    textpage_line(s.vram, 3, line, false);
+    upper(name, sizeof name, b->sdk_platform, 8);
+    char sb[4] = "??";
+    if (s.sb_ver >= 0) snprintf(sb, sizeof sb, "%02X", (unsigned)(s.sb_ver & 0xFF));
+    snprintf(line, sizeof line, " %.8s REV %u  %u MHZ  SB %.2s", name, b->chip_version & 0xFu,
+             (unsigned)((b->clk_sys_hz / 1000000u) % 1000u), sb);
+    textpage_line(s.vram, 4, line, false);
+    snprintf(line, sizeof line, " MACHINE %s %u MHZ%s%s", c->upper_ram ? "32K" : "16K",
+             atom_clock_mhz(c), c->atomdos ? " DOS" : "", c->via_fitted ? " VIA" : "");
+    textpage_line(s.vram, 5, line, false);
+
+    /* The sockets from the top of the map down, as §11.1 lists them. */
+    static const int order[ROM_SLOT_COUNT] = { ROM_KERNEL, ROM_BASIC, ROM_FLOAT, ROM_DOS,
+                                               ROM_UTILITY };
+    for (int i = 0; i < ROM_SLOT_COUNT; i++) {
+        int sl = order[i];
+        rom_state_t st = r->slot[sl];
+        const char *file = sl == ROM_UTILITY ? (r->utility[0] ? r->utility : "NONE")
+                                             : romset_slots[sl].file;
+        upper(name, sizeof name, file, 12);
+        char h[9] = "";
+        if (st == ROM_LOADED || st == ROM_UNRECOGNISED) hex8(h, r->sha1[sl]);
+        snprintf(line, sizeof line, " #%04X %-12s %-3s %s", romset_slots[sl].addr, name,
+                 slot_word(sl, st), h);
+        textpage_line(s.vram, 7 + i, line, false);
+    }
+
+    const char *err = settingsio_error();
+    snprintf(line, sizeof line, " SETTINGS %.22s", err[0] ? err : "OK");
+    textpage_line(s.vram, 8 + ROM_SLOT_COUNT, line, false);
+}
+
 /* The title row's right end: the charge, and CHG in place of BAT while
  * it charges (bit 7, hardware-notes.md §6). Nothing if it could not be
  * read. */
@@ -281,18 +434,24 @@ static void draw(void) {
     textpage_clear(s.vram);
     textpage_line(s.vram, 0, s.tapes ? " PICO-ATOM: TAPES" : s.discs ? " PICO-ATOM: DISCS"
                              : s.snaps ? " PICO-ATOM: SNAPSHOTS"
-                             : s.display ? " PICO-ATOM: DISPLAY" : " PICO-ATOM", true);
+                             : s.display ? " PICO-ATOM: DISPLAY"
+                             : s.machine ? " PICO-ATOM: MACHINE"
+                             : s.about ? " PICO-ATOM: ABOUT" : " PICO-ATOM", true);
     draw_battery();
     if (s.tapes) draw_tapes();
     else if (s.discs) draw_discs();
     else if (s.snaps) draw_snaps();
     else if (s.display) draw_display();
+    else if (s.machine) draw_machine();
+    else if (s.about) draw_about();
     else draw_main();
     textpage_line(s.vram, 14, s.status, false);
     textpage_line(s.vram, 15, s.tapes ? " ENTER INSERTS  ESC BACK"
                               : s.discs ? " < > DRIVE  ENTER INSERTS  ESC"
                               : s.snaps ? " < > SLOT  ENTER  ESC BACK"
                               : s.display ? " < > CHANGES  ESC BACK"
+                              : s.machine ? " < > STAGES  ENTER  ESC BACK"
+                              : s.about ? " ESC BACK"
                                         : " ARROWS  ENTER  ESC RESUMES", true);
     display_present(s.vram, 0, NULL);
 }
@@ -325,6 +484,12 @@ static void do_load(void) {
            (unsigned long)ms);
     if (st == SNAP_OK) {
         s.done = true;         /* straight back into the restored machine */
+        return;
+    }
+    if (st == SNAP_OTHER_CLOCK) {
+        /* Name the clock it was taken at: the other one (§12.1). */
+        snprintf(s.status, sizeof s.status, " NOT LOADED: TAKEN AT %u MHZ",
+                 3u - atom_clock_mhz(&s.m->cfg));
         return;
     }
     say(" NOT LOADED: %s", snapshot_status_str(st));
@@ -403,6 +568,13 @@ static void save_settings(void) {
     out.status = s.set->status;
     out.volume = s.set->volume;
     out.backlight = s.set->backlight;
+    out.perf = s.set->perf;
+    /* The machine as it is running, not as the Machine page has it
+     * staged (§11.6, §13.1). */
+    out.machine.upper_ram = s.m->cfg.upper_ram;
+    out.machine.atomdos = s.m->cfg.atomdos;
+    out.machine.clock_mhz = s.m->cfg.clock_mhz;
+    snprintf(out.utility, sizeof out.utility, "%s", s.set->utility);
     if (!s.set->keys_tape[0])
         snprintf(out.keys, sizeof out.keys, "%s", s.set->layout ? s.set->layout->name : "");
     settings_card_name(SETTINGS_TAPE_DIR, tapeio_inserted(), out.tape);
@@ -411,6 +583,89 @@ static void save_settings(void) {
     const char *err = settingsio_save(&out);
     if (!err) *s.set->file = out;
     say(err ? " NOT SAVED: %.20s" : " SETTINGS SAVED", err);
+}
+
+/* The Machine page stages the running machine (§13.1). */
+static void open_machine(void) {
+    const atom_config_t *c = &s.m->cfg;
+    s.machine = true;
+    s.machine_sel = M_RAM;
+    s.st_upper = c->upper_ram;
+    s.st_dos = c->atomdos;
+    s.st_mhz = atom_clock_mhz(c);
+
+    s_utils[0][0] = 0;
+    s.n_utils = 1u + (s.card ? roms_list_utility(&s_utils[1], ATOM_ROM_LIST_MAX) : 0u);
+    s.st_util = 0;
+    for (unsigned i = 1; i < s.n_utils; i++)
+        if (strcasecmp(s_utils[i], s.set->utility) == 0) s.st_util = i;
+    /* One the card no longer has stays the staged value, so that
+     * nothing reads as changed that the user did not change. */
+    if (!s.st_util && s.set->utility[0]) {
+        snprintf(s_utils[s.n_utils], ROMS_NAME_MAX, "%s", s.set->utility);
+        s.st_util = s.n_utils++;
+    }
+    s.status[0] = 0;
+}
+
+static void open_about(void) {
+    uint8_t r[2];
+    s.about = true;
+    s.sb_ver = sb_read(SB_REG_VER, r) == SB_OK ? r[1] : -1;
+    s.status[0] = 0;
+}
+
+/* Apply and restart (§13.1): a power-on of the staged machine, or the
+ * running one left as it is, and the status row says why. */
+static void apply_machine(void) {
+    atom_t *m = s.m;
+    if (!s.card) { say(" NO CARD: NOT RESTARTED", ""); return; }
+    /* The recording is not on the card until it stops (§11.3). */
+    if (atom_cassette_recording(m)) { say(" STOP RECORDING FIRST", ""); return; }
+    if (m->cas.dirty) { say(" RECORDING NOT ON THE CARD YET", ""); return; }
+    atom_config_t cfg = m->cfg;
+    cfg.upper_ram = s.st_upper;
+    cfg.atomdos = s.st_dos;
+    cfg.clock_mhz = (uint8_t)s.st_mhz;
+    say(" RESTARTING...", "");
+    draw();
+    const char *err = s.set->restart(&cfg, staged_utility());
+    if (err) { say(" %.30s", err); return; }
+    s.done = true;             /* straight into the new machine */
+}
+
+static void key_machine(uint8_t c) {
+    switch (c) {
+    case PC_UP:   s.machine_sel = (s.machine_sel + M_COUNT - 1) % M_COUNT; break;
+    case PC_DOWN: s.machine_sel = (s.machine_sel + 1) % M_COUNT; break;
+    case PC_LEFT:
+    case PC_RIGHT: {
+        int dir = c == PC_RIGHT ? 1 : -1;
+        switch (s.machine_sel) {
+        case M_RAM:     s.st_upper = !s.st_upper; break;
+        case M_CLOCK:   s.st_mhz = s.st_mhz == 1u ? ATOM_CLOCK_MHZ_MAX : 1u; break;
+        case M_DOS:     s.st_dos = !s.st_dos; break;
+        case M_UTILITY: s.st_util = (s.st_util + s.n_utils + (unsigned)dir) % s.n_utils; break;
+        }
+        say(machine_staged() ? " APPLY RESTARTS: PROGRAM LOST" : "", "");
+        break;
+    }
+    case PC_ENTER:
+        if (s.machine_sel == M_APPLY) {
+            if (machine_staged()) apply_machine();
+            else say(" NOTHING TO APPLY", "");
+        }
+        break;
+    case PC_ESC:
+        s.machine = false;
+        /* Nothing changes until Apply (§13.1). */
+        say(machine_staged() ? " NOT APPLIED" : "", "");
+        break;
+    }
+}
+
+static void key_about(uint8_t c) {
+    if (c == PC_ESC || c == PC_ENTER) s.about = false;
 }
 
 /* ---- keys ----------------------------------------------------------------- */
@@ -440,6 +695,8 @@ static void key_main(uint8_t c) {
         case I_TAPES:  open_tapes(); break;
         case I_DISCS:  open_discs(); break;
         case I_DISPLAY: s.display = true; s.display_sel = D_COLOUR; break;
+        case I_MACHINE: open_machine(); break;
+        case I_ABOUT:  open_about(); break;
         case I_RESET:  s.m->cpu.reset_pending = true; s.done = true; break;
         case I_SAVE:   save_settings(); break;
         }
@@ -485,9 +742,10 @@ static void key_display(uint8_t c) {
             if (c != PC_ENTER) set_backlight(c == PC_RIGHT ? 1 : -1);
             break;
         }
-        if (s.display_sel == D_STATUS) {
-            /* Core 1 draws the line; it shows once the menu closes. */
-            s.set->status = !s.set->status;
+        if (s.display_sel == D_STATUS || s.display_sel == D_PERF) {
+            /* Core 1 draws the lines; they show once the menu closes. */
+            if (s.display_sel == D_STATUS) s.set->status = !s.set->status;
+            else s.set->perf = !s.set->perf;
             break;
         }
         if (s.display_sel == D_COLOUR) {
@@ -521,6 +779,9 @@ static void deck(int what) {
         say(" STOPPED", "");
     } else if (m->cas.ended) {
         say(" AT THE END: REWIND FIRST", "");
+    } else if (m->cfg.clock_mhz != 1u) {
+        /* The MOS reads a tape at 1 MHz only (§12.1, §16). */
+        say(" TAPE NEEDS 1 MHZ", "");
     } else {
         atom_cassette_play(m, true);
         say(" PLAYING", "");
@@ -581,7 +842,8 @@ static void key_tapes(uint8_t c) {
             if (e->uef) { say(" READING %.20s...", e->hdr.name); draw(); }
             const char *err = tapeio_insert(s.m, e->path);
             if (err) { say(" NOT INSERTED: %.16s", err); return; }
-            if (e->uef) say(" LOAD\"%.13s\" THEN A KEY", tapeio_first_name());
+            if (e->uef && s.m->cfg.clock_mhz != 1u) say(" IN, BUT TAPE NEEDS 1 MHZ", "");
+            else if (e->uef) say(" LOAD\"%.13s\" THEN A KEY", tapeio_first_name());
             else say(" IN: LOAD\"\" TAKES %.10s", e->hdr.name);
         }
         s.tapes = false;
@@ -638,6 +900,8 @@ static void keys(void) {
         else if (s.discs) key_discs(c);
         else if (s.snaps) key_snaps(c);
         else if (s.display) key_display(c);
+        else if (s.machine) key_machine(c);
+        else if (s.about) key_about(c);
         else key_main(c);
         draw();
     }
@@ -685,6 +949,7 @@ void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram) {
     memset(blank, ' ', ATOM_STATUS_COLS);
     blank[ATOM_STATUS_COLS] = 0;
     display_status(blank);
+    display_perf(blank);    /* the perf line too (§13.1) */
 
     printf("  menu         : open%s\n", s.card ? "" : " (no card)");
     draw();

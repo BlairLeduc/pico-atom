@@ -28,7 +28,8 @@
 #define KM_MENU   0x10u   /* no cell: the emulator menu (§13)           */
 #define KM_CTRL   0x20u   /* assert the Atom CTRL line with this entry  */
 #define KM_LINE   0x40u   /* no cell: KM_SHIFT or KM_CTRL alone (§10.5) */
-#define KM_NOCELL (KM_REPT | KM_BREAK | KM_MENU | KM_LINE)
+#define KM_PAUSE  0x80u   /* no cell: pause the guest (§13.1)           */
+#define KM_NOCELL (KM_REPT | KM_BREAK | KM_MENU | KM_LINE | KM_PAUSE)
 
 typedef struct {
     uint8_t code;         /* host key code, as translated by the MCU */
@@ -139,6 +140,7 @@ typedef struct {
 
     /* Set on a press, cleared by whoever acts on it. */
     bool menu_request;
+    bool pause_request;
 } keymatrix_t;
 
 /* Empty, with no layout. */

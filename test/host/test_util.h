@@ -11,6 +11,13 @@
 
 static int test_failures = 0;
 
+/* The guest clock a test runs at, in MHz: 1, or 2 when CTest runs its
+ * _2mhz registration with PICO_ATOM_TEST_MHZ=2 (design.md §12.1). */
+static inline unsigned test_mhz(void) {
+    const char *e = getenv("PICO_ATOM_TEST_MHZ");
+    return e && e[0] == '2' ? 2u : 1u;
+}
+
 #define CHECK(cond, ...)                                                   \
     do {                                                                   \
         if (!(cond)) {                                                     \

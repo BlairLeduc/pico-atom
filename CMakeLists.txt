@@ -128,6 +128,21 @@ else()
     target_include_directories(pico-atom PRIVATE src/core src/port)
     target_compile_options(pico-atom PRIVATE ${PICO_ATOM_WARNINGS})
 
+    # The firmware's version, git describe --always --dirty, for the
+    # banner and the About page (design.md §13.1). A target that always
+    # runs, so it is taken at build time; the header only changes when
+    # the text does.
+    set(PICO_ATOM_GENERATED ${CMAKE_BINARY_DIR}/generated)
+    add_custom_target(pico_atom_version ALL
+        COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUT=${PICO_ATOM_GENERATED}/pico_atom_version.h
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake
+        BYPRODUCTS ${PICO_ATOM_GENERATED}/pico_atom_version.h
+        COMMENT "pico-atom: version from git describe"
+        VERBATIM)
+    add_dependencies(pico-atom pico_atom_version)
+    target_include_directories(pico-atom PRIVATE ${PICO_ATOM_GENERATED})
+
     # PICO_ATOM_AUDIO=OFF paces the guest on the microsecond timer instead
     # of the PCM queue (design.md §12.2). PICO_ATOM_UART_KEYS types what
     # arrives on UART1 at the guest (tools/uart-type.sh).
@@ -161,6 +176,22 @@ else()
     if (PICO_ATOM_BOOT_DISC)
         target_compile_definitions(pico-atom PRIVATE
             PICO_ATOM_BOOT_DISC="${PICO_ATOM_BOOT_DISC}")
+    endif()
+
+    # The guest's clock at boot, 1 or 2 MHz, over the settings file's, for
+    # a run driven over the UART, where the Machine page cannot be reached
+    # (design.md §12.1, §13.1). Empty in a build that ships.
+    set(PICO_ATOM_BOOT_CLOCK "" CACHE STRING "Guest MHz at boot, 1 or 2, or empty")
+    if (PICO_ATOM_BOOT_CLOCK)
+        target_compile_definitions(pico-atom PRIVATE
+            PICO_ATOM_BOOT_CLOCK=${PICO_ATOM_BOOT_CLOCK})
+    endif()
+
+    # The perf line on at boot, over the settings file, so its own cost
+    # can be measured over the UART (design.md §13.1).
+    option(PICO_ATOM_BOOT_PERF "Show the perf line at boot" OFF)
+    if (PICO_ATOM_BOOT_PERF)
+        target_compile_definitions(pico-atom PRIVATE PICO_ATOM_BOOT_PERF=1)
     endif()
 
     # clk_peri does not follow clk_sys by default; the SPI baud and the

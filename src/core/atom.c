@@ -18,6 +18,11 @@ void atom_config_default(atom_config_t *cfg) {
     cfg->atomdos        = true;    /* the 8271; harmless without dosrom.rom */
     cfg->tape_traps     = true;
     cfg->tape_cues      = true;
+    cfg->clock_mhz      = 1;       /* the stock Atom (§12.1) */
+}
+
+unsigned atom_clock_mhz(const atom_config_t *cfg) {
+    return cfg->clock_mhz >= 2u ? ATOM_CLOCK_MHZ_MAX : 1u;
 }
 
 static void map_open(atom_t *m, unsigned first_page, unsigned last_page) {
@@ -54,6 +59,16 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
      * which must not be zero; that is atom_seed_rnd's (§7.2). */
     memset(m, 0, sizeof(*m));
     m->cfg = *cfg;
+    m->cfg.clock_mhz = (uint8_t)atom_clock_mhz(cfg);
+
+    /* The field is the VDG's, fixed in wall time, so a faster clock runs
+     * more cycles in each part. The same formula as config.h's, so at
+     * 1 MHz these are ATOM_ACTIVE_CYCLES and the rest exactly (§12.1). */
+    m->cpu_hz = ATOM_CPU_HZ * m->cfg.clock_mhz;
+    uint32_t field = m->cpu_hz / ATOM_FIELD_HZ;
+    m->field_fs_low = field * ATOM_FS_LOW_LINES / ATOM_FIELD_LINES;
+    m->field_blank  = field * ATOM_BLANK_LINES / ATOM_FIELD_LINES;
+    m->field_active = field - m->field_fs_low - m->field_blank;
 
     m->open_bus = 0xFFu;
 
@@ -92,10 +107,12 @@ void atom_init(atom_t *m, const atom_config_t *cfg) {
     m->budget = 0;
     atom_reset(m);
 
-    beeper_init(&m->beeper, m->cpu.cycles, atom_speaker(m), ATOM_CPU_HZ,
+    beeper_init(&m->beeper, m->cpu.cycles, atom_speaker(m), m->cpu_hz,
                 ATOM_AUDIO_RATE_NUM, ATOM_AUDIO_RATE_DEN);
     cassette_init(&m->cas);
+    cassette_set_clock(&m->cas, m->cfg.clock_mhz);
     i8271_init(&m->fdc);
+    m->fdc.mhz = m->cfg.clock_mhz;
 }
 
 void atom_reset(atom_t *m) {
@@ -240,14 +257,14 @@ static uint32_t run_budget(atom_t *m) {
 uint32_t atom_run_field(atom_t *m) {
     uint32_t done = 0;
 
-    m->budget += (int32_t)ATOM_ACTIVE_CYCLES;
+    m->budget += (int32_t)m->field_active;
     done += run_budget(m);
 
     /* Guest instructions must execute while FS is low, or the flag is
      * unobservable and the MOS's screen-writing loops spin for ever
      * (§12.1). */
     atom_field_sync(m, true);
-    m->budget += (int32_t)ATOM_FS_LOW_CYCLES;
+    m->budget += (int32_t)m->field_fs_low;
     done += run_budget(m);
     atom_field_sync(m, false);
 
@@ -256,7 +273,7 @@ uint32_t atom_run_field(atom_t *m) {
      * active line. The field ends there, where the caller snapshots
      * VRAM, and not at FS's rising edge, which would catch that redraw
      * half done (§12.1). */
-    m->budget += (int32_t)ATOM_BLANK_CYCLES;
+    m->budget += (int32_t)m->field_blank;
     done += run_budget(m);
 
     /* A playing tape moves whether or not the guest reads it; keep its
@@ -357,6 +374,15 @@ void atom_cassette_eject(atom_t *m) {
 }
 
 void atom_cassette_play(atom_t *m, bool on) {
+    /* The MOS times a tape it reads by its own loops, so at 2 MHz it
+     * reads nothing; test_cassette settled that by execution (§12.1,
+     * §16). The deck plays only at 1 MHz, as an owner would have
+     * switched down, and says so. Recording is the reference's, which
+     * keeps wall time, so it works at either clock. */
+    if (on && m->cfg.clock_mhz != 1u) {
+        if (m->cas.loaded) m->cas.needs_1mhz = true;
+        return;
+    }
     cassette_play(&m->cas, m->cpu.cycles, on);
     atom_cassette_sync_slow(m);
 }
@@ -406,7 +432,7 @@ void atom_audio_set_rate(atom_t *m, uint32_t rate_num, uint32_t rate_den) {
     beeper_advance(&m->beeper, m->cpu.cycles);
     beeper_t *b = &m->beeper;
     bool dc_block = b->dc_block;
-    beeper_init(b, m->cpu.cycles, atom_speaker(m), ATOM_CPU_HZ, rate_num, rate_den);
+    beeper_init(b, m->cpu.cycles, atom_speaker(m), m->cpu_hz, rate_num, rate_den);
     b->dc_block = dc_block;
 }
 

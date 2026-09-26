@@ -40,6 +40,7 @@ static const uint8_t idle[] = {
 static atom_t *machine(const uint8_t *code, size_t len) {
     atom_config_t cfg;
     atom_config_default(&cfg);
+    cfg.clock_mhz = (uint8_t)test_mhz();
     atom_init(&g_machine, &cfg);
     for (size_t i = 0; i < len; i++)
         bus_write(&g_machine, (uint16_t)(0x1000u + i), code[i]);
@@ -54,12 +55,19 @@ static int16_t  samples[MAX_SAMPLES];
 static uint64_t edges[MAX_EDGES];   /* cycle each instruction that moved PC2 began */
 
 int main(void) {
+    /* The sample period is fixed in wall time, so at 2 MHz it is twice
+     * the guest cycles, and the tone's pitch, counted in guest cycles,
+     * is an octave up (§12.1). */
+    const unsigned mhz = test_mhz();
+    const uint32_t num = 2048u * mhz;
+    printf("clock: %u MHz\n", mhz);
+
     /* ---- the rate is kept as an exact fraction (§9.2) ----------------- */
     {
         atom_t *m = machine(idle, sizeof(idle));
-        CHECK(m->beeper.num == 2048u && m->beeper.den == 75u,
-              "150 MHz / 4096 should be 2048/75 cycles a sample, got %u/%u",
-              m->beeper.num, m->beeper.den);
+        CHECK(m->beeper.num == num && m->beeper.den == 75u,
+              "150 MHz / 4096 should be %u/75 cycles a sample, got %u/%u",
+              num, m->beeper.num, m->beeper.den);
 
         /* One guest second is 36,621.09375 samples, not a truncated
          * 36,621: over 75 s the count comes out whole, and at any point it
@@ -67,12 +75,12 @@ int main(void) {
         uint64_t t0 = m->beeper.start;
         size_t total = 0;
         for (unsigned f = 0; f < 75u * 60u; f++) {
-            atom_run(m, ATOM_CPU_HZ / 60u);
+            atom_run(m, ATOM_CPU_HZ * mhz / 60u);
             int16_t junk[ATOM_AUDIO_BUF_LEN];
             size_t n;
             while ((n = atom_audio_drain(m, junk, ATOM_AUDIO_BUF_LEN)) > 0) total += n;
         }
-        uint64_t want = ((m->cpu.cycles - t0) * 75u) / 2048u;
+        uint64_t want = ((m->cpu.cycles - t0) * 75u) / num;
         CHECK(total == want, "%llu cycles should make %llu samples, made %zu",
               (unsigned long long)(m->cpu.cycles - t0), (unsigned long long)want, total);
         CHECK(m->beeper.overflow == 0, "overflow %u", m->beeper.overflow);
@@ -108,7 +116,7 @@ int main(void) {
                   (unsigned long long)(edges[i] - edges[i - 1]), HALF);
         }
 
-        const double T = 2048.0 / 75.0;
+        const double T = num / 75.0;
         unsigned e = 0;
         bool lvl = level0;
         int worst = 0;
@@ -149,7 +157,7 @@ int main(void) {
         CHECK(m->beeper.overflow == 0, "overflow %u", m->beeper.overflow);
 
         /* Rising zero crossings, interpolated, after 0.1 s to settle. */
-        const double T = 2048.0 / 75.0;
+        const double T = num / 75.0;
         double first = -1, last = -1;
         unsigned crossings = 0;
         for (size_t k = 3662; k < ns; k++) {
@@ -161,8 +169,8 @@ int main(void) {
                 crossings++;
             }
         }
-        double hz = (crossings - 1) * 1e6 / (last - first);
-        double want = 1e6 / (2.0 * HALF);
+        double hz = (crossings - 1) * 1e6 * mhz / (last - first);
+        double want = 1e6 * mhz / (2.0 * HALF);
         printf("tone: %.3f Hz measured, %.3f Hz from the cycle count\n", hz, want);
         CHECK(fabs(hz - want) / want < 1e-4, "measured %.3f Hz, expected %.3f Hz", hz, want);
 
@@ -223,9 +231,9 @@ int main(void) {
     {
         atom_t *m = machine(idle, sizeof(idle));
         atom_audio_set_rate(m, 125000000u, 4096u);
-        CHECK(m->beeper.num == 4096u && m->beeper.den == 125u,
-              "125 MHz / 4096 should be 4096/125, got %u/%u",
-              m->beeper.num, m->beeper.den);
+        CHECK(m->beeper.num == 4096u * mhz && m->beeper.den == 125u,
+              "125 MHz / 4096 should be %u/125, got %u/%u",
+              4096u * mhz, m->beeper.num, m->beeper.den);
     }
 
     TEST_DONE();

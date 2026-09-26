@@ -44,6 +44,10 @@ void display_present(const uint8_t *vram, uint8_t mode, display_stats_t *st);
  * a character ROM. */
 void display_status(const char *text);
 
+/* The perf line (design.md §13.1): the same, in the top band's outer 16
+ * rows at ATOM_PERF_Y, which the border never fills. */
+void display_perf(const char *text);
+
 /* Forget what is on the panel, so the next present redraws everything.
  * This is how an overlay is dismissed (design.md §13), and how the
  * measurement forces full redraws. */
