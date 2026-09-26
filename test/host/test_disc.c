@@ -14,6 +14,7 @@
 
 #include "bus.h"
 #include "guest.h"
+#include "status.h"
 #include "snapshot.h"
 #include "test_util.h"
 
@@ -306,7 +307,15 @@ int main(void) {
     CHECK(!i8271_busy(&g.m.fdc), "the READ completes");
     (void)bus_read(&g.m, 0x0A01);
 
+    /* BREAK while the head is still loaded from that read unloads it
+     * (i8271.h), or the status line would name the drive for ever (§8.2). */
+    atom_status_t line;
+    atom_status(&g.m, &line);
+    CHECK(line.heads == 1u, "the head is loaded after the read: %u", line.heads);
     atom_reset(&g.m);
+    atom_status(&g.m, &line);
+    CHECK(line.heads == 0u && !(g.m.fdc.special[I8271_SR_OUTPUT] & I8271_OUT_LOAD),
+          "BREAK unloads it: heads %u", line.heads);
     guest_fields(&g, 120);
     g.m.fdc.special[I8271_SR_MODE] = 0;
     g.m.fdc.unload_revs = 0;

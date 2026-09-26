@@ -102,6 +102,7 @@ void atom_reset(atom_t *m) {
     m->tape.op = TAPE_NONE;
     m->tape.pass = false;
     m->tape.cue_play = false;
+    m->tape.cue_record = false;
     m->cpu.reset_pending = false;
     /* BREAK resets the disc card with the CPU; the discs stay in. */
     i8271_reset(&m->fdc);
@@ -174,7 +175,8 @@ void atom_map_ram(atom_t *m, uint16_t addr, uint32_t len) {
 static uint8_t tape_pc_lo[256] = {
     [TAPE_OSLOAD_PC & 0xFFu] = 1, [TAPE_OSSAVE_PC & 0xFFu] = 1,
     [TAPE_PROMPT_PC & 0xFFu] = 1, [TAPE_ANSWERED_PC & 0xFFu] = 1,
-    [TAPE_LOADED_PC & 0xFFu] = 1,
+    [TAPE_LOADED_PC & 0xFFu] = 1, [TAPE_SAVED_PC & 0xFFu] = 1,
+    [TAPE_SAVED_NAMELESS_PC & 0xFFu] = 1,
 };
 
 /* The FDC's event that fell due: run it and drive NMI from INT. */
@@ -262,6 +264,8 @@ uint32_t atom_run_field(atom_t *m) {
      * 4's next change within 2^31 cycles of the clock, which the inline
      * compare needs, however long the guest goes without reading. */
     atom_cassette_sync(m);
+    /* And a recording, likewise, for the status line (§8.2). */
+    if (m->cas.rec.on) atom_cassette_output(m);
 
     return done;
 }
@@ -341,6 +345,12 @@ bool atom_cassette_insert(atom_t *m, const uint8_t *img, size_t len) {
     return ok;
 }
 
+bool atom_cassette_insert_rw(atom_t *m, uint8_t *img, size_t len, size_t cap) {
+    bool ok = cassette_insert_rw(&m->cas, img, len, cap);
+    atom_cassette_sync_slow(m);
+    return ok;
+}
+
 void atom_cassette_eject(atom_t *m) {
     cassette_eject(&m->cas);
     atom_cassette_sync_slow(m);
@@ -354,6 +364,17 @@ void atom_cassette_play(atom_t *m, bool on) {
 void atom_cassette_rewind(atom_t *m) {
     cassette_rewind(&m->cas, m->cpu.cycles);
     atom_cassette_sync_slow(m);
+}
+
+/* Starting the recorder stops the tape playing, which can move bit 5. */
+cas_rec_status_t atom_cassette_record(atom_t *m, bool on) {
+    cas_rec_status_t st = cassette_record(&m->cas, m->cpu.cycles, on, m->ppi.out_c);
+    atom_cassette_sync_slow(m);
+    return st;
+}
+
+void atom_cassette_output(atom_t *m) {
+    cassette_output(&m->cas, m->cpu.cycles, m->ppi.out_c);
 }
 
 /* ---- the disc controller (design.md §11.4) --------------------------- */

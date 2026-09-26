@@ -264,6 +264,8 @@ snap_status_t snapshot_load(atom_t *m, snap_read_fn read, void *ctx) {
     const uint8_t *q = st + S_PPI;
     ppi->out_a = *q++; ppi->out_b = *q++; ppi->out_c = *q++; ppi->control = *q++;
     ppi->in_c = *q++;
+    /* A recording carries on from what the restored machine sends. */
+    cassette_output(&m->cas, c->cycles, ppi->out_c);
 
     via6522_t *v = &m->via;
     q = st + S_VIA;
@@ -303,6 +305,7 @@ snap_status_t snapshot_load(atom_t *m, snap_read_fn read, void *ctx) {
     m->tape.op = TAPE_NONE;
     m->tape.pass = false;
     m->tape.cue_play = false;
+    m->tape.cue_record = false;
 
     /* The discs stay in their drives, as the tape stays in the deck. */
     i8271_t *f = &m->fdc;

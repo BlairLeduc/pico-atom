@@ -70,8 +70,32 @@ static int next_byte(void *ctx) {
     return s_buf[r->at++];
 }
 
-/* A UEF is almost always gzipped; one that is not is read as it is. */
-static const char *load_uef(atom_t *m, const char *path, size_t *len) {
+/* A recording goes back through <path>.new and a rename, so a pulled
+ * card leaves the old image or the new one (§11.3). Between the unlink
+ * and the rename only the .new exists, and inserting the tape takes it. */
+static void new_path_of(char out[ATOM_PATH_MAX + 4], const char *path) {
+    snprintf(out, ATOM_PATH_MAX + 4, "%s.new", path);
+}
+
+static void recover(const char *path) {
+    static FILINFO fi;
+    char tmp[ATOM_PATH_MAX + 4];
+    new_path_of(tmp, path);
+    if (f_stat(path, &fi) == FR_NO_FILE && f_stat(tmp, &fi) == FR_OK &&
+        f_rename(tmp, path) == FR_OK) {
+        printf("  tape         : %s recovered from its .new\n", path);
+    }
+}
+
+/* A UEF is almost always gzipped; one that is not is read as it is. A
+ * gzipped one is protected, and so is one the card marks read-only: the
+ * emulator writes no gzip, and an image off the archive is the user's
+ * copy, not a blank (§11.3). */
+static const char *load_uef(atom_t *m, const char *path, size_t *len, bool *protect) {
+    static FILINFO fi;
+    recover(path);
+    if (f_stat(path, &fi) != FR_OK) return "CANNOT OPEN";
+    *protect = (fi.fattrib & AM_RDO) != 0;
     if (f_open(&s_file, path, FA_READ) != FR_OK) return "CANNOT OPEN";
     reader_t r = { 0, 0, false, false };
     const char *err = NULL;
@@ -79,6 +103,7 @@ static const char *load_uef(atom_t *m, const char *path, size_t *len) {
     int b0 = next_byte(&r), b1 = next_byte(&r);
     r.at = 0;
     if (b0 == 0x1F && b1 == 0x8B) {
+        *protect = true;
         gz_status_t st = gunzip(next_byte, &r, s_uef, sizeof s_uef, len);
         if (st == GZ_TOO_BIG) err = "TOO BIG";
         else if (st != GZ_OK) err = "BAD GZIP";
@@ -91,11 +116,55 @@ static const char *load_uef(atom_t *m, const char *path, size_t *len) {
     }
     f_close(&s_file);
     if (!err && r.failed) err = "READ ERROR";
-    if (!err && !atom_cassette_insert(m, s_uef, *len)) err = "NOT A UEF";
+    bool ok = !err && (*protect ? atom_cassette_insert(m, s_uef, *len)
+                                : atom_cassette_insert_rw(m, s_uef, *len, sizeof s_uef));
+    if (!err && !ok) err = "NOT A UEF";
     return err;
 }
 
+static FRESULT write_all(const void *p, UINT len) {
+    UINT n = 0;
+    FRESULT fr = f_write(&s_file, p, len, &n);
+    return (fr == FR_OK && n != len) ? FR_DISK_ERR : fr;
+}
+
+const char *tapeio_write(atom_t *m) {
+    const cassette_t *c = &m->cas;
+    if (!c->loaded || !c->wbuf || !s_inserted[0]) return "NOTHING TO WRITE";
+    uint32_t t0 = time_us_32();
+    char tmp[ATOM_PATH_MAX + 4];
+    new_path_of(tmp, s_inserted);
+    FRESULT fr = f_open(&s_file, tmp, FA_WRITE | FA_CREATE_ALWAYS);
+    if (fr == FR_OK) {
+        fr = write_all(s_uef, (UINT)c->uef.len);
+        FRESULT fc = f_close(&s_file);
+        if (fr == FR_OK) fr = fc;
+    }
+    if (fr == FR_OK) {
+        (void)f_unlink(s_inserted);
+        fr = f_rename(tmp, s_inserted);
+    }
+    if (fr != FR_OK) {
+        printf("  tape         : recording -> %s FAILED (FatFs error %d)\n", s_inserted, (int)fr);
+        return "WRITE FAILED";
+    }
+    m->cas.dirty = false;
+    printf("  tape         : recording -> %s: %lu bytes of UEF, %lu bytes recorded, "
+           "%lu unframed, %lu us\n", s_inserted, (unsigned long)c->uef.len,
+           (unsigned long)c->rec.bytes, (unsigned long)c->rec.errors,
+           (unsigned long)(time_us_32() - t0));
+    return NULL;
+}
+
 const char *tapeio_insert(atom_t *m, const char *path) {
+    /* A recording is the user's: it goes to the card before the tape
+     * leaves the deck, whoever is changing it, and a tape that could not
+     * be written stays in, the only copy of what was recorded. */
+    if (atom_cassette_recording(m)) (void)atom_cassette_record(m, false);
+    if (m->cas.dirty) {
+        const char *err = tapeio_write(m);
+        if (err) return err;
+    }
     s_inserted[0] = 0;
     s_first[0] = 0;
     atom_cassette_eject(m);
@@ -104,16 +173,17 @@ const char *tapeio_insert(atom_t *m, const char *path) {
     if (has_ext(path, ".uef")) {
         uint32_t t0 = time_us_32();
         size_t len = 0;
-        const char *err = load_uef(m, path, &len);
+        bool protect = false;
+        const char *err = load_uef(m, path, &len, &protect);
         if (err) {
             atom_cassette_eject(m);
             printf("  tape         : %s: not inserted: %s\n", path, err);
             return err;
         }
         if (!uef_first_name(s_uef, len, s_first)) s_first[0] = 0;
-        printf("  tape         : %s: %u bytes of UEF in the deck, stopped, first file "
-               "\"%s\", %lu us\n", path, (unsigned)len, s_first,
-               (unsigned long)(time_us_32() - t0));
+        printf("  tape         : %s: %u bytes of UEF in the deck, stopped, %s, first file "
+               "\"%s\", %lu us\n", path, (unsigned)len, protect ? "protected" : "writable",
+               s_first, (unsigned long)(time_us_32() - t0));
     } else {
         /* The menu lists only files that are there; a settings file or a
          * build's boot tape may name anything (§11.7). */
@@ -276,12 +346,6 @@ static void new_path(const char *name) {
     snprintf(s_path, sizeof s_path, TAPE_DIR "/%s.atm", n ? stem : "NONAME");
 }
 
-static FRESULT write_all(const void *p, UINT len) {
-    UINT n = 0;
-    FRESULT fr = f_write(&s_file, p, len, &n);
-    return (fr == FR_OK && n != len) ? FR_DISK_ERR : fr;
-}
-
 static void serve_save(atom_t *m, const char *name) {
     uint32_t t0 = time_us_32();
     atm_header_t h;
@@ -325,10 +389,57 @@ static void serve_save(atom_t *m, const char *name) {
     }
 }
 
+const char *tapeio_new(atom_t *m) {
+    /* The tape coming out first, since its image is in the buffer this
+     * one is about to be written from. */
+    const char *err = tapeio_insert(m, NULL);
+    if (err) return err;
+    (void)f_mkdir(ATOM_DIR);
+    (void)f_mkdir(TAPE_DIR);
+    static FILINFO fi;
+    unsigned n = 1;
+    for (; n < 100u; n++) {
+        snprintf(s_path, sizeof s_path, TAPE_DIR "/TAPE%02u.uef", n);
+        if (f_stat(s_path, &fi) == FR_NO_FILE) break;
+    }
+    if (n == 100u) return "NO FREE NAME";
+
+    static const uint8_t blank[UEF_HEADER_LEN + 8] = {
+        'U', 'E', 'F', ' ', 'F', 'i', 'l', 'e', '!', 0, 0x0A, 0x00,   /* version 0.10 */
+        0x17, 0x01, 2, 0, 0, 0, 0x2C, 0x01,                           /* &0117: 300 baud */
+    };
+    FRESULT fr = f_open(&s_file, s_path, FA_WRITE | FA_CREATE_NEW);
+    if (fr == FR_OK) {
+        fr = write_all(blank, sizeof blank);
+        FRESULT fc = f_close(&s_file);
+        if (fr == FR_OK) fr = fc;
+    }
+    if (fr != FR_OK) {
+        printf("  tape         : new tape %s FAILED (FatFs error %d)\n", s_path, (int)fr);
+        return "WRITE FAILED";
+    }
+    char path[ATOM_PATH_MAX];
+    memcpy(path, s_path, sizeof path);
+    return tapeio_insert(m, path);
+}
+
 bool tapeio_serve(atom_t *m, char loaded[ATOM_ATM_NAME_LEN + 1]) {
     loaded[0] = 0;
     const tape_t *t = atom_tape_pending(m);
     if (!t) return false;
+
+    /* The recorder stopped at the end of a save (§11.3). */
+    if (t->op == TAPE_RECORDED) {
+        if (storage_mount() == 0) {
+            (void)tapeio_write(m);
+            storage_unmount();
+        } else {
+            printf("  tape         : recording: no card; kept in the deck, written when "
+                   "it next leaves it\n");
+        }
+        atom_tape_written(m);
+        return false;
+    }
 
     /* The name outlives the request, which completing clears. */
     char name[TAPE_NAME_MAX + 1];

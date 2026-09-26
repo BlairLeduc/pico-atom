@@ -29,6 +29,7 @@ set(PICO_ATOM_CORE_SOURCES
     src/core/sha1.c
     src/core/snappool.c
     src/core/snapshot.c
+    src/core/status.c
     src/core/tape.c
     src/core/uef.c
     src/core/via6522.c
@@ -145,6 +146,14 @@ else()
     if (PICO_ATOM_BOOT_TAPE)
         target_compile_definitions(pico-atom PRIVATE
             PICO_ATOM_BOOT_TAPE="${PICO_ATOM_BOOT_TAPE}")
+    endif()
+
+    # A new tape in the deck at boot instead, as the menu's New tape makes
+    # one, to record onto over the UART (design.md §11.3). Each boot of
+    # such a build leaves another TAPEnn.uef on the card.
+    option(PICO_ATOM_BOOT_NEW_TAPE "Insert a new tape at boot" OFF)
+    if (PICO_ATOM_BOOT_NEW_TAPE)
+        target_compile_definitions(pico-atom PRIVATE PICO_ATOM_BOOT_NEW_TAPE=1)
     endif()
 
     # The same for a disc image in drive 0 (src/port/discio.h).

@@ -129,8 +129,11 @@ typedef struct {
 /* Power on: no discs, heads at track 0, nothing in progress. */
 void i8271_init(i8271_t *f);
 
-/* The RESET pin: the command in progress is dropped. Discs, heads and
- * the special registers stay. */
+/* The RESET pin: the command in progress is dropped, and the head
+ * unloads, since the drive control outputs go inactive, so READY drops
+ * and the DOS reads the catalogue afresh. Discs, the heads' tracks and
+ * the other special registers stay. BREAK resets the chip (atom_reset),
+ * and so does the DOS's entry at #E000. */
 void i8271_reset(i8271_t *f);
 
 uint8_t i8271_read(i8271_t *f, uint8_t reg, uint64_t now);

@@ -433,6 +433,12 @@ DMA storage and peak heap together (hardware notes §2.3).
 | Stacks, both cores | 4,096 | in the scratch banks |
 | **Total** | **~255 KiB** | **49 % of 520 KiB** |
 
+M11 added about 2.2 KiB to `.bss`, which is now 230,676 bytes: the 2 KiB
+buffer `settings_rewrite()` returns its text in, the recorder's state in
+`g_atom` (72,952 to 73,016 bytes), and the status line's six bytes in each
+of the three snapshots (`g_pool`, 18,492). A recording adds nothing, since it
+goes into the UEF deck.
+
 The MC6847 character ROM is `const` and stays in flash. The largest items that
 are not the machine are the UEF deck and buffers that sit idle once the guest
 runs (the ROM load buffer and the M3 scene), which is where to look first if
@@ -604,6 +610,25 @@ with no underruns and no late refills. Removing only the PB7 lines from the
 first build recovered another 1 %, but a build with M9's tick shape still
 stayed about 1 % above M9, so part of what the countdown won is outside the
 tick.
+
+**At M11** the four workloads were run against two controls in one sitting:
+the same build with only the recorder's hook on the port C write removed
+(§11.3), and the committed tree before M11. Host cycles per instruction on a
+Plus 2 W, 2026-09-26:
+
+| Workload | M11 | M11 without the hook | before M11 |
+|---|---:|---:|---:|
+| idle | 205.9 | 206.5 | 206.2 |
+| compute | 163.0 | 164.6 | 164.0 |
+| scroll | 224.6 | 225.0 | 222.8 |
+| bell | 147.0 | 147.5 | 147.3 |
+
+The hook costs nothing measurable: M11 read 0.2–1.0 % faster than the build
+without it, which is layout, not the hook. Against the tree before M11 every
+workload is within 1 %, scroll the most at +0.8 %, inside the ~2 % spread of
+hardware notes §9.1. M11 and the hookless build were each run twice and read
+within 0.1 both times; a second run of the tree before M11 was lost to the
+Debug Probe dropping off USB. The control read 36,620 Hz in every row.
 
 ### 6.4 Interrupts and reset
 
@@ -819,11 +844,45 @@ it leaves three useful regions:
 The bands are drawn once at startup and touched only when their contents change,
 so they cost nothing per field — the point of hardware notes §4.7's "cost is per
 pixel, not per present". As built, the top band is never drawn after
-`lcd_init`, and the status band does not exist yet. With the border on (§8.7)
+`lcd_init`, and the status band holds M11's status line (below). With the border on (§8.7)
 their 48 rows nearest the rectangle are the border's. A nearest-neighbour
 320×240 at (0,40) was planned as an option and has not been built; it would be
 56 % more pixels on the wire for a 1.25× stretch with visibly uneven pixel
 doubling.
+
+**The status line, built at M11.** The status band is one line of text: 40
+cells of the character ROM's 8×12, in the panel's bottom 16 rows, the cells
+at y = 306–317 (`ATOM_STATUS_Y`). The border never fills those rows (§8.7), so
+the line sits beside the border and takes nothing from it. It says what the
+Atom's own screen cannot:
+
+- the deck, when a UEF is in it: `PLAY`, `STOP`, `END` or `REC`, how far
+  through the tape it is, the tape's name, and the turbo ratio while it runs
+  unpaced (§11.3). While recording, the percentage is how much of the deck's
+  64 KiB the tape takes. `FULL` replaces `REC` when that runs out, and
+  `PROTECTED` says the last try to record was refused. Bytes the recorder
+  could not frame follow as `3 BAD`;
+- each drive whose head is loaded, by its image's name, at the right: `D0
+  GAMES1` (§11.4). The tape's name is shortened to leave them room.
+
+When there is nothing to say, the line is blank. Core 1 never reads guest
+state while the 6502 runs (§4.2), so what the line needs travels in the
+snapshot: six bytes, `atom_status_t` (`src/core/status.h`), with the deck's
+state and position, the heads, the recorder's errors and the turbo ratio.
+The names are core 1's already, from `tapeio` and `discio`. `status_format()`
+makes the text, in the core so that `test_status` holds it, and the
+presenter's `display_status()` draws it **only when its text changes**. A
+change is 3,840 pixels, under 1 ms of wire (§8.4). Core 0 moves the tape's
+position and the turbo ratio at most once a wall-clock second; a change of
+state shows at once. The line is blanked while the menu is open, since the
+menu can change what it says, and the first present after it closes draws it
+again. A setting turns the line off (`status`, §11.7, and the
+Display page). It is drawn green on black in the screen's palette, so in
+mono it is the screen's grey, and a change of palette redraws it.
+On a Plus 2 W on 2026-09-26 the line showed a UEF's `PLAY`, `STOP` and
+position, and `D0 …` during a disc access, which went at once on BREAK. Without a character ROM it
+is not drawn. The perf summary §12.3 once meant for this band stays in the
+heartbeat.
 
 ### 8.3 Row generation
 
@@ -985,8 +1044,9 @@ panel's outer 16 rows, top and bottom, stay black. That is 43,008 pixels,
 seven eighths of the rectangle, so it is filled **only when its colour changes**: a mode
 change between text and graphics, or of CSS in graphics. It is not filled on
 every full redraw. With the setting off, the border is never filled, and
-the panel around the rectangle stays black from `lcd_init`, as before M10. A
-future status band will take its rows back from the border.
+the panel around the rectangle stays black from `lcd_init`, as before M10.
+M11's status line (§8.2) is in the outer 16 rows at the bottom, so the
+border keeps its 48.
 
 **The dark background.** The VDG does not put text on black. Its datasheet
 (Display Modes, p. 18) says characters "may be either green on a dark green
@@ -1356,7 +1416,7 @@ a game's to have) or `CTRL`, `SHIFT` or `REPT`.
 
 **In the menu** the item is `KEYS < STANDARD >`, and left/right cycles through
 the built-in layouts, then the card's. The choice is part of the settings, and
-is persisted when §11.6 exists. It is not part of a snapshot (§11.5): a snapshot
+M11's *Save settings* writes it to the settings file (§11.6). It is not part of a snapshot (§11.5): a snapshot
 is guest state, and a layout is a fact about the host's keyboard.
 
 **On the device.** On a Plus 2 W on 2026-09-23 `LOAD "GALAXI"` over the UART
@@ -1592,8 +1652,8 @@ as on the real machine. UEFs are almost always gzipped. `inflate.c` decodes gzip
 straight into that buffer, a bit at a time as puff does, with no separate
 window, because back-references can be read from the output itself.
 **While a UEF is in the deck the OSLOAD trap stands aside**, so every load
-reads the signal. Saves still go to `.atm` files: recording at signal level is
-not modelled.
+reads the signal. Since M11 the OSSAVE trap does too, and a save is recorded
+onto the tape (below).
 
 **Turbo** is what §6.3's headroom buys. While a tape plays, core 0 stops
 pacing on the PCM queue and runs the guest flat out. The guest's own samples
@@ -1630,6 +1690,106 @@ meaning, above, and the game's need for RAM at `#4000`–`#7FFF` (§7.2).
 dynamic blocks, and the walker and cassette to the spec's arithmetic, edge by
 edge, to the cycle.
 
+**Recording, built at M11.** Recording follows the rule for loading. With a
+UEF in the deck, OSSAVE's trap stands aside too, and the kernel's own writer
+drives the signal onto the tape. With an `.atm` or nothing in the deck, phase 1
+still saves to an `.atm`. The recording is **appended to the end of the tape
+in the deck**. There is no overwriting in the middle and no position control:
+one file follows another, as on a tape that is only ever recorded forward, and
+recording leaves the tape at its end, so loading what was just saved means a
+rewind first. The menu's Tape page has *New tape*. It creates `TAPEnn.uef` in
+`/atom/tapes/`, holding only &0117 at 300 baud, and puts it in the deck.
+
+- **Write protection.** A tape with FAT's read-only attribute is protected,
+  as a disc is (§11.4). This is the Atom's version of a cassette's broken-off
+  tab. So is a gzipped image. The emulator writes no gzip, and an image off
+  the archive is the user's copy, not a blank. `tapeio` inserts a protected
+  tape with `atom_cassette_insert` and a writable one with
+  `atom_cassette_insert_rw`, which gives the deck its buffer and room. The
+  recorder refuses to start on a protected tape, the ROM's writer drives the
+  port into nothing, and the status line and the menu's status row say
+  `PROTECTED`.
+- **The recorder** is the other half of `cassette.c`, in guest cycles like
+  the player. The line out is port C bit 0, or the 2.4 kHz reference while
+  bit 1 gates it on. It is brought up to date on a port C write, once a field,
+  and when recording stops, and never per instruction. A gated run is counted
+  from the reference's period: every multiple of 208 cycles is an edge, so a 1
+  bit's sixteen short half-cycles cost a few steps, not sixteen. Half-cycles
+  are classified by length, with the boundaries halfway between: short (2400
+  Hz, 208 cycles) from 156 to 311, long (1200 Hz, 416) from 312 to 519, and
+  anything else a gap. The recorder decodes them as the reader at `#FBEE`
+  would: a start bit, eight bits and a stop bit, each eight long half-cycles
+  for a 0 or sixteen short for a 1. The result is standard chunks after the
+  tape's current end: &0110 for carrier, &0100 for data and &0112 for gaps. An
+  &0100 chunk's length is kept right after every byte, so the image is whole
+  at any moment. That is the decoder `test_cassette` has proved against the
+  ROM's `SAVE` since M8, moved into the core and turned from a buffer of edges
+  into a state machine.
+- **The pause between bytes is not carrier.** The writer leaves the
+  reference gated on between the bytes of a block (`#FC88` waits a period
+  before each start bit), so every byte is followed by a cycle or two of
+  2400 Hz. Written as it stands, that is an &0110 chunk between every two
+  &0100 bytes, fifteen bytes of chunk per byte of data, and it is what
+  `test_cassette`'s own decoder still writes. The recorder leaves out a run of
+  fewer than 32 short half-cycles between two bytes, and the bytes stay in
+  one &0100 chunk. The reader needs no tone there: it samples only the eight
+  data bits and then waits for eight long half-cycles in a row (`#FBF4`), so
+  it has the whole stop bit to get back. A 48-byte `SAVE` makes a 104-byte
+  image this way, against 748. The leader and the half second of tone before
+  a block's data are longer and are kept.
+- **A byte that does not frame is dropped and counted**, in the heartbeat,
+  on the status line and on the menu's status row. A saver with its own
+  non-CUTS format cannot be written as &0100, and representing it is not
+  planned. Nothing in the archive's own savers is known to need it.
+- **The deck follows the kernel's cues** as it does for `PLAY TAPE`: the
+  prompt at `#FC40` with A = 6 is `RECORD TAPE`, and the key that answers it
+  (`#FC79`) starts the recorder. It stops at OSSAVE's exits: `#FB39`, the PLP
+  after the named path's record loop, and `#FAB9`, after the nameless path's
+  bytes. The plan named `#FB78`, the switch-off after the last block, but
+  that runs after every block of a file. The named path's two seconds of
+  silence after its last block are recorded before the exit, as an &0112. A
+  saver that never calls OSSAVE gets no cue. The menu's *Record*/*Stop
+  recording* works the recorder by hand.
+- **The card is written when the recorder stops**, not at power-off. At the
+  stop cue the CPU stalls on `TAPE_RECORDED`, a tape request that is the
+  deck's rather than the guest's, as it stalls for a tape call (§11.2). Core 1
+  writes the whole image to `<tape>.new`, unlinks the tape and renames the new
+  file into place, as snapshots are written (§11.5), and hands the machine
+  back. Inserting a tape whose file is missing takes its `.new`, which is what
+  a card pulled between the unlink and the rename leaves. A pulled card or
+  power lost after `SAVE` returns cannot lose the file, then. A recording
+  stopped by hand is written by the menu at once, and a tape taken out of the
+  deck with a recording on it is written before it goes.
+- **Capacity.** The recording goes into the deck's 64 KiB buffer after the
+  image already there, so no memory is added (§5). A tape that fills it has
+  run out: the recorder writes nothing more, the status line says `FULL`, and
+  what fits is written to the card at the stop cue as usual. At 300 baud, 30
+  bytes a second, a new tape holds about 36 minutes of data.
+- **Turbo** applies while recording as while playing. The recorder is
+  clocked in guest cycles, so a save finishes sooner by the headroom, and the
+  guest cannot tell.
+
+`test_cassette` records through the core's recorder as well as its own. The
+test's decoder stays as the independent model the core's output is compared
+against: the ROM's `SAVE` onto a new tape must give the same bytes, with no
+framing errors, from both. A second file is appended after it, and after a
+power cycle both load back through the ROM's `LOAD` by name, the second first,
+then the first after a rewind. A protected tape refuses, stays byte for byte
+as it was, and `SAVE` still returns. A tape with 40 bytes of room fills,
+stays a whole image and is still written out, and `SAVE ""`, which ends at
+the other exit with the reference still gated on, loads back through
+`LOAD ""`. The recorder's hook sits on the port C write, in the bus's slow
+path, behind one test of `rec.on`, and costs nothing measurable when nothing
+is recording (§6.3's M11 table).
+
+A build configured with `-DPICO_ATOM_BOOT_NEW_TAPE=ON` boots with a new tape
+in the deck, as `PICO_ATOM_BOOT_TAPE` boots with a named one, so a recording
+can be made over the UART.
+
+**On the board**, 2026-09-26, a Plus 2 W: *New tape* made `TAPE01.UEF`, a
+BASIC program `SAVE`d onto it, and after a power cycle `LOAD` read it back and
+it ran.
+
 ### 11.4 Disc, phase 3
 
 AtomDOS: the `dosrom.rom` at `#E000` plus an 8271 FDC at `#0A00`, backed by
@@ -1661,7 +1821,14 @@ loaded. A disc is changed from the menu with the guest paused, so no guest time
 passes, and an unload that was counting down happens then instead. Without
 that, a swapped disc listed the old catalogue. A head the DOS has loaded itself
 (`#E75B`, writing the drive control output) to wait for READY is not unloaded,
-so a disc put into an empty drive lets a waiting `*CAT` go on.
+so a disc put into an empty drive lets a waiting `*CAT` go on. A reset of
+the chip, BREAK (§6.4) or the DOS's own pulse at `#E000` on `*DOS`, unloads
+the head too, on the understanding that the 8271's drive control outputs go
+inactive with RESET (not yet checked against the datasheet). On a Plus 2 W on
+2026-09-26 BREAK just after a disc access cleared the status line's `D0` at
+once. Before this, a
+BREAK within the idle count cancelled the count and left the head loaded
+until the next command, and the status line (§8.2) went on naming the drive.
 
 In non-DMA mode each byte raises INT with the non-DMA data request, and INT is
 the Atom's NMI (§6.4). The DOS's handler checks bit 2 of the status, moves the
@@ -1751,13 +1918,89 @@ program, restored into a machine that has been doing something else and run
 for 150 fields, must arrive at the same RAM, CPU, VIA and 8255 state as the
 original run on. It also checks each refusal leaves the machine untouched.
 
-### 11.6 Internal flash
+### 11.6 Saving the menu's settings
 
-Configuration only, written **only from the menu**, with audio stopped and via
-`flash_safe_execute` with `flash_safe_execute_core_init()` on core 1. No flash
-writes inside the frame loop, ever: erase takes tens of milliseconds with XIP
-offline and interrupts masked, which is longer than the audio deadline and is
-the one accepted violator of it (hardware notes §5.4, §7.2).
+**Built at M11, on the card, not in flash.** This section first put the
+configuration in internal flash, written from the menu with
+`flash_safe_execute`. That is dropped. The settings file (§11.7) already says
+what the machine powers up with, so the menu saves into it, and the emulator
+writes no flash at all:
+
+- One place holds the settings, and the user can read and edit it on any
+  computer. A flash copy would be a second source of truth that disagreed with
+  the file, and §11.7 would need a rule for which one wins.
+- A flash erase takes tens of milliseconds with XIP offline and interrupts
+  masked. That is longer than the audio deadline, and it would have been the one
+  accepted violation of it (hardware notes §5.4, §7.2). A card write has no such
+  cost.
+- The settings survive reflashing the firmware.
+
+**Saving is a menu item, *Save settings*, never automatic.** Trying a setting
+costs nothing, and closing the menu keeps it until power-off, as now. Writing
+the card is a separate, deliberate act. The menu already holds the card
+mounted (§13), so no new handoff is needed.
+
+**What is written:** the keys the menu sets. These are `screen`, `border`,
+`background`, `status`, `backlight`, `volume`, `keys`, `tape`, `drive0` and
+`drive1`. `upper_ram`, `dos` and `turbo` have no menu item, so their lines
+are left as the user wrote them. The tape is saved by name, not position: at
+the next boot it goes in stopped, at its start, as §11.7 says. A tape or
+disc in `/atom/tapes/` or `/atom/discs/` is written as a bare name, anything
+else as a path (`settings_card_name()`). A layout chosen by a tape's load
+(§10.5) is not the user's choice, so while one is in force `keys` is saved
+as the file had it. The backlight is saved only once the file or the menu
+has set it; until then the southbridge keeps its own level. `main.c` keeps
+what the file said at boot, and each save updates it, so the keys the menu
+does not set are saved from there.
+
+**The file is edited, not regenerated.** It is the user's text, and a save
+must leave it recognisably theirs. `settings_rewrite()` in
+`src/core/settings.c` takes the file's text and the settings. It returns the new
+text, in a static buffer of `ATOM_SETTINGS_FILE_MAX` (§5), with no I/O:
+
+- A key already in the file keeps its line. It keeps its place, its
+  indentation and any trailing comment, and only the value is replaced.
+- A key not in the file is appended only if its value differs from what the
+  machine powers up with without it. The backlight counts as changed once the
+  menu has moved it. So a short file stays short, and a default the user never
+  touched keeps following the firmware's.
+- Comments, blank lines, lines for keys the menu does not set, and lines that
+  do not parse are copied as they stand. The status row already names the
+  first problem, and a save does not correct the user's typing.
+- The file's own line ending is kept, CRLF or LF, and appended lines use it.
+- **A duplicate key refuses the save.** §11.7 already treats it as an error,
+  and there is no telling which line the user meant. So does a result longer
+  than `ATOM_SETTINGS_FILE_MAX`. The status row says why, and the file is not
+  touched.
+- A value that already says the same keeps its spelling: `screen = color`
+  stays `color`, and a tape named by its full path stays a path. Only a line
+  whose value now says something else is edited, so a second save changes
+  nothing.
+- A line that names a key but does not parse is not that key's line. It is
+  copied as it stands, and the key is appended as though it were missing.
+- A comment keeps its column when a value changes, if the new value leaves
+  room, so a file laid out as names, values and comments stays lined up. A
+  value put where there was none goes one space after the `=`, as the other
+  values are, not against the comment, and a value too long for the column
+  pushes its comment on to one space after it, since a `#` straight after a
+  value would join it. A gap with a tab in it is kept as it was. On the board
+  the first version put `TAPE01.uef` in the comment column of the README's
+  `tape =` line, which is how this was found.
+- The new text is parsed with the ordinary parser before anything is
+  written, and must give the menu's settings back, or the save is refused as
+  `WOULD NOT READ BACK`. A path the format cannot hold, one with ` #` in it,
+  is refused this way. A rewrite that disagrees with its own reader is a bug,
+  and it is caught on the board as well as in `test_settings`.
+
+`settingsio.c` writes the result to `/atom/pico-atom.new`, unlinks the file and
+renames the new one into place, as snapshots are written (§11.5), so a pulled
+card leaves the old file or the new one and never half of either. The file is
+read from the `.new` at boot if a save was cut off between the unlink and the
+rename. On a Plus 2 W on 2026-09-26 settings saved from the menu, with
+`TAPE01.UEF` in the deck, came back after a power cycle, the tape in the deck
+with them. A card without the file gets a new one: a comment line naming the
+emulator, then the lines that differ. With no card, the status row says
+`NO CARD` and nothing else changes.
 
 ### 11.7 The settings file
 
@@ -1774,6 +2017,7 @@ still hold a `#`:
 | `screen` | `colour`, `mono` (§8.7) | `mono` |
 | `border` | `on`, `off` (§8.7) | `on` |
 | `background` | `black`, `dark`: text on dark green or orange (§8.7) | `black` |
+| `status` | `on`, `off`: the status line (§8.2) | `on` |
 | `backlight` | 1–15, the menu's steps of 16 (hardware notes §4.11) | the southbridge's own |
 | `volume` | 0–8 | 8 |
 | `keys` | `standard` or a layout's name (§10.5) | `standard` |
@@ -1808,10 +2052,10 @@ case the first problem is logged and kept for the menu's status row
 nothing about the file depends on the order of its lines. The parser is tested
 on the host (`test_settings`).
 
-**The emulator never writes the file.** It is the user's text, with the user's
-comments, and a menu change lasts until power-off. Persisting menu changes is
-still §11.6's job, and when that exists it must decide how it relates to this
-file.
+**The emulator writes the file only when asked.** It is the user's text, with
+the user's comments, and a menu change lasts until power-off. The one
+exception, since M11, is the menu's *Save settings*, which edits the file in
+place and keeps everything the user wrote (§11.6).
 
 ---
 
@@ -1919,8 +2163,12 @@ never sacrificed to presentation.
 ### 12.3 Instrumentation
 
 A perf block, reported over UART1 (115200 8-N-1, TX GP4, RX GP5) as a heartbeat
-every five seconds (`main.c`). It was also to be summarised in the status band,
-which does not exist yet.
+every five seconds (`main.c`). It was also to be summarised in the status band.
+M11's status line (§8.2) leaves it out: the line is for the deck and the drives,
+and the numbers stay in the heartbeat, where they can be written to a file.
+The heartbeat's `cassette` line gained the recorder at M11: whether the tape
+is writable or recording, the bytes recorded and those that did not frame,
+the image's size against the deck's room, and whether the card has it yet.
 
 | Counter | Why | As built |
 |---|---|---|
@@ -1981,9 +2229,14 @@ The title row ends in the battery's charge, `BAT 87%`, or `CHG 87%` while it
 charges: southbridge register `0x0B` (§6), read when the menu opens and every
 5 s after, since the MCU refreshes it only every 20 s. A failed read shows
 nothing. Verified on a Plus 2 W on 2026-09-26.
+M11 added *Save settings* to the main page, which writes the menu's settings
+into the settings file (§11.6), *New tape* and *Record*/*Stop recording* to the
+Tape page (§11.3), and *Status line* on or off to the Display page (§8.2). The
+status row, when the menu opens, says what the recorder last had to say: a
+protected tape, a full one, a recording not yet on the card, or bytes that did
+not frame.
 The table below is the full intent; machine and display settings wait
-for the milestones that give them something to set, and settings are not yet
-persisted to flash (§11.6). What the machine powers up with comes from the
+for the milestones that give them something to set. What the machine powers up with comes from the
 settings file (§11.7), and the menu's status row names the file's first problem.
 
 | Menu | Does |
@@ -1996,10 +2249,11 @@ settings file (§11.7), and the menu's status row names the file's first problem
 | Display | native 256×192 vs scaled 320×240, colour set override, snow |
 | System | backlight, volume, perf overlay, board and ROM identification, about |
 
-Of that table, as built: Tape (without record or a position control), Keys,
-Disc and Snapshot are there; Display has colour or mono, the border and the
-backlight; volume and Reset are on the main page. The Machine page, the
-scaled display, snow, the perf overlay and the about page are not built. The
+Of that table, as built: Tape (without a position control, since recording
+only appends), Keys, Disc and Snapshot are there; Display has colour or mono,
+the border, the background, the status line and the backlight; volume, Reset
+and *Save settings* are on the main page. The Machine page, the scaled
+display, snow, the perf overlay and the about page are not built. The
 machine's configuration is set by the settings file instead (§11.7).
 
 The backlight is southbridge register `0x05`, stepped to multiples of 16 and
@@ -2049,17 +2303,18 @@ pico-atom/
 │   │   ├── keylayout.c         # the .map parser (§10.5)
 │   │   ├── tape.c/.h           # phase 1: the OSLOAD/OSSAVE trap, ATM (§11.2)
 │   │   ├── uef.c/.h            # phase 2: a UEF image as half-cycles (§11.3)
-│   │   ├── cassette.c/.h       # the half-cycles on port C, in guest cycles
+│   │   ├── cassette.c/.h       # the half-cycles on port C, in guest cycles; the recorder
 │   │   ├── inflate.c/.h        # gzip, for UEF images
 │   │   ├── snapshot.c/.h       # §11.5's format
-│   │   ├── settings.c/.h       # every default, and /atom/pico-atom.cfg (§11.7)
+│   │   ├── settings.c/.h       # every default, /atom/pico-atom.cfg, and its rewrite (§11.6, §11.7)
+│   │   ├── status.c/.h         # the status line's bytes and text (§8.2)
 │   │   ├── sha1.c/.h           # ROM identity
 │   │   └── romset.c/.h         # the ROM slots of §11.1
 │   └── port/                   # PicoCalc + SDK
 │       ├── main.c              # bring-up, core 0's field loop, core 1's loop, the park/handoff
 │       ├── board.c/.h          # clocks, board identification
 │       ├── lcd.c/.h            # ST7789P init, windows, DMA blit
-│       ├── display.c/.h        # snapshot diff, band present, mono palette, border
+│       ├── display.c/.h        # snapshot diff, band present, mono palette, border, status line
 │       ├── audio.c/.h          # PWM slice, chained DMA, SPSC queue
 │       ├── log.c/.h            # core 0's UART lines, drained by core 1 (§9.4)
 │       ├── southbridge.c/.h    # i2c1 register layer: read, write, busy flag, errors
@@ -2067,10 +2322,10 @@ pico-atom/
 │       ├── sd.c/.h  diskio.c   # SPI0 and FatFs's disk layer; FatFs is copied from the SDK
 │       ├── storage.c/.h        # mount and unmount, once per piece of card work
 │       ├── roms.c/.h           # /atom/roms/ into the machine; the no-ROMs page
-│       ├── tapeio.c/.h         # tape calls, the tape list, the deck's buffer (§11.2, §11.3)
+│       ├── tapeio.c/.h         # tape calls, the tape list, the deck's buffer, recordings (§11.2, §11.3)
 │       ├── discio.c/.h         # sector requests off /atom/discs/ (§11.4)
 │       ├── snapio.c/.h         # snapshot slots (§11.5)
-│       ├── settingsio.c/.h     # /atom/pico-atom.cfg at boot (§11.7)
+│       ├── settingsio.c/.h     # /atom/pico-atom.cfg at boot, and Save settings (§11.6, §11.7)
 │       ├── keymapio.c/.h       # the card's layouts (§10.5)
 │       └── menu.c/.h  textpage.c/.h   # the Alt+M menu (§13)
 ├── test/
@@ -2088,7 +2343,7 @@ pico-atom/
 │   │   ├── test_field.c        # §12.1: FS seen low and escaped; a redraw after FS finishes by the field's end
 │   │   ├── test_present.c      # §8.4 dirty bands by execution; §4.2 snapshot pool
 │   │   ├── test_audio.c        # §9.3, every sample against an independent model
-│   │   ├── test_keymap.c  test_settings.c
+│   │   ├── test_keymap.c  test_settings.c  test_status.c
 │   │   ├── test_tape.c  test_uef.c  test_cassette.c
 │   │   ├── test_snapshot.c  test_disc.c
 │   │   └── test_boot.c         # the real MOS: typing, the bell, RND, layouts
@@ -2244,17 +2499,18 @@ Each milestone ends with something that runs and something that is measured.
 | **M8** | Tape phase 2 (UEF at signal level), turbo clock | a UEF image that phase 1 cannot load, loads — **done** 2026-09-23 on a Plus 2 W: Chuckie Egg's two-part UEF, 45 blocks through its own BASIC loader, loaded at 2.7–2.8× under turbo and was played (§11.3). On the host, the kernel's own `SAVE`, recorded at signal level, loads back through its own `LOAD`, and a headerless block loads through a loader phase 1 never sees |
 | **M9** | AtomDOS + 8271, 6522 VIA | an `.ssd` boots — **done** 2026-09-23 on a Plus 2 W: `*DOS`, `*CAT` off a 40-track image, `LOAD"INVADER"` read 19 sectors over tracks 35–37 and ran; `*SAVE` wrote the catalogue and two sectors and `*CAT` then listed the file; a disc changed from the menu was noticed and its catalogue read; Galaxians loaded off `games1.dsk` and was played. A track off the card takes 17–19 ms to read and 25–27 ms to write, with the guest parked; underruns and late refills stayed at zero. The VIA was fitted at M4 (§7.3); its shift register and handshake lines were completed at M10 |
 | **M10** | The whole 6522 (§7.4); monochrome and the VDG border (§8.7) | every VIA mode driven through its pins on the host, and the new state through a snapshot; the mono palette and the border colour asserted by execution; on a Plus 2 W, both settings switched from the menu and seen on the panel, and the perf workloads measured against M9 — **done** 2026-09-23 on a Plus 2 W: both settings switched from the menu and seen on the panel; the perf workloads 3.6–6.2 % faster than M9, after the first build measured 2.5–4 % slower (§6.3) |
+| **M11** | Recording at signal level (§11.3); the status line (§8.2); the menu's settings saved to the settings file (§11.6) | on the host, the ROM's own `SAVE` recorded by the core's recorder onto a new tape, a second file appended, both loaded back by name through the ROM's `LOAD`, and the core's output matching `test_cassette`'s independent decoder; a protected tape refused and left unchanged; `settings_rewrite` keeps comments, trailing comments, unparsed lines and line endings, refuses a duplicate key, and its output parses back to the settings it was given. On a Plus 2 W: a BASIC program `SAVE`d onto a new tape, loaded back by `LOAD` after a power cycle, and the `.uef` loaded in another Atom emulator; the status line seen on the panel through a tape load and a disc access, with the border on and off; a setting changed and saved from the menu, the machine powered up with it, and the file read on a computer with the user's comments intact; the recorder's hook measured against an M10 control with `perf-run.sh` — **done** 2026-09-26, but for the `.uef` in another emulator, which could not be got working. On the host every check passes, `SAVE ""` loading back by `LOAD ""` and a full tape too. On a Plus 2 W: a new tape made from the menu (`TAPE01.UEF`), a BASIC program `SAVE`d onto it, and after a power cycle `LOAD`ed and `RUN`; a read-only tape refusing to record; the status line showing a UEF's `PLAY`, `STOP` and position and `D0 …` after a disc access, gone at once on BREAK, with the border on and off and in colour and mono; settings saved from the menu with `TAPE01.UEF` in the deck, back after a power cycle, and the file read on a computer with its comments intact (a value put into an empty line landed in the comment column, fixed after, §11.6); the recorder's hook costing nothing measurable against a build without it, and M11 within 1 % of the tree before it (§6.3) |
 
 M4 is the milestone that matters; everything before it is scaffolding and
 everything after it is refinement.
 
-Nothing after M10 is named yet. Work since M10, each section saying what was
+Work between M10 and M11, each section saying what was
 checked on the device: the settings file (§11.7); the field split at the VDG's own 262 lines and
 BASIC's `RND` seeded from the board (§12.1, §7.2); powering up in mono with
 the border on, and the border drawn as a frame (§8.7); the host's `Shift` as
 the Atom's SHIFT line on its own (§10.3); and BREAK resetting the VIA and the
-disc controller (§6.4). Still to do: recording at signal level (§11.3), the
-status band (§8.2), and menu changes persisted to flash (§11.6).
+disc controller (§6.4). What was left, recording at signal level, the status
+band and saving menu changes, is M11. Nothing after M11 is named yet.
 
 ---
 

@@ -106,8 +106,12 @@ void ATOM_HOT1(bus_write_slow)(atom_t *m, uint16_t a, uint8_t v) {
             if (reg == 0u || reg == 3u) atom_refresh_ppi_inputs(m);
 
             /* Port C and the BSR path both reach the speaker bit, and a
-             * mode-set write clears it (§9.3). */
-            if (reg >= 2u) atom_speaker_written(m);
+             * mode-set write clears it (§9.3). They reach the cassette
+             * output too, which costs one test unless recording (§11.3). */
+            if (reg >= 2u) {
+                atom_speaker_written(m);
+                if (__builtin_expect(m->cas.rec.on, 0)) atom_cassette_output(m);
+            }
             return;
         }
         if (IS_VIA(a) && m->cfg.via_fitted) {

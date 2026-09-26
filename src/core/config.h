@@ -36,6 +36,12 @@
 #define ATOM_BORDER_X          32u
 #define ATOM_BORDER_Y          48u
 
+/* §8.2's status line: one row of 40 cells of the character ROM's 8x12,
+ * the panel's full width, in its bottom 16 rows, which the border
+ * never fills (§8.7). The cells are centred in the 16 rows. */
+#define ATOM_STATUS_COLS       40u
+#define ATOM_STATUS_Y         306u
+
 #define ATOM_SNAPSHOT_COUNT     3u  /* §4.2: three, and the third is the point */
 #define ATOM_BAND_ROWS          8u  /* 24 bands over 192 rows (§8.4)      */
 #define ATOM_BAND_COUNT     (ATOM_SCREEN_H / ATOM_BAND_ROWS)

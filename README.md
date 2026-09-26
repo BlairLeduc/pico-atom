@@ -100,8 +100,20 @@ The deck stops again when a `LOAD` finishes and starts at the next
 `PLAY TAPE`, which is what you would do by hand on a real Atom. A loader that
 reads the tape without going through the Atom's `LOAD` needs *Play* from the
 menu. While the tape plays, the Atom runs as fast as the PicoCalc allows,
-about 2.7× real time, and makes no sound. A UEF in the deck takes every load,
-so eject it to go back to `.atm` files. `SAVE` still writes `.atm` files.
+about 2.7× real time, and makes no sound. A UEF in the deck takes every load
+and every save, so eject it to go back to `.atm` files.
+
+**Recording.** With a UEF in the deck, `SAVE "NAME"` records onto it, as onto
+a real cassette. The Atom says `RECORD TAPE`; press a key, and the recording
+is added after everything already on the tape. When the `SAVE` finishes, the
+tape is written back to the card before the Atom carries on. To start a blank
+tape, choose *New tape* on the *Tapes* page: it makes `TAPE01.uef` (or the
+next free number) and puts it in the deck. Recording leaves the tape at its
+end, so choose *Rewind* before loading what you saved. A program that saves
+without the Atom's `SAVE` needs *Record* from the menu, then *Stop
+recording*. A tape can hold about 36 minutes of recording. A UEF that is
+gzipped, or set read-only on your computer, is protected: the `SAVE` goes
+nowhere, and the bottom line says `PROTECTED`.
 
 For example, Chuckie Egg's `cchuck.uef` names `CHUCKIE` as its first file:
 
@@ -164,10 +176,14 @@ are the darkest grey. It also turns the **border** on or off. The border is
 the colour the video chip draws around its picture: black in text modes, and
 green or buff in the graphics modes. **Background** puts text on dark green
 (or dark orange), as the video chip drew it, instead of black. It changes
-nothing in mono, where the chip's dark green was black. The
-backlight is on the same page.
-A change made in the menu lasts until the power goes off. To choose how the
-PicoCalc starts, use the settings file below.
+nothing in mono, where the chip's dark green was black. **Status line** turns
+the line of text along the bottom of the screen on or off. That line shows the
+tape in the deck, whether it is playing, stopped or recording, how far through
+it is, and the speed while it runs fast, and on the right each disc drive
+while it is in use. The backlight is on the same page.
+A change made in the menu lasts until the power goes off, unless you choose
+*Save settings* on the menu's first page, which writes it into the settings
+file below.
 
 **Settings** at power-on come from `/atom/pico-atom.cfg` on the card, if there
 is one. Each line sets one thing, and a setting the file leaves out keeps its
@@ -179,6 +195,7 @@ which is left alone unless the file sets it:
 screen    = mono       # or colour
 border    = on         # or off
 background = black     # or dark
+status    = on         # the line along the bottom; or off
 backlight = 8          # 1-15, as the menu shows it; leave out to keep the last
 volume    = 8          # 0-8
 keys      = standard   # or a layout's name, as the menu shows it
@@ -197,4 +214,14 @@ comment, so a file name may still contain one. If a line is wrong, the PicoCalc
 skips that line and still uses the rest. Something the card does not have, such
 as a layout, tape or disc, is skipped the same way. The menu's bottom row then
 names the first problem, for example `CFG LINE 3: NO SUCH SETTING`.
-The file is read only at power-on, and the menu does not write to it.
+The file is read only at power-on.
+
+*Save settings* on the menu edits this file rather than replacing it. Each
+line it changes keeps its place and its comment, and only the value after the
+`=` changes. A setting the file does not mention is added at the end, but only
+if it differs from the default. Comments, blank lines and anything it does not
+understand are left as they are. It saves the screen, border, background,
+status line, backlight, volume, keys, the tape in the deck and the discs in
+the drives; `turbo`, `upper_ram` and `dos` are only ever what you wrote. If a
+setting appears twice, it saves nothing and says so, since it cannot tell
+which line you meant. With no file on the card it makes one.

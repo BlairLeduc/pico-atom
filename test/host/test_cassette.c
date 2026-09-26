@@ -11,6 +11,12 @@
  * Then the M8 case in miniature (§17): a headerless block read by a
  * loader of its own, which never calls OSLOAD and so is out of phase
  * 1's reach, loads from a UEF.
+ *
+ * And M11's (§11.3): the same SAVE recorded by the core's own recorder
+ * onto a new tape in the deck, with the decoder here kept as the
+ * independent model it must agree with; a second file appended; both
+ * loaded back by name through the ROM's LOAD; a protected tape that
+ * refuses and stays as it was; and a tape that runs out of room.
  */
 
 #include <stdio.h>
@@ -19,6 +25,7 @@
 
 #include "bus.h"
 #include "guest.h"
+#include "status.h"
 #include "test_util.h"
 #include "uef.h"
 
@@ -386,6 +393,185 @@ static int test_two_part(void) {
     return 0;
 }
 
+/* ---- M11: the core's recorder (§11.3) --------------------------------- */
+
+static uint8_t deck[ATOM_UEF_MAX];
+
+/* What the menu's New tape writes: a header and &0117, 300 baud. */
+static size_t new_tape(uint8_t *img) {
+    memcpy(img, "UEF File!\0\x0a\x00", UEF_HEADER_LEN);
+    static const uint8_t baud[8] = { 0x17, 0x01, 2, 0, 0, 0, 0x2C, 0x01 };
+    memcpy(img + UEF_HEADER_LEN, baud, sizeof baud);
+    return UEF_HEADER_LEN + sizeof baud;
+}
+
+/* Every byte on an image's &0100 chunks, in order; every chunk must be
+ * one the recorder is meant to write, and whole. */
+static unsigned data_bytes(const uint8_t *img, size_t len, uint8_t *out, unsigned max,
+                           bool *well_formed) {
+    unsigned n = 0;
+    *well_formed = true;
+    for (size_t at = UEF_HEADER_LEN; at < len;) {
+        if (at + 6u > len) { *well_formed = false; break; }
+        unsigned id = img[at] | (img[at + 1] << 8);
+        uint32_t cl = img[at + 2] | (img[at + 3] << 8) | ((uint32_t)img[at + 4] << 16) |
+                      ((uint32_t)img[at + 5] << 24);
+        if (at + 6u + cl > len || (id != 0x0100 && id != 0x0110 && id != 0x0112 && id != 0x0117))
+            *well_formed = false;
+        if (!*well_formed) break;
+        if (id == 0x0100) {
+            for (uint32_t i = 0; i < cl && n < max; i++) out[n++] = img[at + 6 + i];
+        }
+        at += 6u + cl;
+    }
+    return n;
+}
+
+/* The ROM's SAVE onto whatever is in the deck: a key at RECORD TAPE,
+ * then the fields it takes, with the write-out at its end served as
+ * main.c serves it. The line out is captured for decode() as well.
+ * Returns how many write-outs there were. */
+static unsigned save_to_deck(const char *save, bool *recorded) {
+    guest_type(&g, save);
+    if (!screen_has(&g.m, "RECORD TAPE")) dump_screen(&g.m);
+    *recorded = false;
+    n_edges = 0;
+    rec_level = false;
+    keymatrix_event(&g.k, KEY_EV_PRESSED, 0x0Au);
+    keymatrix_event(&g.k, KEY_EV_RELEASED, 0x0Au);
+    unsigned writes = 0;
+    for (int i = 0; i < 1500; i++) {
+        fields_recorded(1);
+        if (atom_cassette_recording(&g.m)) *recorded = true;
+        const tape_t *t = atom_tape_pending(&g.m);
+        if (t && t->op == TAPE_RECORDED) {
+            writes++;
+            g.m.cas.dirty = false;
+            atom_tape_written(&g.m);
+        }
+        if (writes && !atom_cassette_recording(&g.m) && guest_cursor(&g.m) >= 0) break;
+    }
+    guest_fields(&g, 10);
+    return writes;
+}
+
+static int load_and_run(const char *name, const char *prints) {
+    char cmd[32];
+    snprintf(cmd, sizeof cmd, "LOAD \"%s\"\n", name);
+    guest_type(&g, cmd);
+    CHECK(screen_has(&g.m, "PLAY TAPE"), "LOAD %s asks for the tape", name);
+    guest_tap(&g, 0x0Au);
+    for (int i = 0; i < 3000 && g.m.cas.playing; i++) guest_fields(&g, 1);
+    guest_fields(&g, 30);
+    CHECK(!g.m.cas.ended, "LOAD %s stopped the deck, not the end of the tape", name);
+    guest_type(&g, "RUN\n");
+    CHECK(screen_has(&g.m, prints), "%s loaded off the recording and printed %s", name, prints);
+    if (test_failures) dump_screen(&g.m);
+    return 0;
+}
+
+static int test_record(void) {
+    static uint8_t core[4096], model[4096];
+    bool ok, recorded;
+
+    /* A new tape, as the menu makes one, in a machine as shipped. */
+    guest_boot(&g);
+    size_t blank = new_tape(deck);
+    CHECK(atom_cassette_insert_rw(&g.m, deck, blank, sizeof deck), "a new tape goes in");
+    guest_type(&g, "10 PRINT \"SIGNAL OK\"\n");
+    guest_type(&g, "20 END\n");
+    unsigned w = save_to_deck("SAVE \"PROG\"\n", &recorded);
+    CHECK(recorded, "the key at RECORD TAPE started the recorder");
+    CHECK(g.m.tape.served == 0, "the trap stood aside for a UEF in the deck");
+    CHECK(w == 1, "the recording went to the card once, at the end of SAVE: %u", w);
+    CHECK(!atom_cassette_recording(&g.m), "SAVE's end stopped the recorder");
+    CHECK(guest_cursor(&g.m) >= 0, "SAVE returned to the prompt");
+    CHECK(g.m.cas.rec.errors == 0, "every byte framed: %u did not", (unsigned)g.m.cas.rec.errors);
+    CHECK(g.m.cas.ended, "recording leaves the tape at its end");
+
+    unsigned errors = decode();
+    unsigned nc = data_bytes(deck, g.m.cas.uef.len, core, sizeof core, &ok);
+    printf("  recorded     : PROG by the core, %u bytes in a %u-byte image; model %u bytes, "
+           "%u errors\n", nc, (unsigned)g.m.cas.uef.len, n_bytes, errors);
+    CHECK(ok, "the image is whole, and only &0100, &0110, &0112 and &0117");
+    CHECK(errors == 0 && nc == n_bytes && memcmp(core, bytes, nc) == 0,
+          "the core recorded the bytes the independent decoder read: %u against %u", nc, n_bytes);
+    memcpy(model, bytes, n_bytes);
+    unsigned first = nc;
+
+    /* A second file, appended after the first. */
+    guest_type(&g, "NEW\n");
+    guest_type(&g, "10 PRINT \"SECOND FILE\"\n");
+    guest_type(&g, "20 END\n");
+    w = save_to_deck("SAVE \"TWO\"\n", &recorded);
+    CHECK(w == 1 && recorded, "the second SAVE recorded and went to the card");
+    errors = decode();
+    nc = data_bytes(deck, g.m.cas.uef.len, core, sizeof core, &ok);
+    CHECK(ok && errors == 0, "whole, and the model framed it all");
+    CHECK(nc == first + n_bytes && memcmp(core, model, first) == 0 &&
+          memcmp(core + first, bytes, n_bytes) == 0,
+          "TWO is appended after PROG, which is untouched");
+    char name[14];
+    CHECK(uef_first_name(deck, g.m.cas.uef.len, name) && strcmp(name, "PROG") == 0,
+          "the first file is still PROG");
+    size_t len = g.m.cas.uef.len;
+
+    /* Power off and on: the tape goes in at its start. The second file
+     * first, past the first by name, then the first after a rewind. */
+    guest_boot(&g);
+    CHECK(atom_cassette_insert_rw(&g.m, deck, len, sizeof deck), "the recording goes in");
+    if (load_and_run("TWO", "SECOND FILE")) return 1;
+    atom_cassette_rewind(&g.m);
+    if (load_and_run("PROG", "SIGNAL OK")) return 1;
+
+    /* The same tape protected: RECORD TAPE is answered, and nothing is
+     * recorded and nothing changes. */
+    static uint8_t before[ATOM_UEF_MAX];
+    memcpy(before, deck, len);
+    guest_boot(&g);
+    CHECK(atom_cassette_insert(&g.m, deck, len), "the tape goes in protected");
+    guest_type(&g, "10 PRINT \"NOT RECORDED\"\n");
+    w = save_to_deck("SAVE \"NOT\"\n", &recorded);
+    CHECK(!recorded && w == 0, "a protected tape records nothing and is not written");
+    CHECK(g.m.cas.refused == CAS_REC_PROTECTED, "and says why");
+    CHECK(g.m.cas.uef.len == len && memcmp(deck, before, len) == 0, "the image is unchanged");
+    CHECK(guest_cursor(&g.m) >= 0, "SAVE still returns, into nothing");
+
+    /* A tape with room for less than a file: it runs out, stops
+     * recording, and what it holds is still an image. */
+    guest_boot(&g);
+    blank = new_tape(deck);
+    CHECK(atom_cassette_insert_rw(&g.m, deck, blank, blank + 40u), "a nearly full deck");
+    guest_type(&g, "10 PRINT \"TOO LONG FOR THE TAPE\"\n");
+    w = save_to_deck("SAVE \"FULL\"\n", &recorded);
+    CHECK(recorded && g.m.cas.rec.full, "the tape filled: %u bytes", (unsigned)g.m.cas.uef.len);
+    CHECK(g.m.cas.uef.len <= blank + 40u, "and did not overrun: %u", (unsigned)g.m.cas.uef.len);
+    (void)data_bytes(deck, g.m.cas.uef.len, core, sizeof core, &ok);
+    CHECK(ok, "what it holds is a whole image");
+    CHECK(w == 1, "what it holds went to the card");
+    CHECK(guest_cursor(&g.m) >= 0, "SAVE returned");
+    atom_status_t st;
+    atom_status(&g.m, &st);
+    CHECK(st.deck == STATUS_DECK_FULL, "the status line says FULL after: %u", st.deck);
+    if (test_failures) dump_screen(&g.m);
+
+    /* The nameless format ends at OSSAVE's other exit (#FAB9), with the
+     * reference still gated on; LOAD "" reads it back. */
+    guest_boot(&g);
+    blank = new_tape(deck);
+    atom_cassette_insert_rw(&g.m, deck, blank, sizeof deck);
+    guest_type(&g, "10 PRINT \"NAMELESS\"\n");
+    guest_type(&g, "20 END\n");
+    w = save_to_deck("SAVE \"\"\n", &recorded);
+    CHECK(recorded && w == 1 && !atom_cassette_recording(&g.m), "SAVE \"\" recorded, and went to the card");
+    CHECK(g.m.cas.rec.errors == 0, "every byte framed: %u did not", (unsigned)g.m.cas.rec.errors);
+    len = g.m.cas.uef.len;
+    guest_boot(&g);
+    atom_cassette_insert_rw(&g.m, deck, len, sizeof deck);
+    if (load_and_run("", "NAMELESS")) return 1;
+    return 0;
+}
+
 int main(void) {
     const char *dir;
     if (!guest_find_roms(&dir)) {
@@ -395,5 +581,6 @@ int main(void) {
     if (test_round_trip()) return 1;
     if (test_headerless()) return 1;
     if (test_two_part()) return 1;
+    if (test_record()) return 1;
     TEST_DONE();
 }

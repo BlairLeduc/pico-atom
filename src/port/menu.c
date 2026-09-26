@@ -44,7 +44,7 @@
 #define BKL_MAX   240u
 
 enum {
-    I_RESUME, I_DISCS, I_TAPES, I_SNAPS, I_DISPLAY, I_KEYS, I_VOLUME, I_RESET,
+    I_RESUME, I_DISCS, I_TAPES, I_SNAPS, I_DISPLAY, I_KEYS, I_VOLUME, I_RESET, I_SAVE,
     I_COUNT
 };
 
@@ -52,12 +52,12 @@ enum {
 enum { S_SLOT, S_SAVE, S_LOAD, S_DELETE, S_COUNT };
 
 /* The display page (§8.7). */
-enum { D_COLOUR, D_BORDER, D_BACKGROUND, D_BACKLIGHT, D_COUNT };
+enum { D_COLOUR, D_BORDER, D_BACKGROUND, D_STATUS, D_BACKLIGHT, D_COUNT };
 
 #define TAPE_ROWS 11
 
 /* The tape page's first rows are the deck's controls; the files follow. */
-enum { T_EJECT, T_PLAY, T_REWIND, T_FIRST };
+enum { T_EJECT, T_PLAY, T_REWIND, T_RECORD, T_NEW, T_FIRST };
 
 static struct {
     atom_t          *m;
@@ -100,6 +100,12 @@ static void say(const char *fmt, const char *arg) {
     snprintf(s.status, sizeof s.status, fmt, arg);
 }
 
+/* The deck's state in a word, as the status line has it (§8.2). */
+static const char *deck_word(const cassette_t *cas) {
+    if (cas->rec.on) return cas->rec.full ? "FULL" : "REC";
+    return cas->ended ? "END" : cas->playing ? "PLAY" : "STOP";
+}
+
 /* ---- drawing ------------------------------------------------------------ */
 
 static void draw_main(void) {
@@ -118,6 +124,7 @@ static void draw_main(void) {
         case I_RESET:  snprintf(line, sizeof line, " RESET (BREAK)"); break;
         case I_VOLUME: snprintf(line, sizeof line, " VOLUME < %u >", s.set->volume); break;
         case I_DISPLAY: snprintf(line, sizeof line, " DISPLAY..."); break;
+        case I_SAVE:   snprintf(line, sizeof line, " SAVE SETTINGS"); break;
         }
         textpage_line(s.vram, 2 + i, line, i == s.item);
     }
@@ -127,8 +134,8 @@ static void draw_main(void) {
     const cassette_t *cas = &s.m->cas;
     char deck[12] = "";
     if (cas->loaded) {
-        snprintf(deck, sizeof deck, " %s %u%%", cas->ended ? "END" : cas->playing ? "PLAY" : "STOP",
-                 cassette_percent(cas));
+        snprintf(deck, sizeof deck, " %s %u%%", deck_word(cas),
+                 cas->rec.on ? cassette_room_percent(cas) : cassette_percent(cas));
     }
     snprintf(line, sizeof line, " TAPE IN: %.*s%s", cas->loaded ? 12 : 21,
              ins[0] ? (base ? base + 1 : ins) : "NONE", deck);
@@ -162,6 +169,12 @@ static void draw_tapes(void) {
                                                : cas->playing ? "STOP" : "PLAY");
         } else if (i == T_REWIND) {
             snprintf(line, sizeof line, " (REWIND)");
+        } else if (i == T_RECORD) {
+            snprintf(line, sizeof line, " (%s)", !cas->loaded ? "RECORD: NO UEF IN THE DECK"
+                                               : cas->rec.on ? "STOP RECORDING"
+                                               : !cas->wbuf ? "RECORD: PROTECTED" : "RECORD");
+        } else if (i == T_NEW) {
+            snprintf(line, sizeof line, " (NEW TAPE)");
         } else if (i < T_FIRST + (int)s.n_tapes) {
             const tapeio_entry_t *e = &s_list[i - T_FIRST];
             bool in = strcmp(e->path, tapeio_inserted()) == 0;
@@ -209,6 +222,9 @@ static void draw_display(void) {
             break;
         case D_BACKGROUND:
             snprintf(line, sizeof line, " BACKGROUND      < %s >", s.set->dark_bg ? "DARK" : "BLACK");
+            break;
+        case D_STATUS:
+            snprintf(line, sizeof line, " STATUS LINE     < %s >", s.set->status ? "ON" : "OFF");
             break;
         case D_BACKLIGHT:
             snprintf(line, sizeof line, " BACKLIGHT       < %u >", s.backlight / BKL_STEP);
@@ -370,7 +386,31 @@ static void set_backlight(int dir) {
     if (v < (int)BKL_MIN) v = BKL_MIN;
     if (v > (int)BKL_MAX) v = BKL_MAX;
     s.backlight = (unsigned)v;
+    s.set->backlight = s.backlight / BKL_STEP;
     (void)sb_write(SB_REG_BKL, (uint8_t)v, NULL);
+}
+
+/* The menu's settings into the settings file (§11.6). What the menu
+ * does not set is saved as the file had it; so are the keys while a
+ * tape's load chose them, since the user did not. A tape or disc in its
+ * own folder is saved by its bare name. */
+static void save_settings(void) {
+    if (!s.card) { say(" NO CARD", ""); return; }
+    settings_t out = *s.set->file;
+    out.mono = s.set->mono;
+    out.border = s.set->border;
+    out.dark_bg = s.set->dark_bg;
+    out.status = s.set->status;
+    out.volume = s.set->volume;
+    out.backlight = s.set->backlight;
+    if (!s.set->keys_tape[0])
+        snprintf(out.keys, sizeof out.keys, "%s", s.set->layout ? s.set->layout->name : "");
+    settings_card_name(SETTINGS_TAPE_DIR, tapeio_inserted(), out.tape);
+    for (unsigned d = 0; d < SETTINGS_DRIVES; d++)
+        settings_card_name(SETTINGS_DISC_DIR, discio_inserted(d), out.drive[d]);
+    const char *err = settingsio_save(&out);
+    if (!err) *s.set->file = out;
+    say(err ? " NOT SAVED: %.20s" : " SETTINGS SAVED", err);
 }
 
 /* ---- keys ----------------------------------------------------------------- */
@@ -401,6 +441,7 @@ static void key_main(uint8_t c) {
         case I_DISCS:  open_discs(); break;
         case I_DISPLAY: s.display = true; s.display_sel = D_COLOUR; break;
         case I_RESET:  s.m->cpu.reset_pending = true; s.done = true; break;
+        case I_SAVE:   save_settings(); break;
         }
         break;
     case PC_ESC:
@@ -444,6 +485,11 @@ static void key_display(uint8_t c) {
             if (c != PC_ENTER) set_backlight(c == PC_RIGHT ? 1 : -1);
             break;
         }
+        if (s.display_sel == D_STATUS) {
+            /* Core 1 draws the line; it shows once the menu closes. */
+            s.set->status = !s.set->status;
+            break;
+        }
         if (s.display_sel == D_COLOUR) {
             s.set->mono = !s.set->mono;
         } else if (s.display_sel == D_BACKGROUND) {
@@ -466,6 +512,7 @@ static void key_display(uint8_t c) {
 static void deck(int what) {
     atom_t *m = s.m;
     if (!m->cas.loaded) { say(" NO UEF IN THE DECK", ""); return; }
+    if (atom_cassette_recording(m)) { say(" RECORDING: STOP IT FIRST", ""); return; }
     if (what == T_REWIND) {
         atom_cassette_rewind(m);
         say(" REWOUND", "");
@@ -480,6 +527,35 @@ static void deck(int what) {
     }
 }
 
+/* Recording by hand (§11.3), for a saver that never calls OSSAVE and so
+ * gives no cue. Stopping writes the tape to the card at once. */
+static void record(void) {
+    atom_t *m = s.m;
+    if (!m->cas.loaded) { say(" NO UEF IN THE DECK", ""); return; }
+    if (atom_cassette_recording(m)) {
+        (void)atom_cassette_record(m, false);
+        const char *err = m->cas.dirty ? tapeio_write(m) : NULL;
+        if (err) { say(" NOT WRITTEN: %.18s", err); return; }
+        snprintf(s.status, sizeof s.status, " RECORDED %lu BYTES",
+                 (unsigned long)m->cas.rec.bytes);
+        return;
+    }
+    switch (atom_cassette_record(m, true)) {
+    case CAS_REC_OK:        say(" RECORDING: SAVE, THEN STOP", ""); break;
+    case CAS_REC_PROTECTED: say(" PROTECTED: NOT RECORDING", ""); break;
+    case CAS_REC_FULL:      say(" TAPE FULL", ""); break;
+    default:                say(" NO UEF IN THE DECK", ""); break;
+    }
+}
+
+static void new_tape(void) {
+    if (!s.card) { say(" NO CARD", ""); return; }
+    const char *err = tapeio_new(s.m);
+    if (err) { say(" NO NEW TAPE: %.18s", err); return; }
+    const char *b = strrchr(tapeio_inserted(), '/');
+    say(" IN: %.12s, SAVE ONTO IT", b ? b + 1 : tapeio_inserted());
+}
+
 static void key_tapes(uint8_t c) {
     int last = T_FIRST + (int)s.n_tapes - 1;
     switch (c) {
@@ -487,10 +563,18 @@ static void key_tapes(uint8_t c) {
     case PC_DOWN: if (s.tape_sel < last) s.tape_sel++; break;
     case PC_ENTER:
         if (s.tape_sel == T_EJECT) {
-            tapeio_insert(s.m, NULL);
+            const char *err = tapeio_insert(s.m, NULL);
+            if (err) { say(" NOT WRITTEN: %.18s", err); return; }
             say(" TAPE EJECTED", "");
         } else if (s.tape_sel == T_PLAY || s.tape_sel == T_REWIND) {
             deck(s.tape_sel);
+            return;
+        } else if (s.tape_sel == T_RECORD) {
+            record();
+            return;
+        } else if (s.tape_sel == T_NEW) {
+            new_tape();
+            if (s.card) s.n_tapes = tapeio_list(s_list, ATOM_TAPE_LIST_MAX);
             return;
         } else {
             const tapeio_entry_t *e = &s_list[s.tape_sel - T_FIRST];
@@ -574,7 +658,17 @@ void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram) {
     /* A layout a tape chose says so (§10.5). */
     if (!s.status[0] && s.set->layout && s.set->keys_tape[0])
         snprintf(s.status, sizeof s.status, " KEYS CHOSEN BY %.16s", s.set->keys_tape);
-    /* The settings file's first problem (§11.7), each time it opens. */
+    /* The recorder's last word (§11.3), then the settings file's first
+     * problem (§11.7), each time it opens. */
+    const cassette_t *cas = &m->cas;
+    if (!s.status[0] && cas->loaded) {
+        if (cas->refused == CAS_REC_PROTECTED) say(" TAPE PROTECTED: NOT RECORDED", "");
+        else if (cas->rec.full) say(" TAPE FULL: RECORDING STOPPED", "");
+        else if (cas->dirty) say(" RECORDING NOT ON THE CARD YET", "");
+        else if (cas->rec.errors)
+            snprintf(s.status, sizeof s.status, " %lu BYTES DID NOT FRAME",
+                     (unsigned long)cas->rec.errors);
+    }
     if (!s.status[0] && settingsio_error()[0]) say(" %.30s", settingsio_error());
 
     uint8_t r[2] = { 0, 0 };
@@ -582,6 +676,15 @@ void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram) {
     if (s.backlight < BKL_MIN || s.backlight > BKL_MAX) s.backlight = 128u;
     s.battery = -1;
     (void)read_battery();
+
+    /* The status line describes the running machine, and the menu can
+     * change what it says (§8.2), so it is hidden while the menu is open.
+     * It is drawn only when its text changes, so the first present after
+     * the menu closes draws it afresh. */
+    char blank[ATOM_STATUS_COLS + 1];
+    memset(blank, ' ', ATOM_STATUS_COLS);
+    blank[ATOM_STATUS_COLS] = 0;
+    display_status(blank);
 
     printf("  menu         : open%s\n", s.card ? "" : " (no card)");
     draw();

@@ -12,6 +12,7 @@ set(PICO_ATOM_HOST_TESTS
     test_present
     test_keymap
     test_settings
+    test_status
     test_via6522
     test_audio
     test_uef

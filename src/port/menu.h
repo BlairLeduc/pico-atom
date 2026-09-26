@@ -18,6 +18,7 @@
 
 #include "atom.h"
 #include "keymatrix.h"
+#include "settings.h"
 
 typedef struct {
     unsigned volume;      /* 0-8; core 0 applies it as volume * 32      */
@@ -31,6 +32,11 @@ typedef struct {
     bool     mono;
     bool     border;
     bool     dark_bg;
+    bool     status;      /* the status line (§8.2); core 1 draws it too */
+
+    /* 1-15 once the settings file or the menu has set it; 0 leaves the
+     * southbridge's own level, and a save leaves the file's line. */
+    unsigned backlight;
 
     /* Run unpaced while a UEF plays (§11.3); the settings file's, and
      * not on the menu. */
@@ -41,6 +47,10 @@ typedef struct {
      * applies it once it has the machine back. */
     const keylayout_t *layout;
     char     keys_tape[ATOM_ATM_NAME_LEN + 1];
+
+    /* What the settings file said at boot, updated by each save: the
+     * keys the menu does not set are saved from here (§11.6). */
+    settings_t *file;
 } menu_settings_t;
 
 /* Run the menu until it is closed. `vram` is a page core 1 owns. */

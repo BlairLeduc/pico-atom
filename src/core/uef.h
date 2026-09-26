@@ -79,4 +79,8 @@ bool uef_first_name(const uint8_t *img, size_t len, char name[14]);
 /* How far through the image, 0-100, for the menu. */
 unsigned uef_percent(const uef_t *u);
 
+/* The image is now `len` bytes, with the walker at its end: where a
+ * recording leaves the tape (cassette.h). */
+void uef_to_end(uef_t *u, size_t len);
+
 #endif /* PICO_ATOM_UEF_H */
