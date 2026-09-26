@@ -374,7 +374,11 @@ static void boot_media(const settings_t *b) {
  * deck at its start and the discs back in their drives, as at boot
  * (§11.7), and the layout in force stays. At boot there is no machine to
  * keep, so nothing is checked: a missing ROM is the no-ROMs page.
- * NULL, or why not. */
+ *
+ * The old machine is not kept for the second pass: its ROMs are in its
+ * ram[], and a second atom_t is ~70 KiB (§5). A card changed between the
+ * passes, a few milliseconds apart, is the no-ROMs page, as at boot,
+ * rather than a guest running without its kernel. NULL, or why not. */
 static const char *machine_power_on(const atom_config_t *cfg, const char *utility,
                                     bool restart) {
     static char why[40];
@@ -410,7 +414,7 @@ static const char *machine_power_on(const atom_config_t *cfg, const char *utilit
 
     if (restart) {
         roms_log(&g_roms);
-        if (!ok) return "ROMS DID NOT LOAD";
+        if (!ok) no_roms(&g_roms);
         const char *err = tape[0] ? tapeio_insert(&g_atom, tape) : NULL;
         if (err) printf("  tape         : %s not back in: %s\n", tape, err);
         for (unsigned d = 0; d < ATOM_FDC_DRIVES; d++) {
@@ -439,9 +443,9 @@ static bool pause_run(void) {
 
     /* The level may be the southbridge's own, not the settings' or the
      * menu's (§11.7), so it is read, and written back on resume. */
-    uint8_t r[2];
+    uint8_t r[2] = {0};
     bool read = sb_read(SB_REG_BKL, r) == SB_OK;
-    uint8_t level = r[1];
+    uint8_t level = read ? r[1] : BKL_LOWEST;
     bool dimmed = read && level != BKL_LOWEST && sb_write(SB_REG_BKL, BKL_LOWEST, NULL) == SB_OK;
     printf("  pause        : paused, backlight %s\n",
            !read ? "unread, left" : dimmed ? "dimmed" : "already lowest");

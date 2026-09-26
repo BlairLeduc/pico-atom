@@ -2394,7 +2394,7 @@ redraw is what the M3 measurement uses.
 
 ### 13.1 M12: the Machine page, the About page, the perf line and Pause
 
-**Built, and checked on the host; the board's checks are to come (§17).**
+**Built, and checked on the host and on a Plus 2 W on 2026-09-26 (§17).**
 This finishes the menu §13's table describes. The main page gains
 *Machine…* and *About…*, which makes eleven items. As first designed they
 went on rows 2–12, with the tape line on 13 and the drives on 14, but row 14
@@ -2450,7 +2450,10 @@ and the menu call. Core 0 is already parked while the menu is open, so core
    is read and hashed. A required one missing, or one of the wrong size,
    refuses the restart (`AKERNEL.ROM MISSING: NOT RESTARTED`) and leaves the
    machine running as it was. The card may have been changed while the
-   menu was open.
+   menu was open. The old machine is not kept for step 2: its ROMs are in
+   its `ram[]`, and a second `atom_t` would cost ~70 KiB (§5). A card
+   changed between the two passes, milliseconds apart, gives the no-ROMs
+   page, as at boot, rather than a guest running without its kernel.
 2. `atom_init` with the new `atom_config_t`, `roms_load`, and
    `atom_seed_rnd` from `get_rand_64()` (§7.2).
 3. The tape goes back in the deck, stopped at its start, and the discs
