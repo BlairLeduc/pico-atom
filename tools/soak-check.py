@@ -14,7 +14,9 @@ guest is paced by the audio queue (§12.2), so it reads 1.000 or 0.999,
 the last digit being truncation; a guest falling behind shows as a run of
 lower figures, which the per-heartbeat floor catches.
 
-The other counters are reported and must not move either, because the
+Every counter is cumulative since boot, so the last heartbeat and its
+audio line cover the whole run even when the capture garbles a line
+between. The other counters are reported and must not move either, because the
 hardware notes' own soak found a problem with all four clean (§12.3):
 undocumented opcodes, dropped snapshots, the beeper's overflow, and log
 lines dropped. Presents, key events and speaker edges must grow: a soak
@@ -54,6 +56,17 @@ def main():
     if not hbs or not aus:
         print("FAIL: no heartbeats in %s" % a.log)
         return 1
+    # Every counter checked here is cumulative since boot (main.c's
+    # heartbeat, audio_stats()), so a line the capture garbled hides
+    # nothing as long as a later one was read: the last heartbeat's
+    # audio line covers the run. The capture does garble the odd line,
+    # a UART framing slip on the host side with the firmware's own
+    # "log dropped" at zero; a missing heartbeat shows as a gap below.
+    last_hb = list(HB.finditer(text))[-1].start()
+    if list(AU.finditer(text))[-1].start() < last_hb:
+        fails.append("the last heartbeat has no audio line after it, so the "
+                     "audio counters do not cover the end of the run")
+    garbled = len(hbs) - len(aus)
 
     fields = [int(h[0]) for h in hbs]
     span = (fields[-1] - fields[0]) / FIELD_HZ / 60
@@ -114,6 +127,9 @@ def main():
     for name, first, final in grew:
         print("  %-22s %d -> %d" % (name, first, final))
     print("  audio consumed         %d-%d Hz (the control quantity)" % (rates[0], rates[-1]))
+    if garbled:
+        print("  %d audio lines garbled in the capture; the counters are cumulative, "
+              "so the later ones cover them" % garbled)
     if fails:
         print("FAIL")
         for f in fails:

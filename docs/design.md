@@ -2782,8 +2782,9 @@ those counters can stay clean while a fifth problem exists, which is why §12.3
 has more counters than feel necessary.
 
 `tools/soak.sh ELF [MINUTES]` runs it: capture, flash, type the program, and
-type `R` and `H` at it every five seconds for the whole run. The program
-alternates a 256×192 page of random lines with a page of scrolling text,
+type `H` and `4` at it every five seconds for the whole run (not `R`,
+which BASIC's Escape test reads while the program has column 9 selected).
+The program alternates a 256×192 page of random lines with a page of scrolling text,
 rings the bell between them, and reads the keyboard matrix itself, so a missed
 key never stalls it. It was checked on the host first, and trace-diffed against
 Atomulator (§15.1). `tools/soak-check.py` then holds the log to this section:

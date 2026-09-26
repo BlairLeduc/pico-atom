@@ -94,6 +94,7 @@ ATOMULATOR_ERRATA[0xE0] = (2, 3)                               # CPX #
 ATOMULATOR_ERRATA[0xEC] = (4, 3)                               # CPX abs
 ATOMULATOR_ERRATA[0xA8] = (2, 0)                               # TAY
 
+TAIL_CYCLES = 2 * 16768  # two of Atomulator's fields (Diff.run)
 BOOT_FIELDS = 120   # guest_boot's two seconds to the prompt
 KEY_HOLD = 3        # fields a key is down
 KEY_EVERY = 8       # fields from one key to the next; the MOS takes ~8
@@ -232,6 +233,7 @@ class Diff:
         self.cycle_count = 0
         self.errata = {}        # opcode -> times Atomulator's known error showed
         self.lost = None
+        self.tail = None        # (i, j, cycles left) of a forgiven end
 
     def agree(self, i, j, n):
         """Both agree for n lines, or until the next input read changes
@@ -325,8 +327,14 @@ class Diff:
                 continue
             got = self.resync(i, j)
             if got is None:
-                # Near the end, one side may simply stop first.
-                if len(o) - i > self.window and len(r) - j > self.window:
+                # Both ran the same number of fields, and Atomulator's are
+                # longer, so the side that stops first may stop inside a
+                # loop the other is still going round. That is the only
+                # failed resync forgiven: within TAIL_CYCLES of an end.
+                left = min(oc[-1] - oc[i], rc[-1] - rc[j])
+                if left < TAIL_CYCLES:
+                    self.tail = (i, j, left)
+                else:
                     self.lost = (i, j)
                 return
             di, dj = got
@@ -383,6 +391,9 @@ def report(d, show):
     for i, j, a, b, op in d.cycles[:10]:
         print("\ncycles at ours %d, ref %d: %s opcode %02X takes %d here, %d there"
               % (i, j, fmt(d.o[i]), op, a, b))
+    if d.tail:
+        i, j, left = d.tail
+        print("\nno resync after ours %d, ref %d, %d cycles from the end: forgiven" % (i, j, left))
     if d.lost:
         i, j = d.lost
         print("\nlost at ours %d, ref %d: no resync within %d lines" % (i, j, d.window))
