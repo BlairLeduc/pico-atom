@@ -345,11 +345,12 @@ static void core1_main(void) {
         settings_default(&boot);
     }
     atom_init(&g_atom, &boot.machine);
-    g_settings.mono   = boot.mono;
-    g_settings.border = boot.border;
-    g_settings.volume = boot.volume;
-    g_settings.turbo  = boot.turbo;
-    display_set_look(g_settings.mono, g_settings.border);
+    g_settings.mono    = boot.mono;
+    g_settings.border  = boot.border;
+    g_settings.dark_bg = boot.dark_bg;
+    g_settings.volume  = boot.volume;
+    g_settings.turbo   = boot.turbo;
+    display_set_look(g_settings.mono, g_settings.border, g_settings.dark_bg);
     if (boot.backlight) (void)sb_write(SB_REG_BKL, (uint8_t)(boot.backlight * 16u), NULL);
 #if PICO_ATOM_MEASURE_PRESENT
     display_test_pattern();

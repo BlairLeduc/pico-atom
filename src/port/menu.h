@@ -30,6 +30,7 @@ typedef struct {
      * itself, since the presenter is core 1's too. */
     bool     mono;
     bool     border;
+    bool     dark_bg;
 
     /* Run unpaced while a UEF plays (§11.3); the settings file's, and
      * not on the menu. */

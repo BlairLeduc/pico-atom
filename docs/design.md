@@ -961,7 +961,8 @@ well-behaved software behaves. Reproducing the *interference* is a v3 option
 ### 8.7 Monochrome and the border
 
 **Built at M10**, as two settings on the menu's Display page (§13). Both
-are on by default (§11.7), as the stock machine most owners had.
+are on by default (§11.7), as the stock machine most owners had. A third,
+the dark background, came after M10 and is off by default.
 
 **Monochrome.** Most Atoms were sold without the colour board, and the stock
 machine shows only the VDG's luminance output. The mono palette is the
@@ -986,6 +987,38 @@ change between text and graphics, or of CSS in graphics. It is not filled on
 every full redraw. With the setting off, the border is never filled, and
 the panel around the rectangle stays black from `lcd_init`, as before M10. A
 future status band will take its rows back from the border.
+
+**The dark background.** The VDG does not put text on black. Its datasheet
+(Display Modes, p. 18) says characters "may be either green on a dark green
+background or orange on a dark orange background, depending on the state of
+the CSS pin". It gives no level for either, and does not say why.
+
+The likely reason is in how the chip makes colour. It puts out luminance
+(Y) and two colour-difference signals (φA, φB), not RGB, and a colour is a
+combination of their levels (figure 10). An alphanumeric dot is half a cycle
+of the 3.58 MHz subcarrier, far finer than a TV's chroma bandwidth, so the
+chip holds φA and φB at the cell's colour, green or orange by CSS, and
+switches only Y: the ink's level for a dot of the character and black's for
+the rest. The dots around the character are black's luminance carrying the
+ink's chroma, which a TV shows as a murky dark green, and inverse video
+gives dark characters on bright green. The border is different: figure 10
+has it, in the alphanumeric modes, at black with φA and φB at their
+reference level, no chroma at all, and it stays black with the setting on.
+This is an explanation from the chip's outputs; the datasheet does not
+state it.
+
+It follows that the level was never the chip's to decide. How dark "black
+plus green's chroma" looks was the modulator's, the TV's, or on the Atom
+the colour board's. The values here are a quarter of the ink, `#004000` and
+`#402000`: a rendering choice, like the primaries, and nothing yet says how
+dark a real Atom's was. It also follows that **a mono Atom showed true
+black**, since it has Y alone, so the mono palette's dark colours are black
+and the setting does nothing in mono.
+
+With the setting on, an alphanumeric cell's background is `VDG_DARK_GREEN`
+or `VDG_DARK_ORANGE`, and an inverse cell's ink is too. Semigraphics cells
+keep black for the elements that are off. Only alpha cells use it, and they
+are drawn per cell without the LUT, so switching it rebuilds nothing.
 
 ---
 
@@ -1740,6 +1773,7 @@ still hold a `#`:
 |---|---|---|
 | `screen` | `colour`, `mono` (§8.7) | `mono` |
 | `border` | `on`, `off` (§8.7) | `on` |
+| `background` | `black`, `dark`: text on dark green or orange (§8.7) | `black` |
 | `backlight` | 1–15, the menu's steps of 16 (hardware notes §4.11) | the southbridge's own |
 | `volume` | 0–8 | 8 |
 | `keys` | `standard` or a layout's name (§10.5) | `standard` |
@@ -2167,6 +2201,7 @@ class of bug in emulation.
 | SG6 colour from bits 7:6 (§2.4) | MC6847 datasheet; a reference emulator | **confirmed** — the datasheet's `C1:C0` = `D7:D6`, so yellow/red (cyan/orange with `CSS`); `CLEAR 0` + `PLOT` compared by eye against another Atom emulator on 2026-09-22 |
 | 2.4 kHz cassette reference period, port C bit 4 (§11.3) | Atom circuit diagram | **medium**: 416 cycles, 4 MHz ÷ 1664 = 2403.8 Hz, which MAME's Atom driver also uses. `ATOM_CASSETTE_REF_CYCLES`. The ROM reads a tape by its own loop timing, so only the speed of a signal-level save depends on it |
 | MC6847 luminance levels for the mono palette (§8.7) | MC6847 datasheet, figure 10 and the DC characteristics | **high**: 0.72 V for black, 0.65 V for blue and red, 0.54 V for green, cyan, magenta and orange, 0.42 V for yellow and buff (typical values). The first draft, from memory, had blue and red at black's level; figure 10 puts them at white low. `mc6847_palette_mono` |
+| The dark green and dark orange behind alphanumeric text (§8.7) | MC6847 datasheet, Display Modes (p. 18), for the colours; nothing yet for their level | **low** for the level: the datasheet names the colours and gives no voltage, and figure 10 shows only the border. A quarter of the ink is a guess, to be judged against a real Atom or a photograph of one. In mono they are black: black's Y with chroma the mono machine does not have. `VDG_DARK_GREEN`, `VDG_DARK_ORANGE` |
 | 6522 shift rate under Φ2 (§7.4) | Rockwell R6522 datasheet, figure 23 (SR mode 2) | **high**: a bit every two cycles, 16 for a byte, as b-em shifts. The figure draws CB1's shift clock low for one Φ2 cycle and high for the next, eight pulses after the SR access; the text's "each Φ2 clock pulse" means those CB1 pulses. Nothing on the Atom uses these modes |
 | MC6847 character ROM bitmap | datasheet figure or an extracted table | **confirmed** — taken verbatim from XRoar's extracted table and verified by rendering the full glyph set |
 

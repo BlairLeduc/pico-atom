@@ -23,6 +23,11 @@ const uint16_t mc6847_palette[VDG_COLOUR_COUNT] = {
     [VDG_MAGENTA] = RGB565(0xFF, 0x00, 0xFF),
     [VDG_ORANGE]  = RGB565(0xFF, 0x80, 0x00),
     [VDG_BLACK]   = RGB565(0x00, 0x00, 0x00),
+    /* The datasheet says "green on a dark green background or orange on
+     * a dark orange background" and gives no level for either. A quarter
+     * of the ink is a rendering choice, like the primaries above (§8.7). */
+    [VDG_DARK_GREEN]  = RGB565(0x00, 0x40, 0x00),
+    [VDG_DARK_ORANGE] = RGB565(0x40, 0x20, 0x00),
 };
 
 /* A monochrome Atom: the VDG's luminance output alone, with no colour
@@ -43,6 +48,9 @@ const uint16_t mc6847_palette_mono[VDG_COLOUR_COUNT] = {
     [VDG_MAGENTA] = GREY(540u),
     [VDG_ORANGE]  = GREY(540u),
     [VDG_BLACK]   = GREY(720u),
+    /* Black's Y with the ink's chroma, so with no chroma, black (§8.7). */
+    [VDG_DARK_GREEN]  = GREY(720u),
+    [VDG_DARK_ORANGE] = GREY(720u),
 };
 
 /* CG modes: four colours, selected by CSS (§2.4). */
@@ -162,6 +170,10 @@ void mc6847_set_mono(mc6847_t *v, bool mono) {
     build_lut(v);
 }
 
+void mc6847_set_dark_bg(mc6847_t *v, bool dark) {
+    v->dark_bg = dark;
+}
+
 /* ---- alpha and semigraphics (§2.4) ---------------------------------- */
 
 /* SG6 elements, two across and three down, each 4 px by 4 rows: bits 5
@@ -188,7 +200,7 @@ static void render_alpha_cell(const mc6847_t *v, uint8_t byte,
                               unsigned row_in_cell, bool css, uint16_t *dst) {
     bool inverse = (byte & VDG_BYTE_INV) != 0;
     uint16_t fg = v->pal[css ? VDG_ORANGE : VDG_GREEN];
-    uint16_t bg = v->pal[VDG_BLACK];
+    uint16_t bg = v->pal[!v->dark_bg ? VDG_BLACK : css ? VDG_DARK_ORANGE : VDG_DARK_GREEN];
     if (inverse) { uint16_t t = fg; fg = bg; bg = t; }
 
     uint8_t bits;

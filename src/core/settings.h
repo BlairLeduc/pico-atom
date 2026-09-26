@@ -27,6 +27,7 @@ typedef struct {
 
     bool     mono;          /* the Display page's screen (§8.7)          */
     bool     border;        /* and its border                            */
+    bool     dark_bg;       /* text on dark green or orange, not black   */
     unsigned volume;        /* 0-8, as the menu shows it                 */
     unsigned backlight;     /* 1-15, as the menu shows it; 0 leaves the
                                southbridge's own level alone             */

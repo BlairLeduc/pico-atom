@@ -63,6 +63,9 @@ typedef enum {
     VDG_GREEN, VDG_YELLOW, VDG_BLUE, VDG_RED,
     VDG_BUFF, VDG_CYAN, VDG_MAGENTA, VDG_ORANGE,
     VDG_BLACK,
+    /* The background of an alphanumeric cell, when §8.7's dark
+     * background is on: by CSS, as the datasheet's display modes say. */
+    VDG_DARK_GREEN, VDG_DARK_ORANGE,
     VDG_COLOUR_COUNT
 } vdg_colour_t;
 
@@ -141,6 +144,7 @@ typedef struct {
     bool    lut_valid;
     uint8_t lut_px;        /* pixels per LUT entry for the current mode */
     const uint16_t *pal;   /* mc6847_palette, or the mono one           */
+    bool    dark_bg;       /* alpha cells on dark green or orange (§8.7) */
 
     /* One entry per byte value, already horizontally stretched (§8.3).
      * Worst case 16 pixels x 2 B x 256 = 8 KiB, which is ATOM_LUT_SIZE. */
@@ -165,6 +169,12 @@ void mc6847_set_font(mc6847_t *v, const uint8_t *font);
 
 /* Colour or monochrome (§8.7). Rebuilds the LUT when it changes. */
 void mc6847_set_mono(mc6847_t *v, bool mono);
+
+/* Alphanumeric cells on black, or on the dark green or dark orange the
+ * datasheet names (§8.7). Semigraphics cells and the border stay black,
+ * and so does everything in mono: the dark colours are black's Y.
+ * No LUT depends on it: alpha is drawn per cell. */
+void mc6847_set_dark_bg(mc6847_t *v, bool dark);
 static inline bool mc6847_has_font(const mc6847_t *v) { return v->font != NULL; }
 
 /* Generate one display row (0..191) as ATOM_SCREEN_W RGB565 pixels.

@@ -22,7 +22,7 @@ int main(void) {
         atom_config_t cfg;
         atom_config_default(&cfg);
         CHECK(memcmp(&d.machine, &cfg, sizeof cfg) == 0, "machine defaults are atom_config_default's");
-        CHECK(d.mono && d.border && d.volume == 8u && d.backlight == 0u && d.turbo,
+        CHECK(d.mono && d.border && !d.dark_bg && d.volume == 8u && d.backlight == 0u && d.turbo,
               "host defaults");
         CHECK(!d.keys[0] && !d.tape[0] && !d.drive[0][0] && !d.drive[1][0], "nothing inserted");
     }
@@ -39,6 +39,7 @@ int main(void) {
             "# the README's example\r\n"
             "screen    = colour\r\n"
             "BORDER    = Off\r\n"
+            "background = Dark\r\n"
             "backlight = 12\r\n"
             "volume    = 0\r\n"
             "keys      = cursor games\r\n"
@@ -49,7 +50,7 @@ int main(void) {
             "upper_ram = off\r\n"
             "dos       = off\r\n";
         CHECK(parse(&s, all, &line) == SET_OK && line == 0, "every setting: line %u", line);
-        CHECK(!s.mono && !s.border && s.backlight == 12u && s.volume == 0u && !s.turbo, "host");
+        CHECK(!s.mono && !s.border && s.dark_bg && s.backlight == 12u && s.volume == 0u && !s.turbo, "host");
         CHECK(strcmp(s.keys, "CURSOR GAMES") == 0, "keys uppercased, spaces kept: %s", s.keys);
         CHECK(strcmp(s.tape, "cchuck.uef") == 0, "tape: %s", s.tape);
         CHECK(strcmp(s.drive[0], "games1.dsk") == 0, "drive0: %s", s.drive[0]);
@@ -83,6 +84,7 @@ int main(void) {
             { "colour = mono\n",      SET_UNKNOWN },
             { "screen = green\n",     SET_BAD_VALUE },
             { "border = yes\n",       SET_BAD_VALUE },
+            { "background = grey\n",  SET_BAD_VALUE },
             { "volume = 9\n",         SET_BAD_VALUE },
             { "volume = -1\n",        SET_BAD_VALUE },
             { "volume = 99999999999\n", SET_BAD_VALUE },
