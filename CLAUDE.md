@@ -220,7 +220,9 @@ status row says so. A 4 MHz snapshot sets byte 89 and says version 2, and a
 1 or 2 MHz one is still M12's version 1 byte for byte. The tape deck plays at
 1 MHz only, as before. Measured on a Plus 2 W on 2026-09-27: the four perf
 workloads at 4 MHz on 300 took 62–85 % of core 0 with zero underruns, the
-same as 2 MHz on 150 (§6.3). `-DPICO_ATOM_BOOT_HOST_MHZ=300` sets the host
+same as 2 MHz on 150 (§6.3), and §15.3's soak passed there on USB and on
+battery. The Machine page's clocks were checked by hand the same day.
+`-DPICO_ATOM_BOOT_HOST_MHZ=300` sets the host
 clock over the settings file, for a UART-driven run. Each heartbeat ends with
 the battery gauge and the die temperature (`battery 100% charging, 23 C`).
 **Charging proves USB power; its absence does not**: the bit clears once a
@@ -326,7 +328,8 @@ the Atom has no type-ahead.
 
 **The soak** (design.md §15.3) is `tools/soak.sh ELF [MINUTES]` on battery,
 then `tools/soak-check.py` over the log. It passed on a Plus 2 W on battery
-on 2026-09-26: 31 minutes, every counter zero, `rt` never below 0.999. Don't
+on 2026-09-26: 31 minutes, every counter zero, `rt` never below 0.999; and
+again at 300 MHz with a 4 MHz guest on 2026-09-27. Don't
 press `R` during a run: while the program has column 9 selected, BASIC's
 Escape test (`#C504`) reads `R` as Escape. The shell's `grep` is ugrep, which can
 print nothing on these UART logs (CR line endings, a UTF-8 dash in the banner);
