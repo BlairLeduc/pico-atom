@@ -236,9 +236,9 @@ file below.
 **The machine.** The menu's *Machine* page sets what an Atom owner would have
 changed with the lid off: 16 or 32 KB of RAM below the screen, a 1 or 2 MHz
 clock, AtomDOS and the ROM in the utility socket. It also sets the PicoCalc's
-own speed, *Pico clock*: 150 MHz, what the chip is rated for, or 300 MHz. That
-is an overclock, and it is what a 4 MHz Atom needs, so the *Clock* row offers
-4 MHz only with 300 MHz chosen. Left and right choose, and a
+own speed, *Pico clock*: 150 MHz, the chip's rated speed, or 300 MHz, an
+overclock. A 4 MHz Atom needs 300 MHz, so the *Clock* row offers 4 MHz only
+when 300 MHz is chosen. Left and right choose, and a
 `*` marks each row you have changed. Nothing happens until *Apply and
 restart*, which switches the Atom off and on again with the new machine, so
 the program in memory is lost. The tape goes back in at its start and the

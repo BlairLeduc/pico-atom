@@ -823,14 +823,14 @@ static bool park_for_ui(uint32_t why) {
 
 /* The host clock the card asks for (design.md §3.2, §11.7), read before
  * anything is brought up, because everything derives its rate from the
- * clock it finds. Nothing is printed: stdio is not up, and core 1 reads
- * the file again, and says what it finds, once it is. */
+ * clock it finds. Nothing is printed or kept: stdio is not up, and
+ * core 1 reads the file again, and says what it finds, once it is. */
 static unsigned boot_host_mhz(void) {
 #ifdef PICO_ATOM_BOOT_HOST_MHZ
     return PICO_ATOM_BOOT_HOST_MHZ;   /* over the file's */
 #else
     if (storage_mount() != 0) return SETTINGS_HOST_MHZ;
-    settingsio_load(&g_file);
+    settingsio_peek(&g_file);
     storage_unmount();
     return g_file.host_mhz;
 #endif
