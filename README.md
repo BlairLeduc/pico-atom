@@ -74,6 +74,34 @@ first is a different revision.
 
 Copy them to the SD card as `/atom/roms/akernel.rom` and so on. 
 
+## Software
+
+The emulator takes three kinds of file, each in its own folder on the card:
+`.atm` tapes and `.uef` tape images in `/atom/tapes/`, and disc images
+(`.ssd`, `.dsk`, `.40t`, `.dsd`) in `/atom/discs/`. *Using it* below says how
+each one loads.
+
+- **The Acorn Atom Software Archive** — the largest collection, several
+  thousand programs gathered by the stardot.org.uk community. Download a
+  release zip from <https://github.com/hoglet67/AtomSoftwareArchive/releases>.
+  It is laid out for AtoMMC, the Atom's SD card interface, so its programs are
+  ATM files **without an extension**, in folders by publisher. Copy the ones
+  you want to `/atom/tapes/` and add `.atm` to each name: `GALAXI` becomes
+  `GALAXI.atm`, and `LOAD "GALAXI"` finds it. The `.DSK` and `.dsd` images in
+  the archive go in `/atom/discs/` as they are.
+- **Archive 13 as UEF**, <https://archive.org/details/atom-archive-13-uef> —
+  an older release of the same archive converted to tape images, all in one zip,
+  with a few `.uef` files to download on their own.
+- **Games as UEF**, <https://archive.org/details/acorn-atom-games-uef> —
+  commercial games of the 1980s, and newer ones such as Kees van Oss's Atomic
+  Chuckie Egg and Galaforce. Choose the `[Atomulator]` or colour versions
+  where there is a choice.
+- **Atomulator**, <https://atomulator.acornatom.co.uk/>, and
+  **acornatom.nl**, <https://www.acornatom.nl/> (in Dutch), carry software,
+  documentation and news.
+- **The stardot.org.uk forums**, <https://www.stardot.org.uk/forums/>, in the
+  Acorn Atom section, are where new Atom software and fixes are announced.
+
 ## Using it
 
 ![Emulator Menu](/assets/menu.png)
@@ -263,3 +291,35 @@ discs in the drives, and the machine as it is running: `upper_ram`, `dos`,
 `clock` and `utility`. `turbo` is only ever what you wrote. If a
 setting appears twice, it saves nothing and says so, since it cannot tell
 which line you meant. With no file on the card it makes one.
+
+## Books
+
+The Atom's own manuals are the best place to start, and most of them are on
+the Internet Archive.
+
+- **Atomic Theory and Practice**, David Johnson-Davies, Acorn, 1980 —
+  <https://archive.org/details/atomic_theory_and_practice>. The manual that
+  came with the machine: BASIC from the first `PRINT`, then graphics, sound,
+  the assembler and the hardware. Read this first. The copy there is
+  hoglet67's edition of 2022.
+- **Getting Acquainted with Your Acorn Atom**, Trevor Sharples and Tim
+  Hartnell, Interface, 1981 —
+  <https://archive.org/details/getting-acquainted-with-your-acorn-atom>.
+  A gentler introduction for beginners, with many short programs to type in.
+- **Practical Programs for the BBC Computer and Acorn Atom**, David
+  Johnson-Davies, 1982 —
+  <https://archive.org/details/practicalprogram0000john>. Programs to type in
+  and learn from. The Internet Archive lends this one: borrowing needs a free
+  account.
+- **Splitting the Atom**, J. R. Stevenson and J. C. Rockett, 1982 —
+  <https://archive.org/details/splitting-the-atom>. "A manual for informed
+  users", for going below BASIC into the machine itself.
+- **Acorn Atom Technical Manual**, Acorn, 1980 —
+  <https://archive.org/details/acorn-atom-technical-manual>. Acorn's own
+  reference for the hardware.
+- **Acorn Atom Manuals**, <https://archive.org/details/AcornAtomManuals> —
+  Acornsoft's *Forth Theory and Practice*, *Lisp Theory and Practice* and the
+  *AtomCalc* manual, for the languages and programs beyond BASIC.
+
+For the magazines, *Atom News*, *Acorn User* and others,
+[search the Internet Archive for "Acorn Atom"](https://archive.org/search?query=%22acorn+atom%22).
