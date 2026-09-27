@@ -2638,7 +2638,7 @@ pico-atom/
 │   ├── host/                   # CTest, one binary per area, no framework
 │   │   ├── test_util.h         # CHECK and TEST_DONE; 77 is a skip
 │   │   ├── guest.c/.h          # the real machine for the ROM tests: ROMs by SHA-1, keys typed
-│   │   ├── test_m6502_functional.c   # Dormann's suite, skipped without the binary
+│   │   ├── test_m6502_functional.c   # Dormann's and Clark's suites, skipped without the binaries
 │   │   ├── test_m6502_decimal.c      # exhaustive valid-BCD checks
 │   │   ├── test_m6502_cycles.c       # the cycle table, by execution
 │   │   ├── test_m6502_behaviour.c
@@ -2653,20 +2653,24 @@ pico-atom/
 │   │   ├── test_tape.c  test_uef.c  test_cassette.c
 │   │   ├── test_snapshot.c  test_disc.c
 │   │   └── test_boot.c         # the real MOS: typing, the bell, RND, layouts
-│   ├── suites/                 # Dormann's binary, fetched, gitignored
+│   ├── asm/                    # Clark's decimal test, public-domain source
+│   ├── suites/                 # Dormann's binary, fetched; Clark's, assembled; gitignored
 │   └── golden/                 # committed reference PPMs
 └── tools/
     ├── build.sh  flash.sh      # the firmware, built and programmed over SWD
     ├── uart-log.sh  uart-type.sh   # capture UART1; type at the guest over it
     ├── perf-run.sh             # §6.3's measurement: workloads typed at the guest
     ├── perf-summary.sh         # the heartbeats, one line per workload
-    ├── fetch-test-suites.sh    # Dormann's binary into test/suites/
+    ├── fetch-test-suites.sh    # Dormann's binary and Clark's, assembled, into test/suites/
+    ├── trace-diff.py           # §15.1: trace both machines, diff, classify
+    ├── trace/                  # atom-trace.c, atomulator-trace.c and its build, keyscript.h
+    ├── soak.sh  soak-check.py  # §15.3: the soak run and its verdict
     ├── mkfont.py               # MC6847 character ROM → header
     └── vdg-ppm.c               # render the scenes; regenerates test/golden/
 ```
 
-`tools/atm.py` (inspect and build ATM files) and `tools/trace-diff.py` (§15.1)
-were planned and have not been written.
+`tools/atm.py` (inspect and build ATM files) was planned and has not been
+written.
 
 `CMakeLists.txt` produces two targets from one source tree: the UF2, and a host
 test binary that compiles `src/core/` with the system compiler and no SDK. The
@@ -2686,7 +2690,7 @@ link-time fact rather than a hope (hardware notes §2.3).
 | Test | Standard |
 |---|---|
 | **Klaus Dormann `6502_functional_test`** | must run to completion. Non-negotiable; it is the difference between an emulator and a plausible one. |
-| **Bruce Clark decimal mode test** | must pass, including NMOS flag behaviour. **Not yet wired up**: it is distributed as source, not a binary. Until it is, decimal mode rests on the functional test's decimal section and `test_m6502_decimal`'s exhaustive valid-BCD checks; invalid BCD operands are the gap. |
+| **Bruce Clark decimal mode test** | must pass, including NMOS flag behaviour. **Passes**, with all four flags checked over every operand pair and both carries, invalid BCD included. It is public domain and distributed as source, so the source is in the tree (`test/asm/6502_decimal_test.s`, Dormann's `.a65` in ca65 syntax, NMOS paths only, every `chk_` flag on) and `fetch-test-suites.sh` assembles it with cc65; `test_m6502_functional` runs it. A decimal-mode `ADC` that takes N from the result, not the intermediate, fails it. |
 | Cycle-count table | every opcode's cycle count and page-cross penalty asserted against the published table. |
 | MC6847 golden images | render fixed VRAM contents in each of the nine modes, both colour sets, compare to committed PPMs. Includes every SG6 pattern and an inverse-video text page. |
 | 8255 | port C nibble separation, BSR writes, mode-nibble-vs-column-nibble independence. |
@@ -2694,13 +2698,53 @@ link-time fact rather than a hope (hardware notes §2.3).
 | Tape | ATM round trip; CUTS encode → decode round trip at the bit level. |
 | Snapshot | save → load → state identical, bit for bit. |
 
-Add a **trace-diff harness**: run the same ROM image for N instructions under
+A **trace-diff harness**: run the same ROM image for N instructions under
 pico-atom's host build and under a reference Atom emulator, diff the per-instruction
 `PC/A/X/Y/S/P/cycles` trace. The first divergence is almost always the bug, and
-it finds problems no unit test is shaped to catch. **Not built yet.** What has
-stood in for it is running the real ROMs on the host (`test_boot`, `test_tape`,
-`test_cassette`, `test_disc`), which checks what the machine does rather than
-how it gets there.
+it finds problems no unit test is shaped to catch. **Built** (2026-09-26), with
+Atomulator as the reference:
+
+```sh
+cmake --build build/host --target atom-trace
+tools/trace/build-atomulator.sh ~/src/Atomulator     # -> out/trace/atomulator-trace
+tools/trace-diff.py run --keys 'PRINT 2+2\n'           # boot, type, trace both, diff
+```
+
+`atom-trace` runs `atom_run_field` an instruction at a time; `atomulator-trace`
+compiles Atomulator's `6502.c`, `8255.c`, `6522via.c` and `8271.c` where they
+stand, against a stub Allegro header, and prints from the per-instruction hook
+its debugger uses. Nothing of Atomulator is copied into this tree. Both take
+the same four ROMs, found by SHA-1, and the same key script, pressed at the
+same guest cycle (`tools/trace/keyscript.h`). Each line is the state before an
+instruction, the cycle count and the three bytes at PC.
+
+The two machines do not keep the same time: Atomulator's field is 262 lines of
+64 cycles, 16,768, against the VDG's 16,667 (§12.1), so a loop polling FS or the
+keyboard runs a different number of times on each side. The diff resyncs at the
+nearest point where both agree again, in registers and in a shadow of the
+return stack (two calls of one routine otherwise look alike), and classes what
+lay between. A divergence right after a read of a timed input (`#B001`, `#B002`,
+the VIA, the 8271) is `input` and expected, and so are the reset's S and a
+polling `loop`. `values`, `path`, a trace that never resyncs, and any
+instruction whose cycles differ outside Atomulator's known errata fail the run.
+A read of port A or of port C's latch is not a timed input: a wrong bit in port A's
+read-back, planted in `i8255.c`, fails the run.
+
+What it found, on the boot, a BASIC program typed and run, `FPRINT SQR(2)*PI`
+and `LIST` (7 million instructions each side), and on §15.3's soak program
+(20 million): **no divergence in pico-atom**. Every one follows a keyboard or
+FS read. It found Atomulator's timing wrong in six places, all against
+the MCS6500 manual and our execution-checked table: zero page,X reads 3 cycles
+not 4, zero page,X read-modify-writes 5 not 6, `INC`/`DEC abs,X` 6 not 7,
+`CPX #` 3 not 2, `CPX abs` 3 not 4, and `TAY` 0 not 2. `trace-diff.py` carries
+them as `ATOMULATOR_ERRATA`. The empty utility socket reads open bus here and
+0 in Atomulator; its driver fills the socket with what an absolute load would
+see here, because the floating-point ROM looks at `#A000` for a ROM.
+
+Running the real ROMs on the host (`test_boot`, `test_tape`, `test_cassette`,
+`test_disc`) remains the regression suite: it checks what the machine does,
+and needs no second emulator. The harness is a tool, not a CTest, because it
+needs an Atomulator checkout.
 
 ### 15.2 On hardware
 
@@ -2736,6 +2780,34 @@ late DMA refills, zero PCM underruns, zero dropped key events, and a real-time
 ratio that stays ≥ 1.0. The hardware notes' own soak found that all four of
 those counters can stay clean while a fifth problem exists, which is why §12.3
 has more counters than feel necessary.
+
+`tools/soak.sh ELF [MINUTES]` runs it: capture, flash, type the program, and
+type `H` and `4` at it every five seconds for the whole run (not `R`,
+which BASIC's Escape test reads while the program has column 9 selected).
+The program alternates a 256×192 page of random lines with a page of scrolling text,
+rings the bell between them, and reads the keyboard matrix itself, so a missed
+key never stalls it. It was checked on the host first, and trace-diffed against
+Atomulator (§15.1). `tools/soak-check.py` then holds the log to this section:
+one boot, heartbeats covering the run, the four counters zero on every
+heartbeat, and `rt` never below 0.995 with a mean of at least 0.999. The guest
+is paced by the audio queue (§12.2), so `rt` reads 1.000 or 0.999, the last
+digit being truncation. The other counters must stay at zero too: undocumented
+opcodes, dropped snapshots, the beeper's overflow, log lines dropped. Presents,
+key events and speaker edges must grow. Battery is the operator's part: the
+USB-C lead out, and said so when the result is recorded.
+
+**Passed** on a Plus 2 W on battery, 2026-09-26, 17:34–18:05: 375
+heartbeats over 31.2 minutes and one boot. `rt` was never below 0.999, mean
+0.9996. Zero I²C errors, keys lost, underrun samples and late refills. Zero
+undocumented opcodes, dropped snapshots, beeper overflow and log lines
+dropped. 112,500 presents, 54,047 speaker edges, 340 keys typed over the UART
+and 47 on the PicoCalc's own keyboard. Audio consumed held at 36,620–36,621 Hz,
+bar 36,533 Hz on the first heartbeat, while audio started. The log is
+`out/soak/soak-20260926-173300.log`. The first attempt stopped after one pass:
+the program selected keyboard column 9 and left it selected, and BASIC's
+Escape test (`#C504`) reads port B bit 5 in whatever column is selected, so the
+`R` typed at it was Escape. The program now puts column 0 back on the line that
+reads column 9, and the script types `H` and `4`. Don't press `R` during a run.
 
 ---
 
@@ -2796,7 +2868,7 @@ Each milestone ends with something that runs and something that is measured.
 | # | Deliverable | Done when |
 |---|---|---|
 | **M0** | Skeleton: CMake, host + UF2 targets, CI, `config.h` | both targets build clean under `-Werror` — **done**; CI builds both on every push |
-| **M1** | 6502 core, host only | Dormann and Clark tests pass; cycle table asserted — **done**, with Dormann's suite passing and the cycle table asserted by execution; Clark's test is not wired up yet (§15.1) |
+| **M1** | 6502 core, host only | Dormann and Clark tests pass; cycle table asserted — **done**, with Dormann's suite passing and the cycle table asserted by execution; Clark's test passes too, every flag checked, since 2026-09-26 (§15.1) |
 | **M2** | Bus, 8255, VDG row generation, host only | golden images match for all nine modes — **done**, the images checked by eye before they were committed (`test/golden/`) |
 | **M3** | Board bring-up: clocks, I²C, LCD, test pattern; the real core 0 slice loop, split at flyback (§12.1) | 256×192 rectangle at (32,64), all four corners verified; present time measured and compared to §8.4's estimate; a guest loop polling `FS` observes the low state and escapes — **done** 2026-09-22 on a Plus 2 W: the test pattern's corners, colour order and orientation checked by eye on the panel; a full redraw measured at 11.5 ms, wire-bound (§8.4); zero I²C errors |
 | **M4** | **Atom boots.** ROMs from SD, display live, keyboard mapped | the `>` prompt accepts `PRINT 2+2` — **done** 2026-09-22 on a Plus 2 W: typed on the PicoCalc keyboard, answer read off the panel; `CLEAR 0` + `PLOT` draws an SG6 element of the right size |

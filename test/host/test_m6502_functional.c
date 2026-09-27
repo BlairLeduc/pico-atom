@@ -2,15 +2,16 @@
  * Bruce Clark's decimal test (design.md §15.1). Both are non-negotiable:
  * they are the difference between an emulator and a plausible one.
  *
- * Neither binary is in the tree. Build them from
- * github.com/Klaus2m5/6502_65C02_functional_tests and point
- * PICO_ATOM_TEST_ROMS at the directory holding:
+ * Neither binary is in the tree. tools/fetch-test-suites.sh puts them in
+ * test/suites/, where this test finds them without PICO_ATOM_TEST_ROMS:
  *
- *   6502_functional_test.bin    64 KiB image, load #0000, start #0400
- *   6502_decimal_test.bin       load #0200, start #0200, result in #000B
+ *   6502_functional_test.bin    64 KiB image, load #0000, start #0400,
+ *                               from github.com/Klaus2m5/6502_65C02_functional_tests
+ *   6502_decimal_test.bin       load #0200, start #0200, result in #000B,
+ *                               assembled from test/asm/6502_decimal_test.s
  *
- * Those load and start addresses are the defaults of that repository's
- * supplied listings; if you assemble with different options, override
+ * Those are the defaults of the supplied listing and of test/asm/; if you
+ * assemble with different options, override
  * them with the environment variables named below. Without the binaries
  * the test reports as skipped rather than as passing.
  */

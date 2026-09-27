@@ -175,7 +175,8 @@ re-runs `atom_init` with its machine configuration while core 0 waits. A wrong
 line is skipped, and the first problem goes to the menu's status row. The
 emulator writes the file only from the menu's *Save settings*, which edits it
 in place, keeping the user's comments and lines (§11.6). On a Plus 2 W on 2026-09-24 a card without the
-file booted on the defaults; a card with one has not been tried on the board yet.
+file booted on the defaults; by 2026-09-26 a card with one had been tried on
+the board, and its settings took.
 
 The field follows the VDG's 262 lines and ends where the next active line
 begins, and BASIC's `RND` is seeded from the board (design.md §12.1, §7.2).
@@ -270,16 +271,42 @@ Tests whose subject has a clock run twice: `test_field`, `test_audio`,
 read. `guest_boot_at(g, mhz)` builds a machine at a given clock whatever the
 variable says.
 
-`test_m6502_functional` runs Klaus Dormann's suite and reports as **skipped**
-unless the binary is present. `./tools/fetch-test-suites.sh` downloads it into
-`test/suites/` (gitignored — the tree ships no binaries it did not build); the
-test finds it there without any environment variable. A skip is not a pass:
-treat a skipped functional test as an unverified CPU.
+`test_m6502_functional` runs Klaus Dormann's suite and Bruce Clark's decimal
+test, and reports as **skipped** unless the binaries are present.
+`./tools/fetch-test-suites.sh` downloads Dormann's into `test/suites/` and
+assembles Clark's there from `test/asm/6502_decimal_test.s` (public domain, so
+its source is in the tree) with cc65's `ca65`/`ld65` (`brew install cc65`; CI
+installs it). The directory is gitignored — the tree ships no binaries it did
+not build — and the test finds it without any environment variable. A skip is
+not a pass: treat a skipped functional test as an unverified CPU. Clark's test
+checks every flag (Dormann's copy checks only A and C), invalid BCD included.
 
-Bruce Clark's decimal test is **not yet wired up** — it is distributed as
-source, not as a binary. Until it is, decimal mode is covered by the functional
-test's decimal section plus exhaustive valid-BCD checks in
-`test/host/test_m6502_decimal.c`; invalid-BCD operands are the remaining gap.
+**The trace-diff harness** (design.md §15.1) runs the same ROMs and keys under
+our core and under Atomulator, instruction by instruction, and diffs them:
+
+```sh
+cmake --build build/host --target atom-trace
+tools/trace/build-atomulator.sh ~/Source/hobby/pico/Atomulator   # hoglet67's
+tools/trace-diff.py run --keys 'PRINT 2+2\n'
+```
+
+It is a tool, not a CTest, because it needs an Atomulator checkout; nothing of
+Atomulator is copied into the tree. The two machines' fields differ in length,
+so divergences after a keyboard or FS read are expected and counted. `values`,
+`path` or an unexplained cycle difference fails it. **Atomulator's timing is
+wrong** for zero page,X reads and read-modify-writes, `INC`/`DEC abs,X`,
+`CPX #`, `CPX abs` and `TAY` (`ATOMULATOR_ERRATA`): when it disagrees with us on
+cycles, check the MCS6500 table before believing it. Keep a key script's lines
+under the MOS's line length, and give a command time to finish after RETURN:
+the Atom has no type-ahead.
+
+**The soak** (design.md §15.3) is `tools/soak.sh ELF [MINUTES]` on battery,
+then `tools/soak-check.py` over the log. It passed on a Plus 2 W on battery
+on 2026-09-26: 31 minutes, every counter zero, `rt` never below 0.999. Don't
+press `R` during a run: while the program has column 9 selected, BASIC's
+Escape test (`#C504`) reads `R` as Escape. The shell's `grep` is ugrep, which can
+print nothing on these UART logs (CR line endings, a UTF-8 dash in the banner);
+read them with Python if a `grep` comes back empty.
 
 ## Where things are
 
@@ -332,7 +359,10 @@ test's decimal section plus exhaustive valid-BCD checks in
 | `test/host/guest.*` | the real machine on the host for those tests: ROMs found by SHA-1, keys typed through keymatrix |
 | `test/host/vdg_scenes.*` | the VRAM behind the golden images, shared by the test and `vdg-ppm` |
 | `test/golden/` | §15.1's reference PPMs, all nine modes, both colour sets |
-| `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` |
+| `tools/fetch-test-suites.sh` | pulls the Dormann binary into `test/suites/` and assembles Clark's there |
+| `test/asm/6502_decimal_test.s` | Bruce Clark's decimal test, public domain, in ca65 syntax, every flag checked |
+| `tools/trace-diff.py`, `tools/trace/` | §15.1's harness: `atom-trace.c` (ours), `atomulator-trace.c` and `build-atomulator.sh` (the reference, built from a checkout), `keyscript.h` (one key script for both), a stub `allegro/allegro.h` |
+| `tools/soak.sh`, `soak-check.py` | §15.3's soak: flash, type the program, keep typing, capture; then the verdict from the log |
 | `tools/mkfont.py` | character ROM -> `mc6847_font.h`, and `--dump` to proof it |
 | `tools/vdg-ppm.c` | renders the scenes to PPM; `vdg-ppm test/golden` regenerates the goldens |
 | `cmake/version.cmake` | `pico_atom_version.h` from `git describe`, at build time, for the banner and the About page |
