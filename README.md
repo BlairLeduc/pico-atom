@@ -1,4 +1,7 @@
 # pico-atom
+
+![Atom Emulator](/assets/mono.png)
+
 An Acorn Atom emulator for the PicoCalc
 
 ## Documentation
@@ -69,11 +72,11 @@ first is a different revision.
 
 ### Where to put them
 
-Copy them to the SD card as `/atom/roms/akernel.rom` and so on. The repository
-also has an ignored [`roms/`](roms/) directory you can stage them in; see
-[`roms/README.md`](roms/README.md).
+Copy them to the SD card as `/atom/roms/akernel.rom` and so on. 
 
 ## Using it
+
+![Emulator Menu](/assets/menu.png)
 
 The emulator boots straight to the Atom's `>` prompt.
 
@@ -127,6 +130,8 @@ without the Atom's `SAVE` needs *Record* from the menu, then *Stop
 recording*. A tape can hold about 36 minutes of recording. A UEF that is
 gzipped, or set read-only on your computer, is protected: the `SAVE` goes
 nowhere, and the bottom line says `PROTECTED`.
+
+![Chuckie Egg](/assets/chuckie.png)
 
 For example, Chuckie Egg's `cchuck.uef` names `CHUCKIE` as its first file:
 
