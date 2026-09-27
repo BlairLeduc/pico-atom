@@ -17,6 +17,7 @@ void settings_default(settings_t *s) {
     s->volume    = 8u;
     s->backlight = 0u;
     s->turbo     = true;
+    s->host_mhz  = SETTINGS_HOST_MHZ;
     memcpy(s->utility, SETTINGS_UTILITY, sizeof SETTINGS_UTILITY);
 }
 
@@ -74,11 +75,23 @@ static settings_status_t background(settings_t *s, const char *v) {
     return SET_OK;
 }
 
-/* 1 or 2 MHz (§12.1). */
+/* 1, 2 or 4 MHz (§12.1). 4 is taken whatever host_clock says, since
+ * the lines may come in either order; the port decides what runs. */
 static settings_status_t guest_clock(settings_t *s, const char *v) {
     unsigned mhz;
-    if (number(v, 1u, ATOM_CLOCK_MHZ_MAX, &mhz) != SET_OK) return SET_BAD_VALUE;
+    if (number(v, 1u, ATOM_CLOCK_MHZ_MAX, &mhz) != SET_OK || mhz == 3u) return SET_BAD_VALUE;
     s->machine.clock_mhz = (uint8_t)mhz;
+    return SET_OK;
+}
+
+/* 150 or 300 MHz (§3.2). */
+static settings_status_t host_clock(settings_t *s, const char *v) {
+    unsigned mhz;
+    if (number(v, SETTINGS_HOST_MHZ, SETTINGS_HOST_MHZ_FAST, &mhz) != SET_OK ||
+        (mhz != SETTINGS_HOST_MHZ && mhz != SETTINGS_HOST_MHZ_FAST)) {
+        return SET_BAD_VALUE;
+    }
+    s->host_mhz = mhz;
     return SET_OK;
 }
 
@@ -102,12 +115,13 @@ static settings_status_t keys(settings_t *s, const char *v) {
  * Only the tape and the drives may be left empty, meaning none. */
 enum {
     K_SCREEN, K_BORDER, K_BACKGROUND, K_STATUS, K_BACKLIGHT, K_VOLUME, K_KEYS, K_TAPE,
-    K_TURBO, K_DRIVE0, K_DRIVE1, K_UPPER_RAM, K_DOS, K_CLOCK, K_UTILITY, K_PERF, K_COUNT
+    K_TURBO, K_DRIVE0, K_DRIVE1, K_UPPER_RAM, K_DOS, K_CLOCK, K_UTILITY, K_PERF, K_HOST_CLOCK,
+    K_COUNT
 };
 
 static const char *const k_names[K_COUNT] = {
     "screen", "border", "background", "status", "backlight", "volume", "keys", "tape",
-    "turbo", "drive0", "drive1", "upper_ram", "dos", "clock", "utility", "perf",
+    "turbo", "drive0", "drive1", "upper_ram", "dos", "clock", "utility", "perf", "host_clock",
 };
 
 static settings_status_t apply(settings_t *s, unsigned k, const char *v) {
@@ -129,6 +143,7 @@ static settings_status_t apply(settings_t *s, unsigned k, const char *v) {
     case K_CLOCK:     return guest_clock(s, v);
     case K_UTILITY:   return utility(s, v);
     case K_PERF:      return on_off(v, &s->perf);
+    case K_HOST_CLOCK: return host_clock(s, v);
     }
     return SET_UNKNOWN;
 }
@@ -261,6 +276,7 @@ static bool key_equal(unsigned k, const settings_t *a, const settings_t *b) {
     case K_CLOCK:      return atom_clock_mhz(&a->machine) == atom_clock_mhz(&b->machine);
     case K_UTILITY:    return same_name(a->utility, b->utility);
     case K_PERF:       return a->perf == b->perf;
+    case K_HOST_CLOCK: return a->host_mhz == b->host_mhz;
     }
     return true;
 }
@@ -286,9 +302,13 @@ static const char *value_of(unsigned k, const settings_t *s, char num[4]) {
     case K_DRIVE1:     return s->drive[1];
     case K_UPPER_RAM:  return s->machine.upper_ram ? "on" : "off";
     case K_DOS:        return s->machine.atomdos ? "on" : "off";
-    case K_CLOCK:      return atom_clock_mhz(&s->machine) == 2u ? "2" : "1";
+    case K_CLOCK:
+        num[0] = (char)('0' + atom_clock_mhz(&s->machine));
+        num[1] = 0;
+        return num;
     case K_UTILITY:    return s->utility[0] ? s->utility : "none";
     case K_PERF:       return s->perf ? "on" : "off";
+    case K_HOST_CLOCK: return s->host_mhz == SETTINGS_HOST_MHZ_FAST ? "300" : "150";
     }
     return "";
 }

@@ -374,6 +374,23 @@ but the bootrom's divider is conservative, 300 MHz has run test sessions
 on the RP2350 boards above. Do not assume an excessive flash clock always
 fails immediately or visibly; qualify data integrity as well as startup.
 
+What the bootrom leaves, read off `qmi_hw->m[0].timing` on a Plus 2 W on
+2026-09-27 in a build without an embedded boot stage 2 (the SDK's default on
+RP2350): **clkdiv 3, RX delay 2**, so 50 MHz at 150 MHz and 100 MHz at 300 if
+left alone. The divider is a register you can move. Double both fields
+before raising the PLL and the flash sees at 300 MHz exactly what it saw at
+150. The RX delay counts half `clk_sys` cycles, so it must scale too. Do it
+from SRAM with interrupts off, since nothing may fetch from flash while the
+timing changes. The emulator does this at power-on (design.md §3.2).
+
+**The core rail survives a reset.** A 150 MHz build flashed over SWD after a
+300 MHz run, or restarted by the watchdog, comes back with the rail still at
+1.20 V: the regulator is not in the domain a system reset clears. The QMI
+timing is set again by the bootrom, but the voltage is not. So a firmware
+that ever raises the rail must set it at 150 MHz too, after the clock.
+Found on a Plus 2 W on 2026-09-27 by reading `vreg_get_voltage()` in the
+banner.
+
 ---
 
 ## 4. The display
@@ -831,7 +848,7 @@ bus must not hang the machine.
 | `0x08` | `RST` | — | **a read resets the MCU** after 1 s; a write resets after *value* seconds |
 | `0x09` | `FIF` | `[state, key]`, one event per read | `[0,0]` when empty |
 | `0x0A` | `BK2` | keyboard backlight | writable, steps of 32 |
-| `0x0B` | `BAT` | percent in bits 0–6, **bit 7 = charging** | refreshed by the MCU every 20 s, not on demand |
+| `0x0B` | `BAT` | percent in bits 0–6, **bit 7 = charging** | refreshed by the MCU every 20 s, not on demand. Bit 7 is set on USB power even with the battery full: `100%` with bit 7, on a Plus 2 W on 2026-09-27, so it tells USB from battery |
 | `0x0C` | `C64_MTX` | 10 bytes of raw matrix bitmap | reply is longer than two bytes |
 | `0x0D` | `C64_JS` | arrows + Enter as a C64-style joystick | |
 | `0x0E` | `OFF` | — | write to power off; value is clamped to ≥6 and used as a **delay in seconds** |

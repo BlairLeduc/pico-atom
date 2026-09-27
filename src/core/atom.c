@@ -22,7 +22,7 @@ void atom_config_default(atom_config_t *cfg) {
 }
 
 unsigned atom_clock_mhz(const atom_config_t *cfg) {
-    return cfg->clock_mhz >= 2u ? ATOM_CLOCK_MHZ_MAX : 1u;
+    return cfg->clock_mhz >= 4u ? 4u : cfg->clock_mhz >= 2u ? 2u : 1u;
 }
 
 static void map_open(atom_t *m, unsigned first_page, unsigned last_page) {
@@ -374,8 +374,8 @@ void atom_cassette_eject(atom_t *m) {
 }
 
 void atom_cassette_play(atom_t *m, bool on) {
-    /* The MOS times a tape it reads by its own loops, so at 2 MHz it
-     * reads nothing; test_cassette settled that by execution (§12.1,
+    /* The MOS times a tape it reads by its own loops, so at 2 MHz or
+     * more it reads nothing; test_cassette settled that by execution (§12.1,
      * §16). The deck plays only at 1 MHz, as an owner would have
      * switched down, and says so. Recording is the reference's, which
      * keeps wall time, so it works at either clock. */

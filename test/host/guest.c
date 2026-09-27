@@ -47,7 +47,7 @@ bool guest_find_roms(const char **dir) {
 
 unsigned guest_mhz(void) {
     const char *e = getenv("PICO_ATOM_TEST_MHZ");
-    return e && e[0] == '2' ? 2u : 1u;
+    return e && e[0] == '4' ? 4u : e && e[0] == '2' ? 2u : 1u;
 }
 
 bool guest_have_rom(rom_slot_t s) {

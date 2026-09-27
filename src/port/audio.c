@@ -22,7 +22,10 @@
 #define AUDIO_PIN_L 26u   /* PWM5 A, hardware-notes.md §1.1 */
 #define AUDIO_PIN_R 27u   /* PWM5 B */
 
-#define PWM_DIV     1u
+/* The carrier is clk_sys / (PWM_DIV * (TOP + 1)): the divider follows the
+ * host clock, so at 300 MHz the carrier, the sample rate and the DMA's
+ * cadence are 150 MHz's exactly (design.md §3.2, §9.2). */
+#define PWM_DIV_HZ  150000000u
 #define PWM_MID     ((ATOM_PWM_TOP + 1u) / 2u)
 
 #define RING_BYTES  (ATOM_DMA_RING_SLOTS * sizeof(uint32_t))
@@ -122,15 +125,17 @@ void audio_init(void) {
     /* Both pins are one slice — ask, do not hard-code (§5.1). */
     unsigned slice = pwm_gpio_to_slice_num(AUDIO_PIN_L);
 
+    uint32_t div = clock_get_hz(clk_sys) / PWM_DIV_HZ;
+    if (div < 1u) div = 1u;
     pwm_config pc = pwm_get_default_config();
-    pwm_config_set_clkdiv_int(&pc, PWM_DIV);
+    pwm_config_set_clkdiv_int(&pc, div);
     pwm_config_set_wrap(&pc, ATOM_PWM_TOP);
     pwm_init(slice, &pc, false);
     pwm_set_both_levels(slice, PWM_MID, PWM_MID);
 
     /* The cadence as a fraction, never the truncated 36,621 (§9.2). */
     s_rate_num = clock_get_hz(clk_sys);
-    s_rate_den = PWM_DIV * (ATOM_PWM_TOP + 1u) * ATOM_PWM_OVERSAMPLE;
+    s_rate_den = div * (ATOM_PWM_TOP + 1u) * ATOM_PWM_OVERSAMPLE;
 
     for (unsigned i = 0; i < ATOM_DMA_RING_SLOTS; i++) s_ring[i] = SILENCE;
     s_head = s_tail = 0;

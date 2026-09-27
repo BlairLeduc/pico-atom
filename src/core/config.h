@@ -66,12 +66,13 @@
 
 #define ATOM_CPU_HZ       1000000u  /* stock 1 MHz; turbo is a multiplier */
 
-/* The guest's clock in MHz, atom_config_t.clock_mhz (§12.1): 1, or an
- * owner's 2 MHz. What is fixed in wall time — the field, the beeper's
- * sample period, port C bit 4's reference, a UEF's half-cycles and the
- * 8271's timing — is these 1 MHz values times the clock, worked out
- * once in atom_init. 4 MHz is not offered: core 0 has not the room. */
-#define ATOM_CLOCK_MHZ_MAX      2u
+/* The guest's clock in MHz, atom_config_t.clock_mhz (§12.1): 1, an
+ * owner's 2 MHz, or 4. What is fixed in wall time — the field, the
+ * beeper's sample period, port C bit 4's reference, a UEF's half-cycles
+ * and the 8271's timing — is these 1 MHz values times the clock, worked
+ * out once in atom_init. 4 MHz needs the host at 300 MHz: at 150 core 0
+ * has not the room (§3.2), and the port runs it at 2. */
+#define ATOM_CLOCK_MHZ_MAX      4u
 
 /* 60 Hz on every Atom, UK machines included (§16, confirmed): the
  * MC6847 is an NTSC part, and software times itself on it — BASIC's

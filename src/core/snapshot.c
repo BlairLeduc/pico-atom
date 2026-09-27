@@ -50,22 +50,28 @@ enum {
     S_ROMS = 56,                  /* SHA-1 of the ROM pages, 20 bytes  */
     S_FDC = 76,                   /* mode, output, track 0, track 1, head 0, head 1, unload revs */
     S_VIA2 = 83,                  /* ira irb lines sr_halves, sr_timer (M10) */
-    S_END = 89,                   /* the rest is reserved, written zero */
+    S_CLOCK = 89,                 /* 4 at 4 MHz, else 0 (M13)          */
+    S_END = 90,                   /* the rest is reserved, written zero */
 };
 
 _Static_assert(S_END <= SNAP_STATE_LEN, "the state section has outgrown its length");
 
 /* The configuration bits that change what the address space is, and
- * bit 7 for the 2 MHz clock (§12.1). Zero there is 1 MHz, so every file
- * from before M12 loads as 1 MHz. */
-#define CFG_2MHZ 0x80u
+ * bit 7 for a clock above 1 MHz (§12.1). Zero there is 1 MHz, so every
+ * file from before M12 loads as 1 MHz. Which clock above 1 MHz is
+ * S_CLOCK's: 0 there is 2 MHz, as M12 wrote it, or 4. A 4 MHz file says
+ * version 2, so that a build that knows only 2 MHz calls it newer
+ * rather than loading it as 2 MHz; every other file is still version 1,
+ * byte for byte what M12 wrote (§11.5). */
+#define CFG_FAST 0x80u
+#define SNAP_VERSION_M12 1u
 
 static uint8_t cfg_bits(const atom_config_t *c) {
     return (uint8_t)((c->block_zero ? 0x01u : 0) | (c->text_space ? 0x02u : 0) |
                      (c->video ? 0x04u : 0) | (c->video_aperture ? 0x08u : 0) |
                      (c->via_fitted ? 0x10u : 0) | (c->atomdos ? 0x20u : 0) |
                      (c->upper_ram ? 0x40u : 0) |
-                     (atom_clock_mhz(c) == 2u ? CFG_2MHZ : 0));
+                     (atom_clock_mhz(c) != 1u ? CFG_FAST : 0));
 }
 
 /* Every ROM page, with its page number, so the same images in different
@@ -125,6 +131,7 @@ static void state_encode(const atom_t *m, uint8_t st[SNAP_STATE_LEN]) {
     st[S_OPEN_BUS] = m->open_bus;
     put32(st + S_BUDGET, (uint32_t)m->budget);
     st[S_CFG] = cfg_bits(&m->cfg);
+    st[S_CLOCK] = atom_clock_mhz(&m->cfg) == 4u ? 4u : 0;
     put16(st + S_FIELD_HZ, (uint16_t)ATOM_FIELD_HZ);   /* kept for the format */
     rom_hash(m, st + S_ROMS);
 
@@ -177,7 +184,7 @@ snap_status_t snapshot_save(const atom_t *m, snap_write_fn write, void *ctx) {
 
     uint8_t hdr[SNAP_HEADER_LEN];
     memcpy(hdr, magic, sizeof magic);
-    put16(hdr + 8, SNAP_VERSION);
+    put16(hdr + 8, (uint16_t)(st[S_CLOCK] ? SNAP_VERSION : SNAP_VERSION_M12));
     put16(hdr + 10, SNAP_HEADER_LEN);
     put32(hdr + 12, SNAP_PAYLOAD_LEN);
     put32(hdr + 16, crc);
@@ -195,7 +202,7 @@ static snap_status_t read_header(snap_read_fn read, void *ctx, uint32_t *crc) {
     if (!read(ctx, hdr, sizeof hdr)) return SNAP_IO;
     if (memcmp(hdr, magic, sizeof magic) != 0) return SNAP_NOT_SNAPSHOT;
     if (get16(hdr + 8) > SNAP_VERSION) return SNAP_NEWER;
-    if (get16(hdr + 8) != SNAP_VERSION || get16(hdr + 10) != SNAP_HEADER_LEN ||
+    if (get16(hdr + 8) < SNAP_VERSION_M12 || get16(hdr + 10) != SNAP_HEADER_LEN ||
         get32(hdr + 12) != SNAP_PAYLOAD_LEN) {
         return SNAP_NOT_SNAPSHOT;
     }
@@ -206,9 +213,10 @@ static snap_status_t read_header(snap_read_fn read, void *ctx, uint32_t *crc) {
 /* Would this state resume on this machine? */
 static snap_status_t compatible(const atom_t *m, const uint8_t st[SNAP_STATE_LEN]) {
     uint8_t want = cfg_bits(&m->cfg);
-    if ((st[S_CFG] ^ want) & (uint8_t)~CFG_2MHZ) return SNAP_OTHER_MACHINE;
-    /* Every count in the file is in the other clock's cycles. */
-    if (st[S_CFG] != want) return SNAP_OTHER_CLOCK;
+    if ((st[S_CFG] ^ want) & (uint8_t)~CFG_FAST) return SNAP_OTHER_MACHINE;
+    /* Every count in the file is in another clock's cycles. */
+    unsigned mhz = !(st[S_CFG] & CFG_FAST) ? 1u : st[S_CLOCK] == 4u ? 4u : 2u;
+    if (mhz != atom_clock_mhz(&m->cfg)) return SNAP_OTHER_CLOCK;
     if (get16(st + S_FIELD_HZ) != ATOM_FIELD_HZ) return SNAP_OTHER_MACHINE;
     uint8_t roms[SHA1_DIGEST_LEN];
     rom_hash(m, roms);
@@ -346,7 +354,7 @@ const char *snapshot_status_str(snap_status_t st) {
     case SNAP_NEWER:         return "FROM A NEWER VERSION";
     case SNAP_CORRUPT:       return "DAMAGED (CRC)";
     case SNAP_OTHER_MACHINE: return "OTHER MACHINE CONFIG";
-    case SNAP_OTHER_CLOCK:   return "TAKEN AT THE OTHER CLOCK";
+    case SNAP_OTHER_CLOCK:   return "TAKEN AT ANOTHER CLOCK";
     case SNAP_OTHER_ROMS:    return "OTHER ROMS";
     case SNAP_BUSY:          return "TAPE OR DISC BUSY";
     }

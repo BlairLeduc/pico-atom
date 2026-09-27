@@ -180,9 +180,11 @@ int main(void) {
 
     /* ---- the parts are §12.1's line counts --------------------------- */
     {
-        /* At 2 MHz, §12.1's figures: FS low for 4,071, then 4,834. */
+        /* At 2 MHz, §12.1's figures: FS low for 4,071, then 4,834; at 4,
+         * 8,142 and 9,669. */
         atom_t *m = machine();
-        uint32_t fs = mhz == 2u ? 4071u : 2035u, blank = mhz == 2u ? 4834u : 2417u;
+        uint32_t fs = mhz == 4u ? 8142u : mhz == 2u ? 4071u : 2035u;
+        uint32_t blank = mhz == 4u ? 9669u : mhz == 2u ? 4834u : 2417u;
         CHECK(m->field_fs_low == fs && m->field_blank == blank &&
               m->field_active == per_field - fs - blank,
               "at %u MHz FS is low for %u and the blank is %u, got %u and %u", mhz, fs,

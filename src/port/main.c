@@ -96,7 +96,8 @@ static volatile struct {
     uint32_t full_presents;
     uint32_t last_us;
     uint32_t max_us;
-} g_c1;
+    int32_t  battery;        /* SB_REG_BAT's byte, -1 until read    */
+} g_c1 = { .battery = -1 };
 
 /* The perf line's host counters (design.md §13.1): core 0 closes a
  * window once a wall-clock second and writes its words here, each a
@@ -131,6 +132,11 @@ static settings_t g_file;
  * the ROMs, from boot and renewed by each restart. Core 1's. */
 static board_info_t  g_board;
 static roms_report_t g_roms;
+
+/* Is the host at 300 MHz (design.md §3.2)? */
+static bool host_fast(void) {
+    return clock_get_hz(clk_sys) >= SETTINGS_HOST_MHZ_FAST * 1000000u;
+}
 
 static const char *machine_power_on(const atom_config_t *cfg, const char *utility,
                                     bool restart);
@@ -275,6 +281,18 @@ static void measure_present(void) {
  * poll is what keeps it awake, at 30 Hz from this loop, in thread
  * context and never from a timer IRQ (design.md §10.2). */
 #define KBD_POLL_US 33333u
+/* The MCU refreshes its battery gauge every 20 s (hardware-notes.md §6). */
+#define BAT_POLL_US 20000000u
+
+/* The heartbeat's battery: "87%", "87% charging", or "?" before the first
+ * read or after a failed one. Core 0's; the byte is core 1's. */
+static const char *battery_text(void) {
+    static char text[16];
+    int32_t b = g_c1.battery;
+    if (b < 0) return "?";
+    snprintf(text, sizeof text, "%u%%%s", (unsigned)(b & 0x7F), b & 0x80 ? " charging" : "");
+    return text;
+}
 
 /* No ROMs: show why, and keep the southbridge awake, for ever. A blank
  * screen is the most expensive failure to debug on this hardware
@@ -395,6 +413,11 @@ static const char *machine_power_on(const atom_config_t *cfg, const char *utilit
             snprintf(drive[d], sizeof drive[d], "%s", discio_inserted(d));
     }
 
+    /* 4 MHz only on a host at 300 (design.md §3.2, §12.1): at 150 it
+     * would underrun, so it runs at 2. */
+    atom_config_t run = *cfg;
+    if (atom_clock_mhz(&run) == 4u && !host_fast()) run.clock_mhz = 2u;
+    cfg = &run;
     atom_init(&g_atom, cfg);
     bool ok = roms_load(&g_atom, utility, &g_roms);
     snprintf(g_settings.utility, sizeof g_settings.utility, "%s", utility);
@@ -558,6 +581,8 @@ static void core1_main(void) {
 #ifdef PICO_ATOM_BOOT_CLOCK
     boot->machine.clock_mhz = PICO_ATOM_BOOT_CLOCK;   /* over the file's */
 #endif
+    if (atom_clock_mhz(&boot->machine) == 4u && !host_fast())
+        settingsio_fail("clock", "4 MHz needs host_clock 300");
     bool ok = false;
     if (mount_error == 0) {
         ok = machine_power_on(&boot->machine, boot->utility, false) == NULL;
@@ -606,8 +631,11 @@ static void core1_main(void) {
     if (!ok) no_roms(&g_roms);
 
     /* Live: present the newest snapshot, drop superseded ones (§12.2),
-     * and poll the keyboard at 30 Hz. */
+     * and poll the keyboard at 30 Hz, and the battery gauge as often as
+     * the MCU refreshes it, for the heartbeat: whether it is charging is
+     * how a log shows the soak ran on battery (§15.3). */
     uint32_t last_poll = time_us_32();
+    uint32_t last_bat = last_poll - BAT_POLL_US;
     /* The perf line's second, core 1's half of it (§13.1). */
     uint32_t sec_start = last_poll, sec_max_us = 0, sec_dropped = g_pool.dropped;
     for (;;) {
@@ -654,6 +682,11 @@ static void core1_main(void) {
         if (time_us_32() - last_poll >= KBD_POLL_US) {
             last_poll = time_us_32();
             g_c1.key_events += kbd_poll();
+        }
+        if (time_us_32() - last_bat >= BAT_POLL_US) {
+            last_bat = time_us_32();
+            uint8_t r[2];
+            g_c1.battery = sb_read(SB_REG_BAT, r) == SB_OK ? r[1] : -1;
         }
 
         /* A hardware-timer wait between iterations rather than spinning
@@ -775,10 +808,28 @@ static bool park_for_ui(uint32_t why) {
     return g_power_ons != power_ons;
 }
 
-int main(void) {
-    stdio_init_all();
+/* The host clock the card asks for (design.md §3.2, §11.7), read before
+ * anything is brought up, because everything derives its rate from the
+ * clock it finds. Nothing is printed: stdio is not up, and core 1 reads
+ * the file again, and says what it finds, once it is. */
+static unsigned boot_host_mhz(void) {
+#ifdef PICO_ATOM_BOOT_HOST_MHZ
+    return PICO_ATOM_BOOT_HOST_MHZ;   /* over the file's */
+#else
+    if (storage_mount() != 0) return SETTINGS_HOST_MHZ;
+    settingsio_load(&g_file);
+    storage_unmount();
+    return g_file.host_mhz;
+#endif
+}
 
-    bool clocks_ok = board_init_clocks();
+int main(void) {
+    /* 150 MHz first, for the card; then the card's clock, before stdio,
+     * so the UART's divider is worked out from the clock that stays. */
+    bool clocks_ok = board_init_clocks(SETTINGS_HOST_MHZ);
+    unsigned host_mhz = clocks_ok ? boot_host_mhz() : SETTINGS_HOST_MHZ;
+    if (clocks_ok && host_mhz != SETTINGS_HOST_MHZ) clocks_ok = board_init_clocks(host_mhz);
+    stdio_init_all();
 
     board_identify(&g_board);
 
@@ -787,8 +838,8 @@ int main(void) {
     board_log_banner(&g_board);
     printf("  firmware     : %s\n", PICO_ATOM_VERSION);
     if (!clocks_ok) {
-        printf("  WARNING: clk_sys is not at 150 MHz; SPI and audio rates "
-               "will not be the ones this build assumes\n");
+        printf("  WARNING: clk_sys is not at the %u MHz asked for; SPI and audio "
+               "rates will not be the ones this build assumes\n", host_mhz);
     }
 
     /* Core 1 configures the machine from the settings file and loads
@@ -1000,7 +1051,8 @@ int main(void) {
             log_printf("  heartbeat    : %lu fields, rt %lu.%03lu, %llu guest cycles, "
                    "%u undoc op(s), VDG %s | %s %lu presents (%lu full, "
                    "%lu dropped), last %lu us, max %lu us, i2c errors %lu | "
-                   "keys %lu (%lu lost), tape calls %lu, disc sectors %lu read %lu written\n",
+                   "keys %lu (%lu lost), tape calls %lu, disc sectors %lu read %lu written | "
+                   "battery %s\n",
                    (unsigned long)field,
                    (unsigned long)(rt1000 / 1000u), (unsigned long)(rt1000 % 1000u),
                    (unsigned long long)g_atom.cpu.cycles,
@@ -1014,7 +1066,7 @@ int main(void) {
                    (unsigned long)(kbd_overflows() + g_keys.dropped),
                    (unsigned long)g_atom.tape.served,
                    (unsigned long)g_atom.fdc.sectors_read,
-                   (unsigned long)g_atom.fdc.sectors_written);
+                   (unsigned long)g_atom.fdc.sectors_written, battery_text());
             /* Where core 0's time goes (§12.3, design.md §6.3). The
              * guest is paced, so rt above reads 1.000 whatever the code
              * costs; the cost is the time spent inside the guest.

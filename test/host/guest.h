@@ -33,8 +33,8 @@ bool guest_have_rom(rom_slot_t s);
 /* BASIC's RND seed after guest_boot; the device seeds from the board. */
 #define GUEST_RND_SEED 0x5EED0A7031ull
 
-/* The clock guest_boot builds at: 2 MHz under a test's _2mhz
- * registration (PICO_ATOM_TEST_MHZ=2), else 1 (§12.1). */
+/* The clock guest_boot builds at: 2 or 4 MHz under a test's _2mhz or
+ * _4mhz registration (PICO_ATOM_TEST_MHZ), else 1 (§12.1). */
 unsigned guest_mhz(void);
 
 /* Build the machine, install every image found, seed RND, reset, and run

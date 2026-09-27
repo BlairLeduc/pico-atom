@@ -6,7 +6,9 @@
 #include <string.h>
 #include <strings.h>
 
+#include "hardware/clocks.h"
 #include "hardware/sync.h"
+#include "hardware/watchdog.h"
 #include "pico/stdlib.h"
 
 #include "discio.h"
@@ -60,9 +62,10 @@ enum { S_SLOT, S_SAVE, S_LOAD, S_DELETE, S_COUNT };
 /* The display page (§8.7). */
 enum { D_COLOUR, D_BORDER, D_BACKGROUND, D_STATUS, D_PERF, D_BACKLIGHT, D_COUNT };
 
-/* The Machine page (§13.1): four settings staged, and the restart that
- * applies them. */
-enum { M_RAM, M_CLOCK, M_DOS, M_UTILITY, M_APPLY, M_COUNT };
+/* The Machine page (§13.1): five settings staged, and the restart that
+ * applies them. The host clock is the Pico's (§3.2), and changing it
+ * restarts the Pico, not only the Atom. */
+enum { M_RAM, M_CLOCK, M_DOS, M_UTILITY, M_HOST, M_APPLY, M_COUNT };
 
 #define TAPE_ROWS 11
 
@@ -101,7 +104,7 @@ static struct {
     bool             machine;
     int              machine_sel;
     bool             st_upper, st_dos;
-    unsigned         st_mhz;
+    unsigned         st_mhz, st_host;
     unsigned         st_util, n_utils;
 
     /* The About page, and the southbridge's version, read as it opens. */
@@ -302,6 +305,12 @@ static const char *staged_utility(void) {
     return s.st_util ? s_utils[s.st_util] : "";
 }
 
+/* The Pico's clock as it runs, in MHz. */
+static unsigned host_mhz(void) {
+    return clock_get_hz(clk_sys) >= SETTINGS_HOST_MHZ_FAST * 1000000u ? SETTINGS_HOST_MHZ_FAST
+                                                                       : SETTINGS_HOST_MHZ;
+}
+
 /* Does row r's staged value differ from the running machine? */
 static bool machine_changed(int r) {
     const atom_config_t *c = &s.m->cfg;
@@ -310,6 +319,7 @@ static bool machine_changed(int r) {
     case M_CLOCK:   return s.st_mhz != atom_clock_mhz(c);
     case M_DOS:     return s.st_dos != c->atomdos;
     case M_UTILITY: return strcasecmp(staged_utility(), s.set->utility) != 0;
+    case M_HOST:    return s.st_host != host_mhz();
     }
     return false;
 }
@@ -338,6 +348,9 @@ static void draw_machine(void) {
             upper(name, sizeof name, s.st_util ? s_utils[s.st_util] : "NONE", 12);
             snprintf(line, sizeof line, "%cUTILITY ROM     < %s >", mark, name);
             break;
+        case M_HOST:
+            snprintf(line, sizeof line, "%cPICO CLOCK      < %u MHZ >", mark, s.st_host);
+            break;
         case M_APPLY:
             snprintf(line, sizeof line, " (APPLY AND RESTART)");
             break;
@@ -348,6 +361,9 @@ static void draw_machine(void) {
     textpage_line(s.vram, 3 + M_COUNT, " 6522 VIA: FITTED, THE MOS NEEDS IT", false);
     textpage_line(s.vram, 5 + M_COUNT, " A RESTART IS A POWER-ON: THE", false);
     textpage_line(s.vram, 6 + M_COUNT, " PROGRAM IN MEMORY IS LOST.", false);
+    /* §3.2: past the RP2350's rating, and what 4 MHz needs. */
+    textpage_line(s.vram, 7 + M_COUNT, " 300 MHZ IS AN OVERCLOCK, AND", false);
+    textpage_line(s.vram, 8 + M_COUNT, " 4 MHZ NEEDS IT.", false);
 }
 
 /* First eight hex digits of a digest. */
@@ -487,9 +503,7 @@ static void do_load(void) {
         return;
     }
     if (st == SNAP_OTHER_CLOCK) {
-        /* Name the clock it was taken at: the other one (§12.1). */
-        snprintf(s.status, sizeof s.status, " NOT LOADED: TAKEN AT %u MHZ",
-                 3u - atom_clock_mhz(&s.m->cfg));
+        say(" NOT LOADED: ANOTHER CLOCK", "");   /* §12.1 */
         return;
     }
     say(" NOT LOADED: %s", snapshot_status_str(st));
@@ -593,6 +607,7 @@ static void open_machine(void) {
     s.st_upper = c->upper_ram;
     s.st_dos = c->atomdos;
     s.st_mhz = atom_clock_mhz(c);
+    s.st_host = host_mhz();
 
     s_utils[0][0] = 0;
     s.n_utils = 1u + (s.card ? roms_list_utility(&s_utils[1], ATOM_ROM_LIST_MAX) : 0u);
@@ -627,6 +642,28 @@ static void apply_machine(void) {
     cfg.upper_ram = s.st_upper;
     cfg.atomdos = s.st_dos;
     cfg.clock_mhz = (uint8_t)s.st_mhz;
+    if (s.st_host != host_mhz()) {
+        /* The clock is set before anything is brought up, and only at
+         * power-on (§3.2): the staged machine goes into the settings
+         * file with it, since the file is all a restart of the Pico
+         * reads (§11.6), and the Pico restarts. */
+        settings_t out = *s.set->file;
+        out.machine.upper_ram = cfg.upper_ram;
+        out.machine.atomdos = cfg.atomdos;
+        out.machine.clock_mhz = cfg.clock_mhz;
+        snprintf(out.utility, sizeof out.utility, "%s", staged_utility());
+        out.host_mhz = s.st_host;
+        const char *err = settingsio_save(&out);
+        if (err) { say(" NOT SAVED: %.20s", err); return; }
+        *s.set->file = out;
+        printf("  machine      : host clock %u MHz saved; restarting the Pico\n", s.st_host);
+        say(" RESTARTING THE PICO...", "");
+        draw();
+        storage_unmount();
+        busy_wait_ms(100);   /* the UART's last line */
+        watchdog_reboot(0, 0, 0);
+        for (;;) tight_loop_contents();
+    }
     say(" RESTARTING...", "");
     draw();
     const char *err = s.set->restart(&cfg, staged_utility());
@@ -643,11 +680,24 @@ static void key_machine(uint8_t c) {
         int dir = c == PC_RIGHT ? 1 : -1;
         switch (s.machine_sel) {
         case M_RAM:     s.st_upper = !s.st_upper; break;
-        case M_CLOCK:   s.st_mhz = s.st_mhz == 1u ? ATOM_CLOCK_MHZ_MAX : 1u; break;
+        case M_CLOCK: {
+            /* 1, 2, and 4 on a host at 300 (§12.1). */
+            static const unsigned clocks[] = { 1u, 2u, 4u };
+            unsigned n = s.st_host == SETTINGS_HOST_MHZ_FAST ? 3u : 2u, i = 0;
+            while (i < n && clocks[i] != s.st_mhz) i++;
+            s.st_mhz = clocks[(i + n + (unsigned)dir) % n];
+            break;
+        }
+        case M_HOST:
+            s.st_host = s.st_host == SETTINGS_HOST_MHZ ? SETTINGS_HOST_MHZ_FAST : SETTINGS_HOST_MHZ;
+            if (s.st_host == SETTINGS_HOST_MHZ && s.st_mhz == 4u) s.st_mhz = 2u;
+            break;
         case M_DOS:     s.st_dos = !s.st_dos; break;
         case M_UTILITY: s.st_util = (s.st_util + s.n_utils + (unsigned)dir) % s.n_utils; break;
         }
-        say(machine_staged() ? " APPLY RESTARTS: PROGRAM LOST" : "", "");
+        say(!machine_staged() ? ""
+            : s.st_host != host_mhz() ? " APPLY SAVES, RESTARTS THE PICO"
+            : " APPLY RESTARTS: PROGRAM LOST", "");
         break;
     }
     case PC_ENTER:

@@ -17,11 +17,16 @@ typedef struct {
     uint8_t     chip_version;   /* physical: RP2350 revision, 0 if n/a  */
     uint32_t    clk_sys_hz;
     uint32_t    clk_peri_hz;
+    uint32_t    qmi_timing;     /* flash XIP's, as the clock left it     */
+    unsigned    vreg_mv;        /* the core rail, as set                 */
 } board_info_t;
 
-/* Set clk_sys to the shipping 150 MHz and put clk_peri on it. Returns
- * false if the PLL would not take the requested frequency. */
-bool board_init_clocks(void);
+/* Set clk_sys to 150 MHz, or to 300 (design.md §3.2) with the core rail
+ * raised first and the flash's divider scaled with it, and put clk_peri
+ * on it. 300 is for power-on only, before any peripheral is brought up:
+ * every one derives its rate from the clock it finds. Any other value is
+ * 150. Returns false if the PLL would not take the frequency. */
+bool board_init_clocks(unsigned mhz);
 
 void board_identify(board_info_t *info);
 void board_log_banner(const board_info_t *info);

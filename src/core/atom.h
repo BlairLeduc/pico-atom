@@ -48,7 +48,7 @@ typedef struct {
     bool atomdos;         /* 8271 FDC at #0A00 — steals 8 bytes of page #0A */
     bool tape_traps;      /* serve OSLOAD/OSSAVE from files (tape.h, §11.2) */
     bool tape_cues;       /* the deck follows the MOS's PLAY TAPE (§11.3) */
-    uint8_t clock_mhz;    /* 1 or 2 (§12.1); 0 is taken as 1 */
+    uint8_t clock_mhz;    /* 1, 2 or 4 (§12.1); 0 is taken as 1, 3 as 2 */
 } atom_config_t;
 
 typedef struct atom_s {
@@ -112,7 +112,7 @@ typedef struct atom_s {
 
 void atom_config_default(atom_config_t *cfg);
 
-/* cfg->clock_mhz as it runs: 1 or 2. */
+/* cfg->clock_mhz as it runs: 1, 2 or 4. */
 unsigned atom_clock_mhz(const atom_config_t *cfg);
 
 /* Guest cycles in one field at this clock: 16,666 at 1 MHz, 33,333 at 2. */
