@@ -25,8 +25,10 @@ that exercised nothing proves nothing.
 Whether it ran on battery is in the log since M13: each heartbeat ends
 with the southbridge's gauge, and "charging" there means USB power. A run
 that shows charging fails, unless --usb says it was meant to be on USB.
-A log from before M13 has no gauge, and the power stays unknown. A full
-battery on USB says charging too (hardware-notes.md §6).
+The converse does not hold: the bit is the charger's, and clears once a
+full battery on USB has finished charging (hardware-notes.md §6), so a
+run that never shows it still needs the operator's word.
+A log from before M13 has no gauge, and the power stays unknown.
 """
 
 import argparse
@@ -40,6 +42,7 @@ AU = re.compile(
     r"audio\s*: (\d+) Hz consumed.*?underrun samples (\d+), late refills (\d+), "
     r"core overflow (\d+), speaker edges (\d+), log dropped (\d+)")
 BAT = re.compile(r"heartbeat\s*:.*\| battery (\?|(\d+)%( charging)?)")
+DIE = re.compile(r"heartbeat\s*:.*\| battery [^,\n]*, (-?\d+) C")
 BANNER = "pico-atom — Acorn Atom for the PicoCalc"
 FIELD_HZ = 60
 
@@ -144,9 +147,12 @@ def main():
         if not a.usb:
             fails.append("the battery was charging, so this was not on battery (--usb if meant)")
     elif levels:
-        power = "battery, %d%% to %d%%" % (levels[0], levels[-1])
+        power = ("never charging, %d%% to %d%%: battery, or USB with the charge done"
+                 % (levels[0], levels[-1]))
     else:
         power = "unknown: the gauge was never read"
+
+    dies = [int(m.group(1)) for m in DIE.finditer(text)]
 
     rates = sorted(int(u[0]) for u in aus)
     print("soak: %s" % a.log)
@@ -161,6 +167,9 @@ def main():
         print("  %-22s %d -> %d" % (name, first, final))
     print("  audio consumed         %d-%d Hz (the control quantity)" % (rates[0], rates[-1]))
     print("  power                  %s" % power)
+    if dies:
+        print("  die temperature        %d to %d C, %d C at the end (uncalibrated)"
+              % (min(dies), max(dies), dies[-1]))
     if garbled_au or garbled_hb:
         print("  %d heartbeat and %d audio lines garbled in the capture; the counters are "
               "cumulative, so the later ones cover them" % (garbled_hb, garbled_au))
@@ -169,7 +178,7 @@ def main():
         for f in fails:
             print("  " + f)
         return 1
-    print("PASS" if bats else "PASS (record whether it was on battery)")
+    print("PASS" if charging else "PASS (record whether it was on battery)")
     return 0
 
 

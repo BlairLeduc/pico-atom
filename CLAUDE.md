@@ -221,7 +221,13 @@ status row says so. A 4 MHz snapshot sets byte 89 and says version 2, and a
 1 MHz only, as before. Measured on a Plus 2 W on 2026-09-27: the four perf
 workloads at 4 MHz on 300 took 62–85 % of core 0 with zero underruns, the
 same as 2 MHz on 150 (§6.3). `-DPICO_ATOM_BOOT_HOST_MHZ=300` sets the host
-clock over the settings file, for a UART-driven run.
+clock over the settings file, for a UART-driven run. Each heartbeat ends with
+the battery gauge and the die temperature (`battery 100% charging, 23 C`).
+**Charging proves USB power; its absence does not**: the bit clears once a
+full battery has finished charging with USB still in (hardware-notes.md §6).
+**The build says `pico2` (RP2350A) but the board is an RP2350B**, so the
+temperature's ADC input is chosen from `SYSINFO_PACKAGE_SEL` at run time,
+not from the SDK's `ADC_TEMPERATURE_CHANNEL_NUM` (hardware-notes.md §8.1).
 
 ## The two documents
 

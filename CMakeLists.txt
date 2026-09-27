@@ -222,6 +222,7 @@ else()
         pico_multicore
         pico_rand
         pico_unique_id
+        hardware_adc
         hardware_clocks
         hardware_dma
         hardware_i2c

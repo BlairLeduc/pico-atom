@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "hardware/adc.h"
 #include "hardware/clocks.h"
 #include "hardware/sync.h"
 #include "hardware/vreg.h"
@@ -100,6 +101,36 @@ bool board_init_clocks(unsigned mhz) {
     return true;
 }
 
+/* The die's sensor (hardware-notes.md §8.1). Its ADC input is the last:
+ * 4 on the QFN-60 RP2350A, 8 on the QFN-80 RP2350B. The SDK takes that
+ * from the board header, and this build says pico2 on a Plus 2 W, whose
+ * RP2350B would put input 4 on a floating GPIO that reads as a plausible
+ * number. So the package decides, read off the chip. */
+static unsigned s_temp_input;
+
+void board_temp_init(void) {
+    adc_init();   /* touches no GPIO: the audio PWM on GP26/27 is safe */
+    adc_set_temp_sensor_enabled(true);
+#if PICO_RP2350
+    s_temp_input = (sysinfo_hw->package_sel & SYSINFO_PACKAGE_SEL_BITS) ? 4u : 8u;
+#else
+    s_temp_input = 4u;
+#endif
+}
+
+int board_temp_c(void) {
+    /* Written directly, not with adc_select_input, whose parameter check
+     * is the board header's channel count. */
+    hw_write_masked(&adc_hw->cs, s_temp_input << ADC_CS_AINSEL_LSB, ADC_CS_AINSEL_BITS);
+    uint32_t sum = 0;
+    for (unsigned i = 0; i < 16u; i++) sum += adc_read();   /* ~32 us */
+    /* The datasheet's formula, uncalibrated, over the 3.3 V reference:
+     * whole degrees are as much as it can say (§8.1). */
+    float v = (float)sum * (3.3f / 4096.0f / 16.0f);
+    float t = 27.0f - (v - 0.706f) / 0.001721f;
+    return (int)(t + (t >= 0.0f ? 0.5f : -0.5f));
+}
+
 void board_identify(board_info_t *info) {
     memset(info, 0, sizeof(*info));
 
@@ -133,6 +164,13 @@ void board_log_banner(const board_info_t *info) {
            info->sdk_board, info->sdk_platform);
     printf("  module       : id=%s chip_rev=%u\n",
            info->unique_id, info->chip_version);
+#if PICO_RP2350
+    /* Which ADC input the die's sensor is (board_temp_init). */
+    printf("  package      : %s, temperature on ADC input %u\n",
+           (sysinfo_hw->package_sel & SYSINFO_PACKAGE_SEL_BITS) ? "QFN-60 (RP2350A)"
+                                                                 : "QFN-80 (RP2350B)",
+           (sysinfo_hw->package_sel & SYSINFO_PACKAGE_SEL_BITS) ? 4u : 8u);
+#endif
     printf("  clocks       : clk_sys=%lu Hz clk_peri=%lu Hz\n",
            (unsigned long)info->clk_sys_hz, (unsigned long)info->clk_peri_hz);
 #if PICO_RP2350

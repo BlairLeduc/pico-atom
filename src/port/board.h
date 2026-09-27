@@ -28,6 +28,11 @@ typedef struct {
  * 150. Returns false if the PLL would not take the frequency. */
 bool board_init_clocks(unsigned mhz);
 
+/* The die temperature, hardware-notes.md §8.1: init once, then whole
+ * degrees C, uncalibrated, averaged over sixteen conversions. Core 1's. */
+void board_temp_init(void);
+int  board_temp_c(void);
+
 void board_identify(board_info_t *info);
 void board_log_banner(const board_info_t *info);
 

@@ -12,6 +12,7 @@
  * absolute deadline instead — §12.2's fallback path.
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -97,7 +98,8 @@ static volatile struct {
     uint32_t last_us;
     uint32_t max_us;
     int32_t  battery;        /* SB_REG_BAT's byte, -1 until read    */
-} g_c1 = { .battery = -1 };
+    int32_t  temp_c;         /* the die, INT32_MIN until read       */
+} g_c1 = { .battery = -1, .temp_c = INT32_MIN };
 
 /* The perf line's host counters (design.md §13.1): core 0 closes a
  * window once a wall-clock second and writes its words here, each a
@@ -283,14 +285,19 @@ static void measure_present(void) {
 #define KBD_POLL_US 33333u
 /* The MCU refreshes its battery gauge every 20 s (hardware-notes.md §6). */
 #define BAT_POLL_US 20000000u
+/* The die temperature, once a heartbeat (hardware-notes.md §8.1). */
+#define TEMP_POLL_US 5000000u
 
-/* The heartbeat's battery: "87%", "87% charging", or "?" before the first
- * read or after a failed one. Core 0's; the byte is core 1's. */
-static const char *battery_text(void) {
-    static char text[16];
-    int32_t b = g_c1.battery;
-    if (b < 0) return "?";
-    snprintf(text, sizeof text, "%u%%%s", (unsigned)(b & 0x7F), b & 0x80 ? " charging" : "");
+/* The heartbeat's battery and die: "87%, 31 C", "87% charging, 31 C",
+ * with "?" for either before its first read or after a failed one.
+ * Core 0's; the readings are core 1's. */
+static const char *power_text(void) {
+    static char text[48];
+    int32_t b = g_c1.battery, t = g_c1.temp_c;
+    char bat[16] = "?", die[16] = "?";
+    if (b >= 0) snprintf(bat, sizeof bat, "%u%%%s", (unsigned)(b & 0x7F), b & 0x80 ? " charging" : "");
+    if (t != INT32_MIN) snprintf(die, sizeof die, "%ld C", (long)t);
+    snprintf(text, sizeof text, "%s, %s", bat, die);
     return text;
 }
 
@@ -633,9 +640,11 @@ static void core1_main(void) {
     /* Live: present the newest snapshot, drop superseded ones (§12.2),
      * and poll the keyboard at 30 Hz, and the battery gauge as often as
      * the MCU refreshes it, for the heartbeat: whether it is charging is
-     * how a log shows the soak ran on battery (§15.3). */
+     * how a log shows the soak ran on battery (§15.3). The die's
+     * temperature too, once a heartbeat (§12.3). */
     uint32_t last_poll = time_us_32();
-    uint32_t last_bat = last_poll - BAT_POLL_US;
+    uint32_t last_bat = last_poll - BAT_POLL_US, last_temp = last_poll - TEMP_POLL_US;
+    board_temp_init();
     /* The perf line's second, core 1's half of it (§13.1). */
     uint32_t sec_start = last_poll, sec_max_us = 0, sec_dropped = g_pool.dropped;
     for (;;) {
@@ -687,6 +696,10 @@ static void core1_main(void) {
             last_bat = time_us_32();
             uint8_t r[2];
             g_c1.battery = sb_read(SB_REG_BAT, r) == SB_OK ? r[1] : -1;
+        }
+        if (time_us_32() - last_temp >= TEMP_POLL_US) {
+            last_temp = time_us_32();
+            g_c1.temp_c = board_temp_c();
         }
 
         /* A hardware-timer wait between iterations rather than spinning
@@ -1066,7 +1079,7 @@ int main(void) {
                    (unsigned long)(kbd_overflows() + g_keys.dropped),
                    (unsigned long)g_atom.tape.served,
                    (unsigned long)g_atom.fdc.sectors_read,
-                   (unsigned long)g_atom.fdc.sectors_written, battery_text());
+                   (unsigned long)g_atom.fdc.sectors_written, power_text());
             /* Where core 0's time goes (§12.3, design.md §6.3). The
              * guest is paced, so rt above reads 1.000 whatever the code
              * costs; the cost is the time spent inside the guest.

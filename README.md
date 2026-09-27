@@ -143,7 +143,8 @@ The deck stops again when a `LOAD` finishes and starts at the next
 `PLAY TAPE`, which is what you would do by hand on a real Atom. A loader that
 reads the tape without going through the Atom's `LOAD` needs *Play* from the
 menu. While the tape plays, the Atom runs as fast as the PicoCalc allows,
-about 2.7× real time, and makes no sound. A UEF in the deck takes every load
+about 2.7× real time, or about twice that with the PicoCalc at 300 MHz, and
+makes no sound. A UEF in the deck takes every load
 and every save, so eject it to go back to `.atm` files. The Atom reads a tape
 only at 1 MHz, as on a real one: at 2 or 4 MHz the tape will not play, and
 the bottom line says `NEEDS 1 MHZ`. `SAVE` records at any speed.

@@ -9,7 +9,9 @@
 # Before running: the Debug Probe's SWD and UART connected, the USB-C
 # power lead out so the PicoCalc runs on its batteries, and the power
 # switch on. The heartbeat carries the battery gauge since M13, and
-# soak-check.py fails a run that shows it charging, which is USB power.
+# soak-check.py fails a run that shows it charging, which is USB power;
+# one that never shows it may still be USB with the charge finished, so
+# say which when recording it.
 #
 # The program alternates a 256x192 graphics page of random lines with a
 # page of scrolling text, and rings the bell between them. It reads the
