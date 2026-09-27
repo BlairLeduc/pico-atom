@@ -138,10 +138,11 @@ int main(void) {
     snap.buf[0] = 'X';
     CHECK(check(&h.m) == SNAP_NOT_SNAPSHOT, "magic: %s", snapshot_status_str(check(&h.m)));
     snap.buf[0] = 'P';
+    const uint8_t version = snap.buf[8];
     snap.buf[8] = SNAP_VERSION + 1;
     CHECK(check(&h.m) == SNAP_NEWER, "version: %s", snapshot_status_str(check(&h.m)));
     CHECK(load(&h.m) == SNAP_NEWER, "load refuses a newer version too");
-    snap.buf[8] = SNAP_VERSION;
+    snap.buf[8] = version;
 
     /* Other ROMs: a machine whose BASIC differs by one byte. */
     h.m.ram[0xC123] ^= 0xFFu;
@@ -156,17 +157,24 @@ int main(void) {
     CHECK(same(&before, &h.m, "untouched"), "refusals change nothing");
 
     /* ---- the clock is in bit 7 of the configuration byte (§12.1) ---- *
-     * A 2 MHz machine's counts are in its own cycles, so a file taken at
-     * the other clock is refused, check and load both, and changes
+     * A fast machine's counts are in its own cycles, so a file taken at
+     * another clock is refused, check and load both, and changes
      * nothing. Zero there is 1 MHz, which is what every file from before
-     * M12 has: a 1 MHz file is byte for byte one of those. */
+     * M12 has: a 1 MHz file is byte for byte one of those. Set, it is
+     * 2 MHz, as M12 wrote it, unless byte 89 says 4; and a 4 MHz file is
+     * version 2, so a build that knows only 2 MHz refuses it as newer. */
     {
         static guest_t k;
         static mem_t one;
-        const unsigned mhz = guest_mhz(), other = 3u - mhz;
+        const unsigned mhz = guest_mhz(), other = mhz == 1u ? 2u : mhz == 2u ? 1u : 2u;
         const unsigned cfg_at = SNAP_HEADER_LEN + 53u;   /* snapshot.c's S_CFG */
-        CHECK((snap.buf[cfg_at] & 0x80u) == (mhz == 2u ? 0x80u : 0u),
+        const unsigned clock_at = SNAP_HEADER_LEN + 89u; /* and S_CLOCK */
+        CHECK((snap.buf[cfg_at] & 0x80u) == (mhz != 1u ? 0x80u : 0u),
               "a %u MHz file's configuration byte is 0x%02X", mhz, snap.buf[cfg_at]);
+        CHECK(snap.buf[clock_at] == (mhz == 4u ? 4u : 0u), "and byte 89 is %u",
+              snap.buf[clock_at]);
+        CHECK(snap.buf[8] == (mhz == 4u ? 2u : 1u) && snap.buf[9] == 0,
+              "a %u MHz file is version %u", mhz, snap.buf[8]);
         guest_boot_at(&k, other);
         static atom_t k_before;
         atom_copy(&k_before, &k.m);
@@ -190,6 +198,10 @@ int main(void) {
         one.pos = 0;
         CHECK(snapshot_load(&k.m, mem_read, &one) == SNAP_OTHER_CLOCK,
               "a 2 MHz machine refuses it");
+        guest_boot_at(&k, 4);
+        one.pos = 0;
+        CHECK(snapshot_load(&k.m, mem_read, &one) == SNAP_OTHER_CLOCK,
+              "and so does a 4 MHz one");
     }
 
     /* A write that fails part-way reports it. */

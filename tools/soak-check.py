@@ -22,7 +22,13 @@ undocumented opcodes, dropped snapshots, the beeper's overflow, and log
 lines dropped. Presents, key events and speaker edges must grow: a soak
 that exercised nothing proves nothing.
 
-Whether it ran on battery is not in the log. Say so when recording it.
+Whether it ran on battery is in the log since M13: each heartbeat ends
+with the southbridge's gauge, and "charging" there means USB power. A run
+that shows charging fails, unless --usb says it was meant to be on USB.
+The converse does not hold: the bit is the charger's, and clears once a
+full battery on USB has finished charging (hardware-notes.md §6), so a
+run that never shows it still needs the operator's word.
+A log from before M13 has no gauge, and the power stays unknown.
 """
 
 import argparse
@@ -35,6 +41,8 @@ HB = re.compile(
 AU = re.compile(
     r"audio\s*: (\d+) Hz consumed.*?underrun samples (\d+), late refills (\d+), "
     r"core overflow (\d+), speaker edges (\d+), log dropped (\d+)")
+BAT = re.compile(r"heartbeat\s*:.*\| battery (\?|(\d+)%( charging)?)")
+DIE = re.compile(r"heartbeat\s*:.*\| battery [^,\n]*, (-?\d+) C")
 BANNER = "pico-atom — Acorn Atom for the PicoCalc"
 FIELD_HZ = 60
 
@@ -43,6 +51,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("log")
     ap.add_argument("--minutes", type=float, default=30)
+    ap.add_argument("--usb", action="store_true",
+                    help="the run was meant to be on USB power, not battery")
     a = ap.parse_args()
 
     text = open(a.log, errors="replace").read()
@@ -61,18 +71,30 @@ def main():
     # nothing as long as a later one was read: the last heartbeat's
     # audio line covers the run. The capture does garble the odd line,
     # a UART framing slip on the host side with the firmware's own
-    # "log dropped" at zero; a missing heartbeat shows as a gap below.
+    # "log dropped" at zero; a missing heartbeat is sorted out below.
     last_hb = list(HB.finditer(text))[-1].start()
     if list(AU.finditer(text))[-1].start() < last_hb:
         fails.append("the last heartbeat has no audio line after it, so the "
                      "audio counters do not cover the end of the run")
-    garbled = len(hbs) - len(aus)
+    garbled_au = max(0, len(hbs) - len(aus))
 
     fields = [int(h[0]) for h in hbs]
     span = (fields[-1] - fields[0]) / FIELD_HZ / 60
     if span < a.minutes:
         fails.append("heartbeats span %.1f minutes, less than %g" % (span, a.minutes))
-    gaps = [(x, y) for x, y in zip(fields, fields[1:]) if y - x != 5 * FIELD_HZ]
+    # A heartbeat comes every 300 guest fields, not every five wall
+    # seconds, so a stall cannot skip a count: it shows as rt falling.
+    # A count is missing only if the firmware dropped the line, which it
+    # counts as "log dropped", or the capture garbled it. With nothing
+    # dropped, a missing whole number of heartbeats is the capture's.
+    step = 5 * FIELD_HZ
+    dropped_log = max(int(u[5]) for u in aus)
+    gaps, garbled_hb = [], 0
+    for x, y in zip(fields, fields[1:]):
+        if y > x and (y - x) % step == 0 and dropped_log == 0:
+            garbled_hb += (y - x) // step - 1
+        else:
+            gaps.append((x, y))
     if gaps:
         fails.append("%d gaps between heartbeats, first after field %d" % (len(gaps), gaps[0][0]))
 
@@ -115,6 +137,23 @@ def main():
         if final <= first:
             fails.append("%s did not grow (%d to %d): not exercised" % (name, first, final))
 
+    bats = [m.groups() for m in BAT.finditer(text)]
+    charging = sum(1 for b in bats if b[2])
+    levels = [int(b[1]) for b in bats if b[1]]
+    if not bats:
+        power = "unknown: no battery gauge in the log (before M13)"
+    elif charging:
+        power = "USB: charging on %d of %d heartbeats" % (charging, len(bats))
+        if not a.usb:
+            fails.append("the battery was charging, so this was not on battery (--usb if meant)")
+    elif levels:
+        power = ("never charging, %d%% to %d%%: battery, or USB with the charge done"
+                 % (levels[0], levels[-1]))
+    else:
+        power = "unknown: the gauge was never read"
+
+    dies = [int(m.group(1)) for m in DIE.finditer(text)]
+
     rates = sorted(int(u[0]) for u in aus)
     print("soak: %s" % a.log)
     print("  %d heartbeats over %.1f minutes, fields %d to %d, one boot: %s"
@@ -127,15 +166,19 @@ def main():
     for name, first, final in grew:
         print("  %-22s %d -> %d" % (name, first, final))
     print("  audio consumed         %d-%d Hz (the control quantity)" % (rates[0], rates[-1]))
-    if garbled:
-        print("  %d audio lines garbled in the capture; the counters are cumulative, "
-              "so the later ones cover them" % garbled)
+    print("  power                  %s" % power)
+    if dies:
+        print("  die temperature        %d to %d C, %d C at the end (uncalibrated)"
+              % (min(dies), max(dies), dies[-1]))
+    if garbled_au or garbled_hb:
+        print("  %d heartbeat and %d audio lines garbled in the capture; the counters are "
+              "cumulative, so the later ones cover them" % (garbled_hb, garbled_au))
     if fails:
         print("FAIL")
         for f in fails:
             print("  " + f)
         return 1
-    print("PASS (record whether it was on battery)")
+    print("PASS" if charging else "PASS (record whether it was on battery)")
     return 0
 
 

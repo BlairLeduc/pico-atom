@@ -26,6 +26,10 @@
 /* The file's settings over the defaults, into *out. */
 void settingsio_load(settings_t *out);
 
+/* The same, saying nothing and keeping no problem: for main()'s read of
+ * the host clock, before stdio is up (design.md §3.2). */
+void settingsio_peek(settings_t *out);
+
 /* Something the file names could not be used: logged, and kept for the
  * status row if it is the first problem. */
 void settingsio_fail(const char *what, const char *why);

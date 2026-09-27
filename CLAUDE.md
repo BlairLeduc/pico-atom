@@ -8,8 +8,8 @@ An **Acorn Atom emulator for the ClockworkPi PicoCalc**, in C against the
 Raspberry Pi Pico SDK.
 
 **Implementation status: M0–M12 are done** (`docs/design.md` §17); only
-M11's check of a recorded `.uef` in another emulator is outstanding. M12 is
-done.
+M11's check of a recorded `.uef` in another emulator is outstanding. M13, the
+300 MHz host clock and a 4 MHz guest, is built (see below).
 
 What exists: the two-target build, `src/core/config.h`, the page-table bus, a
 6502 that passes Klaus Dormann's functional test, the 8255 PPI wired to the
@@ -169,7 +169,7 @@ the perf line over the settings file, for the same reason (M12).
 
 The settings file (design.md §11.7): `/atom/pico-atom.cfg` sets what the
 machine powers up with: screen, border, background, status line, perf line, backlight, volume, keys, tape, turbo,
-drives 0 and 1, upper RAM, AtomDOS, the clock and the utility ROM. `settings_default()` is
+drives 0 and 1, upper RAM, AtomDOS, the clock, the utility ROM and the host clock. `settings_default()` is
 where every default lives. Core 1 reads the file once, before the ROMs, and
 re-runs `atom_init` with its machine configuration while core 0 waits. A wrong
 line is skipped, and the first problem goes to the menu's status row. The
@@ -203,7 +203,33 @@ simply run faster. **The MOS cannot read a tape at 2 MHz** and can write
 one, settled by executing it (`test_cassette_2mhz`, §16), so the deck plays
 only at 1 MHz and says `NEEDS 1 MHZ`. A snapshot records the clock in bit 7
 of its configuration byte and refuses the other clock (`SNAP_OTHER_CLOCK`).
-Snow and the scaled display are dropped, and so is a 4 MHz clock.
+Snow and the scaled display are dropped.
+
+M13 is built (design.md §3.2, §6.3, §12.1). **The host clock is a
+setting**: `host_clock = 150 | 300` in the settings file, and *Pico clock* on
+the Machine page. `main()` sets 150 MHz, reads the file on core 0 before
+stdio or any peripheral is up, and only then moves to 300. `board_init_clocks()`
+raises the rail to 1.20 V, then **doubles the flash's QMI clkdiv and RX delay
+from SRAM**, so flash stays at the bootrom's 50 MHz (clkdiv 3 → 6), then moves
+the PLL. Audio's PWM divider is `clk_sys / 150 MHz`, so the sample rate does
+not move. The Machine page cannot change the clock under running peripherals:
+*Apply* with the Pico clock changed writes the staged machine and
+`host_clock` into the settings file and restarts with the watchdog. **A 4 MHz
+guest** (`clock = 4`) runs only on a 300 MHz host; on 150 it runs at 2 and the
+status row says so. A 4 MHz snapshot sets byte 89 and says version 2, and a
+1 or 2 MHz one is still M12's version 1 byte for byte. The tape deck plays at
+1 MHz only, as before. Measured on a Plus 2 W on 2026-09-27: the four perf
+workloads at 4 MHz on 300 took 62–85 % of core 0 with zero underruns, the
+same as 2 MHz on 150 (§6.3), and §15.3's soak passed there on USB and on
+battery. The Machine page's clocks were checked by hand the same day.
+`-DPICO_ATOM_BOOT_HOST_MHZ=300` sets the host
+clock over the settings file, for a UART-driven run. Each heartbeat ends with
+the battery gauge and the die temperature (`battery 100% charging, 23 C`).
+**Charging proves USB power; its absence does not**: the bit clears once a
+full battery has finished charging with USB still in (hardware-notes.md §6).
+**The build says `pico2` (RP2350A) but the board is an RP2350B**, so the
+temperature's ADC input is chosen from `SYSINFO_PACKAGE_SEL` at run time,
+not from the SDK's `ADC_TEMPERATURE_CHANNEL_NUM` (hardware-notes.md §8.1).
 
 ## The two documents
 
@@ -266,9 +292,9 @@ logs come out scrambled. `out/` is ignored scratch space for logs.
 
 Tests whose subject has a clock run twice: `test_field`, `test_audio`,
 `test_i8271`, `test_boot`, `test_disc`, `test_tape`, `test_snapshot` and
-`test_cassette` are registered again as `<name>_2mhz` with
-`PICO_ATOM_TEST_MHZ=2`, which `test_mhz()` (`test_util.h`) and `guest_boot`
-read. `guest_boot_at(g, mhz)` builds a machine at a given clock whatever the
+`test_cassette` are registered again as `<name>_2mhz` and `<name>_4mhz`
+with `PICO_ATOM_TEST_MHZ=2` or `4`, which `test_mhz()` (`test_util.h`) and
+`guest_boot` read. `guest_boot_at(g, mhz)` builds a machine at a given clock whatever the
 variable says.
 
 `test_m6502_functional` runs Klaus Dormann's suite and Bruce Clark's decimal
@@ -302,7 +328,8 @@ the Atom has no type-ahead.
 
 **The soak** (design.md §15.3) is `tools/soak.sh ELF [MINUTES]` on battery,
 then `tools/soak-check.py` over the log. It passed on a Plus 2 W on battery
-on 2026-09-26: 31 minutes, every counter zero, `rt` never below 0.999. Don't
+on 2026-09-26: 31 minutes, every counter zero, `rt` never below 0.999; and
+again at 300 MHz with a 4 MHz guest on 2026-09-27. Don't
 press `R` during a run: while the program has column 9 selected, BASIC's
 Escape test (`#C504`) reads `R` as Escape. The shell's `grep` is ugrep, which can
 print nothing on these UART logs (CR line endings, a UTF-8 dash in the banner);
@@ -336,7 +363,7 @@ read them with Python if a `grep` comes back empty.
 | `src/core/settings.*` | every default, host and guest, §11.7's parser for `/atom/pico-atom.cfg`, and §11.6's `settings_rewrite` |
 | `src/core/status.*` | §8.2's status line: the bytes core 0 puts in each snapshot, and the text; §13.1's perf line (`perf_line_t`) and `PAUSED` |
 | `src/core/sha1.*`, `romset.*` | identify ROM images by hash; the slot table from §11.1 |
-| `src/port/board.*` | clocks and board identification |
+| `src/port/board.*` | clocks and board identification; 150 or 300 MHz with the rail and the flash's QMI timing moved first (§3.2) |
 | `src/port/southbridge.*` | i2c1 register layer; refuses to read `RST` (`0x08`), which resets the MCU |
 | `src/port/lcd.*` | panel init, windows, fills, polled-DMA ping-pong blit |
 | `src/port/display.*` | the §8.4 presenter; owns the renderer, its LUT, the shadow and line buffers; §8.7's mono palette and border, which it fills only when its colour changes; §8.2's status line, drawn only when its text changes |

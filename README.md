@@ -143,10 +143,11 @@ The deck stops again when a `LOAD` finishes and starts at the next
 `PLAY TAPE`, which is what you would do by hand on a real Atom. A loader that
 reads the tape without going through the Atom's `LOAD` needs *Play* from the
 menu. While the tape plays, the Atom runs as fast as the PicoCalc allows,
-about 2.7× real time, and makes no sound. A UEF in the deck takes every load
+about 2.7× real time, or about twice that with the PicoCalc at 300 MHz, and
+makes no sound. A UEF in the deck takes every load
 and every save, so eject it to go back to `.atm` files. The Atom reads a tape
-only at 1 MHz, as on a real one: at 2 MHz the tape will not play, and the
-bottom line says `NEEDS 1 MHZ`. `SAVE` records at either speed.
+only at 1 MHz, as on a real one: at 2 or 4 MHz the tape will not play, and
+the bottom line says `NEEDS 1 MHZ`. `SAVE` records at any speed.
 
 **Recording.** With a UEF in the deck, `SAVE "NAME"` records onto it, as onto
 a real cassette. The Atom says `RECORD TAPE`; press a key, and the recording
@@ -234,13 +235,20 @@ file below.
 
 **The machine.** The menu's *Machine* page sets what an Atom owner would have
 changed with the lid off: 16 or 32 KB of RAM below the screen, a 1 or 2 MHz
-clock, AtomDOS and the ROM in the utility socket. Left and right choose, and a
+clock, AtomDOS and the ROM in the utility socket. It also sets the PicoCalc's
+own speed, *Pico clock*: 150 MHz, the chip's rated speed, or 300 MHz, an
+overclock. A 4 MHz Atom needs 300 MHz, so the *Clock* row offers 4 MHz only
+when 300 MHz is chosen. Left and right choose, and a
 `*` marks each row you have changed. Nothing happens until *Apply and
 restart*, which switches the Atom off and on again with the new machine, so
 the program in memory is lost. The tape goes back in at its start and the
-discs stay in their drives. At 2 MHz BASIC runs twice as fast and the bell
-sounds an octave higher, but `WAIT` and the screen keep their speed. A snapshot
-taken at one clock does not load at the other. The *About* page shows the
+discs stay in their drives. A change to *Pico clock* can only take effect when
+the PicoCalc starts, so *Apply* writes the machine into the settings file
+below and restarts the PicoCalc. The tape and discs are then the ones the
+file names. At 2 MHz BASIC runs twice as fast and the bell
+sounds an octave higher, but `WAIT` and the screen keep their speed. At 4 MHz
+it is four times as fast and two octaves higher. A snapshot taken at one clock
+does not load at another. The *About* page shows the
 firmware's version, the board, and each ROM with the first eight digits of its
 SHA-1, to check against the list above. The *Display* page's *Perf line* puts
 the emulator's own figures along the top of the screen: how much of the
@@ -268,9 +276,10 @@ drive0    =            # a disc image in /atom/discs/, in drive 0 at power-on
 drive1    =
 upper_ram = on         # RAM at #4000-#7FFF, the 32 KB Atom games expect
 dos       = on         # the disc controller, for AtomDOS
-clock     = 1          # the Atom's MHz: 1 or 2
+clock     = 1          # the Atom's MHz: 1, 2, or 4 with host_clock = 300
 utility   = utility.rom # a file in /atom/roms/ for #A000, or none
 perf      = off        # the emulator's figures along the top; or on
+host_clock = 150       # the PicoCalc's MHz: 150, or 300, an overclock
 ```
 
 A name without a leading `/` is looked for in the tape or disc folder, and a
@@ -289,7 +298,8 @@ if it differs from the default. Comments, blank lines and anything it does not
 understand are left as they are. It saves the screen, border, background,
 status line, perf line, backlight, volume, keys, the tape in the deck, the
 discs in the drives, and the machine as it is running: `upper_ram`, `dos`,
-`clock` and `utility`. `turbo` is only ever what you wrote. If a
+`clock` and `utility`. `host_clock` is saved by the *Machine* page's *Apply*,
+and `turbo` is only ever what you wrote. If a
 setting appears twice, it saves nothing and says so, since it cannot tell
 which line you meant. With no file on the card it makes one.
 

@@ -72,6 +72,15 @@ void settingsio_load(settings_t *out) {
     printf("  settings     : %s read\n", from);
 }
 
+void settingsio_peek(settings_t *out) {
+    settings_default(out);
+    UINT got = 0;
+    const char *from;
+    if (read_text(&got, &from) != FR_OK) return;
+    unsigned line = 0;
+    (void)settings_parse(out, s_text, got, &line);
+}
+
 static FRESULT write_all(const char *p, size_t n) {
     UINT w = 0;
     FRESULT fr = f_write(&s_file, p, (UINT)n, &w);

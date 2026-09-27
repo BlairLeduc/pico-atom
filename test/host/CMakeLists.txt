@@ -30,13 +30,15 @@ endforeach()
 # test_audio measures pitch with lround and fabs.
 target_link_libraries(test_audio PRIVATE m)
 
-# The same binaries again on a 2 MHz guest (design.md §12.1): what is
-# fixed in wall time must hold at either clock. test_util.h's test_mhz()
-# reads the variable; guest_boot does too.
+# The same binaries again on a 2 MHz and a 4 MHz guest (design.md
+# §12.1): what is fixed in wall time must hold at every clock.
+# test_util.h's test_mhz() reads the variable; guest_boot does too.
 function(pico_atom_test_2mhz t)
-    add_test(NAME ${t}_2mhz COMMAND ${t})
-    set_tests_properties(${t}_2mhz PROPERTIES ENVIRONMENT PICO_ATOM_TEST_MHZ=2
-                                              SKIP_RETURN_CODE 77)
+    foreach(mhz 2 4)
+        add_test(NAME ${t}_${mhz}mhz COMMAND ${t})
+        set_tests_properties(${t}_${mhz}mhz PROPERTIES ENVIRONMENT PICO_ATOM_TEST_MHZ=${mhz}
+                                                       SKIP_RETURN_CODE 77)
+    endforeach()
 endfunction()
 foreach(t test_field test_audio test_i8271)
     pico_atom_test_2mhz(${t})

@@ -178,13 +178,21 @@ else()
             PICO_ATOM_BOOT_DISC="${PICO_ATOM_BOOT_DISC}")
     endif()
 
-    # The guest's clock at boot, 1 or 2 MHz, over the settings file's, for
-    # a run driven over the UART, where the Machine page cannot be reached
-    # (design.md §12.1, §13.1). Empty in a build that ships.
-    set(PICO_ATOM_BOOT_CLOCK "" CACHE STRING "Guest MHz at boot, 1 or 2, or empty")
+    # The guest's clock at boot, 1, 2 or 4 MHz, over the settings file's,
+    # for a run driven over the UART, where the Machine page cannot be
+    # reached (design.md §12.1, §13.1). Empty in a build that ships.
+    set(PICO_ATOM_BOOT_CLOCK "" CACHE STRING "Guest MHz at boot, 1, 2 or 4, or empty")
     if (PICO_ATOM_BOOT_CLOCK)
         target_compile_definitions(pico-atom PRIVATE
             PICO_ATOM_BOOT_CLOCK=${PICO_ATOM_BOOT_CLOCK})
+    endif()
+
+    # The host's clk_sys at boot, 150 or 300 MHz, over the settings file's
+    # host_clock, for the same kind of run (design.md §3.2).
+    set(PICO_ATOM_BOOT_HOST_MHZ "" CACHE STRING "Host MHz at boot, 150 or 300, or empty")
+    if (PICO_ATOM_BOOT_HOST_MHZ)
+        target_compile_definitions(pico-atom PRIVATE
+            PICO_ATOM_BOOT_HOST_MHZ=${PICO_ATOM_BOOT_HOST_MHZ})
     endif()
 
     # The perf line on at boot, over the settings file, so its own cost
@@ -214,12 +222,15 @@ else()
         pico_multicore
         pico_rand
         pico_unique_id
+        hardware_adc
         hardware_clocks
         hardware_dma
         hardware_i2c
         hardware_pwm
         hardware_spi
         hardware_sync
+        hardware_vreg
+        hardware_watchdog
     )
 
     pico_enable_stdio_uart(pico-atom 1)

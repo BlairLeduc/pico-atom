@@ -253,14 +253,41 @@ Build with `PICO_CLOCK_ADJUST_PERI_CLOCK_WITH_SYS_CLOCK=1` and re-apply the SPI
 baud rate after clock setup regardless, because `set_sys_clock_pll` otherwise
 parks `clk_peri` on the 48 MHz USB PLL.
 
-A **300 MHz turbo build** is a compile-time option, not a runtime one: it is the
-only other free SPI divider point, it needs `VREG_VOLTAGE_1_20` raised before
-the PLL and lowered after, and it is outside the RP2350 datasheet. Its purpose
-is a 2–4 MHz "turbo Atom" mode, not the stock machine. If it is ever enabled,
-every derived clock in the hardware notes' §3 checklist must be recomputed: SPI
-baud and the PWM audio carrier are the two this project uses. M12's 2 MHz
-guest (§12.1) runs at the stock 150 MHz. A 4 MHz guest would
-need this build, and M12 does not offer one.
+**300 MHz is a setting, since M13**: `host_clock = 300` in the settings file
+(§11.7), or *Pico clock* on the Machine page (§13.1). It is the only other free
+SPI divider point, and it is outside the RP2350 datasheet, so it is off by
+default. Its purpose is a 4 MHz guest (§12.1), which does not fit in core 0 at
+150. M12's 2 MHz guest runs at the stock 150 MHz.
+
+It is set once, at power-on, before anything is brought up, because every
+peripheral works out its rate from the clock it finds (hardware notes §3).
+`main()` sets 150 MHz, mounts the card and reads the settings file on core 0,
+with nothing printed, then, if the file asks, moves to 300 MHz. Only then do
+stdio, the southbridge, the LCD and audio start. Core 1 reads the file again at
+its usual point and reports what it finds (§11.7). The move to 300 MHz, in
+`board_init_clocks()`:
+
+1. the core rail to `VREG_VOLTAGE_1_20`, and a millisecond to settle;
+2. the flash's QMI divider and RX delay doubled, from SRAM with interrupts off,
+   so the flash sees at 300 MHz exactly the timing the bootrom gave it at 150.
+   The bootrom leaves clkdiv 3 and RX delay 2, 50 MHz, measured on a Plus 2 W
+   on 2026-09-27, and at 300 MHz the banner reads clkdiv 6 and RX delay 4. Hot
+   code is in SRAM already (§6.3), so only cold code runs at flash speed;
+3. the PLL to 300 MHz, and `clk_peri` onto `clk_sys`.
+
+At 150 MHz the rail is put back to its 1.10 V default after the clock is set.
+The regulator is not reset with the chip. On a Plus 2 W on 2026-09-27, a
+150 MHz build flashed after a 300 MHz run came up at 1.20 V, and so would
+the Machine page's restart to 150 MHz.
+
+After that each driver's rate comes out the same as at 150. The LCD's SPI is
+75 MHz (÷4), the SD card's 25 MHz, I²C and the UART are divided from
+`clk_peri` as always, and the audio PWM's divider is `clk_sys / 150 MHz`, so
+the carrier, the sample rate (36,621 Hz) and the DMA's cadence do not move. The
+emulator uses no PSRAM and no radio, so the hardware notes' two other items do
+not arise. Changing the clock from the Machine page writes the settings file
+and restarts the Pico with the watchdog, rather than moving the clock under
+running peripherals.
 
 ### 3.3 Peripheral assignment
 
@@ -664,6 +691,28 @@ refills, zero dropped snapshots and zero I²C errors, at 1,999,300–2,000,700
 guest cycles a second. The queue's low water was 385–513 samples, the same
 as at 1 MHz. Idle is the heaviest, at 86 % of core 0, at the top of §12.1's
 estimate of 63–87 %. The control read 36,620–36,621 Hz in every row.
+
+**At M13** the four workloads ran at 4 MHz on a 300 MHz host (§3.2) on a
+Plus 2 W on 2026-09-27, in a build with `PICO_ATOM_BOOT_HOST_MHZ=300`,
+`PICO_ATOM_BOOT_CLOCK=4` and the perf line on:
+
+| Workload | host cycles/insn | core 0 | headroom |
+|---|---:|---:|---:|
+| idle | 201.0 | 85.1 % | 1.17× |
+| compute | 158.2 | 61.8 % | 1.61× |
+| scroll | 221.2 | 84.3 % | 1.18× |
+| bell | 142.9 | 75.9 % | 1.31× |
+
+Host cycles per instruction are 0–1.6 % fewer than M12's at 2 MHz. That is
+the hardware notes' §3 finding that CPU-bound code is purely clock-bound,
+even with the flash held at 50 MHz. So 4 MHz
+at 300 leaves core 0 the margin that 2 MHz at 150 does. Every workload ran with
+zero underruns, zero late refills, zero dropped snapshots and zero I²C errors,
+at 3,998,870–4,001,112 guest cycles a second. The queue's low water was 385
+samples, the same as at 2 MHz. Core 1's longest present was 11,577–11,856 µs,
+as at 150 MHz, because the SPI wire runs at 75 MHz either way. The control read
+36,620–36,621 Hz in every row. The same firmware at 150 MHz and 1 MHz read
+206.7 host cycles per instruction idle, against M12's 206.6.
 
 ### 6.4 Interrupts and reset
 
@@ -1715,6 +1764,9 @@ blocking, so the ring never runs dry. The tape is clocked in guest cycles, so a
 load finishes sooner by exactly the headroom and the guest can see no
 difference. When the tape stops, the blocking push paces again. Over a
 300 baud load, 2–3× is the difference between six minutes and two or three.
+At 300 MHz (§3.2) the headroom doubles, and so does turbo: about 5.5× by
+§6.3's figures. On a Plus 2 W on 2026-09-27 a game's UEF loaded at about twice
+the speed it loads at 150 MHz, timed by eye and not with the perf line.
 
 `test_cassette` holds all of this to the ROM at both ends. The kernel's own
 `SAVE` runs with no trap and no hook. What it drives onto port C bits 0–1 is
@@ -1946,6 +1998,13 @@ M10 put the rest of the VIA (§7.4) into state bytes that had been reserved and
 written as zero. Each field is encoded so that zero is its reset state, so a
 file saved before M10 still loads, as a VIA with idle lines.
 
+The clock (§12.1) is bit 7 of the configuration byte, set for any clock above
+1 MHz, and state byte 89, which is 4 at 4 MHz and 0 otherwise. A 4 MHz file
+alone says version 2. A build from before M13 would take it for 2 MHz, and
+the version makes that build refuse it as newer. Every 1 and 2 MHz file is
+still version 1, byte for byte what M12 wrote, and this build reads both
+versions.
+
 **ROM bytes are not in it.** ROM pages go out as zeros and the SHA-1 of every ROM
 page goes in instead; a snapshot loads only into a machine whose ROMs hash the
 same, and only into the same memory map. The field rate is still written,
@@ -2083,9 +2142,10 @@ still hold a `#`:
 | `drive0`, `drive1` | a disc image in the drive at boot (§11.4) | none |
 | `upper_ram` | `on`, `off`: RAM at `#4000`–`#7FFF` (§7.2) | `on` |
 | `dos` | `on`, `off`: the 8271 at `#0A00` (§11.4) | `on` |
-| `clock` | `1`, `2`: the guest's MHz (§12.1) | `1` |
+| `clock` | `1`, `2`, `4`: the guest's MHz (§12.1); 4 runs at 2 unless `host_clock` is 300 | `1` |
 | `utility` | a file name in `/atom/roms/` for the socket at `#A000`, or `none` (§13.1); a path is refused | `utility.rom` |
 | `perf` | `on`, `off`: the perf line (§13.1) | `off` |
+| `host_clock` | `150`, `300`: the Pico's `clk_sys` in MHz, read at power-on before anything else (§3.2) | `150` |
 
 A bare file name is looked for in `/atom/tapes/` or `/atom/discs/`, and a path
 from the root is taken as it stands. The VIA, the tape trap and the deck's cues
@@ -2185,15 +2245,17 @@ Within a slice, the audio integrator emits a sample every 27.31 guest cycles via
 a fixed-point accumulator, so audio and CPU share one clock by construction and
 cannot drift apart.
 
-**A 2 MHz guest, built at M12.** An Atom's 6502 ran at 1 MHz; running
-it at 2 MHz was an owner's modification. The Machine page (§13.1) offers
-1 or 2 MHz, as `atom_config_t.clock_mhz` and the settings file's `clock`
-(§11.7). 4 MHz is not offered. §6.3 measures headroom at 2.31–3.15×, so
-4 MHz would need 1.3–1.7× more than core 0 has. Only an overclock could
-supply that, which §18 lists as a risk. The rule for what changes is what
-drives each part on the real machine:
+**A 2 MHz guest, built at M12, and 4 MHz at M13.** An Atom's 6502 ran at
+1 MHz; running it at 2 MHz was an owner's modification. The Machine page
+(§13.1) offers 1 or 2 MHz, as `atom_config_t.clock_mhz` and the settings
+file's `clock` (§11.7), and 4 MHz when the host is at 300 MHz (§3.2). §6.3
+measures headroom at 1 MHz at 2.31–3.15×, so 4 MHz on a 150 MHz host would
+need 1.3–1.7× more than core 0 has. At 300 MHz it takes what 2 MHz takes at
+150, measured in §6.3. A file that asks for 4 MHz on a 150 MHz host gets
+2 MHz, and the menu's status row says `CFG CLOCK: 4 MHZ NEEDS HOST_CLOCK 300`.
+The rule for what changes is what drives each part on the real machine:
 
-| Follows the 6502's clock (the same count in guest cycles, so faster in wall time) | Fixed in wall time (twice as many guest cycles) |
+| Follows the 6502's clock (the same count in guest cycles, so faster in wall time) | Fixed in wall time (twice as many guest cycles at 2 MHz, four times at 4) |
 |---|---|
 | the 6522's timers and shift register, which count Φ2 (§7.4): an AGD game's 25 Hz frame clock runs at 50 Hz | the field: 33,333 cycles, `FS` low for 4,071, then 4,834 before the next active line; BASIC's `WAIT` is still 1/60 s |
 | software timing loops: the MOS's bell (`#FD18`) sounds an octave up, about 775 Hz | the beeper's sample period, 54.62 cycles (§9.3) |
@@ -2205,7 +2267,8 @@ The quantities in the second column are worked out from the clock once in
 `atom_init` and kept where they are used. The field's parts are
 `atom_t.field_active`, `field_fs_low` and `field_blank`, recomputed from
 `cpu_hz / 60` with `config.h`'s formula rather than doubled, so they are
-33,333, 4,071 and 4,834 at 2 MHz and exactly the constants at 1. The beeper
+33,333, 4,071 and 4,834 at 2 MHz, 66,666, 8,142 and 9,669 at 4, and exactly
+the constants at 1. The beeper
 is given `atom_t.cpu_hz`, and its period was already a field. The cassette
 keeps `cpu_hz` and the reference's period in `cassette_t`, and the 8271 its
 `mhz`, which every one of its times is multiplied by. `ATOM_CPU_HZ` stays the
@@ -2219,8 +2282,8 @@ beeper's phase, the deck's position, the FDC's next event and the field
 split. Converting all of them at a field boundary is a larger change, for
 nothing a user would notice. A snapshot records the clock in bit 7 of its
 configuration byte, which is free. Zero means 1 MHz, so every older file
-loads as 1 MHz. A file taken at the other clock is refused as another
-machine (§11.5), and the status row names the clock.
+loads as 1 MHz. A file taken at another clock is refused (§11.5), and the
+status row says `NOT LOADED: ANOTHER CLOCK`. M13 added byte 89 for 4 MHz.
 
 **Two things to settle by execution.** Both go into §16.
 
@@ -2240,6 +2303,14 @@ machine (§11.5), and the status row names the clock.
   2 MHz core 0 would spend an estimated 63–87 % of its time in the guest. Turbo
   under a tape, 2.7–2.8× at 1 MHz, would be about 1.4×. M12 is not done until the four perf workloads run at 2 MHz with
   zero underruns and zero late refills, and the figures go into §6.3. They did on 2026-09-26: idle, the heaviest, took 86 % of core 0.
+
+**At 4 MHz (M13)** the same tests run a third time, as `_4mhz`
+(`PICO_ATOM_TEST_MHZ=4`), and hold the same answers. The ROM writes a tape at
+4 MHz that a 1 MHz machine loads, and cannot read one: played past the
+refusal, 27,032 edges go by and nothing arrives. So the deck still plays only
+at 1 MHz. The bell measures 1,551.12 Hz against 1,550.39 Hz from its loop's
+cycle count. The field is 66,666 cycles, and `*CAT`, `*LOAD`, snapshots and the
+phase-1 trap all work.
 
 ### 12.2 Throttling
 
@@ -2296,7 +2367,8 @@ the image's size against the deck's room, and whether the card has it yet.
 | **PCM underrun samples** | producer starvation | `audio` line |
 | **Late DMA refills** | consumer starvation — a different bug (§5.8) | `audio` line |
 | I²C errors, key events dropped | southbridge health | `heartbeat` line |
-| Die temperature | free, and it catches the 300 MHz build misbehaving | not built; there is no 300 MHz build |
+| Battery gauge, and whether it is charging | which power a soak ran on, as far as the charger says (§15.3) | `heartbeat` line, since M13 |
+| Die temperature | free, and it catches the 300 MHz setting misbehaving (§3.2) | `heartbeat` line, since M13, in whole degrees: core 1 averages sixteen conversions every five seconds (hardware notes §8.1) |
 
 The heartbeat also carries the undocumented opcodes trapped (§6.1), tape calls
 and disc sectors, the deck's position and turbo fields while a tape is in, the
@@ -2401,17 +2473,27 @@ went on rows 2–12, with the tape line on 13 and the drives on 14, but row 14
 is the status row. So as built the items start on row 1, under the title,
 and run to row 11, with the tape line on row 12 and the drives on row 13.
 
-**The Machine page.** Four settings, and the action that applies them:
+**The Machine page.** Five settings, and the action that applies them:
 
 ```
  RAM             < 32K >        upper_ram: #0000-#7FFF, or #0000-#3FFF
- CLOCK           < 1 MHZ >      clock: 1 or 2 (§12.1)
+ CLOCK           < 1 MHZ >      clock: 1 or 2, and 4 at 300 MHz (§12.1)
  ATOMDOS         < ON >         dos: the 8271 at #0A00 and dosrom.rom (§11.4)
  UTILITY ROM     < AXR1.ROM >   utility: #A000, a file or NONE
+ PICO CLOCK      < 150 MHZ >    host_clock: 150 or 300 (§3.2), since M13
  (APPLY AND RESTART)
 
  6522 VIA: FITTED, THE MOS NEEDS IT
 ```
+
+*Pico clock* is the host's, and it is set only at power-on (§3.2). With it
+staged, *Apply* writes the staged machine and the clock into the settings
+file (§11.6), since that file is all a restart of the Pico reads. It then
+restarts the Pico with the watchdog, and the status row says `APPLY SAVES,
+RESTARTS THE PICO` beforehand. The other keys in the file are left as they
+were. The guest clock offers 4 MHz only while 300 MHz is staged, and staging
+150 MHz takes a staged 4 back to 2. The page ends by saying `300 MHZ IS AN
+OVERCLOCK, AND 4 MHZ NEEDS IT`.
 
 Left and right stage a value. A row whose staged value differs from the
 running machine is marked `*`. **Nothing changes until *Apply and restart*.**
@@ -2794,7 +2876,14 @@ is paced by the audio queue (§12.2), so `rt` reads 1.000 or 0.999, the last
 digit being truncation. The other counters must stay at zero too: undocumented
 opcodes, dropped snapshots, the beeper's overflow, log lines dropped. Presents,
 key events and speaker edges must grow. Battery is the operator's part: the
-USB-C lead out, and said so when the result is recorded.
+USB-C lead out. Since M13 the log shows it: core 1 reads the southbridge's
+gauge every 20 s, as often as the MCU refreshes it, and each heartbeat ends
+`battery 87%` or `battery 87% charging`, then the die's temperature (§12.3).
+`soak-check.py` fails a run that shows charging, which is USB power, unless
+`--usb` says it was meant to be on USB. The converse does not hold. The bit is
+the charger's, and it clears once a full battery has finished charging with
+USB still in (hardware notes §6). So a run that never shows charging is on
+battery or on USB with the charge done. The operator still says which.
 
 **Passed** on a Plus 2 W on battery, 2026-09-26, 17:34–18:05: 375
 heartbeats over 31.2 minutes and one boot. `rt` was never below 0.999, mean
@@ -2808,6 +2897,33 @@ the program selected keyboard column 9 and left it selected, and BASIC's
 Escape test (`#C504`) reads port B bit 5 in whatever column is selected, so the
 `R` typed at it was Escape. The program now puts column 0 back on the line that
 reads column 9, and the script types `H` and `4`. Don't press `R` during a run.
+
+**At 300 MHz with a 4 MHz guest (§3.2, M13)** it passed on a Plus 2 W on USB
+power, 2026-09-27, 10:46–11:17: 372 heartbeats over 31.2 minutes, one boot,
+`battery 100% charging` on every heartbeat. `rt` was never below 0.999, mean
+0.9995. Zero I²C errors, keys lost, underrun samples and late refills. Zero
+undocumented opcodes, dropped snapshots, beeper overflow and log lines
+dropped. 112,500 presents, 163,121 speaker edges, 340 keys typed over the UART
+and 20 on the PicoCalc's keyboard. Audio consumed read 36,616–36,625 Hz
+after the first heartbeat's 36,431, while audio started. That is wider than
+the 150 MHz soak's 36,620–36,621, by ±0.013 %, with no underrun or late
+refill. The spread is not explained yet. The capture garbled three
+heartbeat lines, which `soak-check.py` now counts as the capture's rather
+than as gaps. A heartbeat comes every 300 guest fields, so a stall cannot skip
+one, and with `log dropped` at zero a missing one was lost on the host. The
+die's temperature was not yet on the heartbeat during this run; it is now
+(§12.3).
+
+**On battery at 300 MHz with a 4 MHz guest** it passed on a Plus 2 W,
+2026-09-27, 12:54–13:25, with the USB-C lead out: 373 heartbeats over 31.2
+minutes, one boot, never charging, the gauge going from 100 % to 98 %. `rt` was
+never below 0.999, mean 0.9995. Zero I²C errors, keys lost, underrun samples and
+late refills. Zero undocumented opcodes, dropped snapshots, beeper overflow and
+log lines dropped. 112,500 presents, 163,115 speaker edges, 340 keys typed over
+the UART and 46 on the PicoCalc's keyboard. Audio consumed read 36,616–36,624 Hz
+after the first heartbeat's 36,431, the same spread as on USB, so it is not the
+supply. The die read 27 °C throughout. The capture garbled two heartbeat
+lines. The log is `out/soak/soak-20260927-125312.log`.
 
 ---
 
@@ -2882,6 +2998,7 @@ Each milestone ends with something that runs and something that is measured.
 | **M11** | Recording at signal level (§11.3); the status line (§8.2); the menu's settings saved to the settings file (§11.6) | on the host, the ROM's own `SAVE` recorded by the core's recorder onto a new tape, a second file appended, both loaded back by name through the ROM's `LOAD`, and the core's output matching `test_cassette`'s independent decoder; a protected tape refused and left unchanged; `settings_rewrite` keeps comments, trailing comments, unparsed lines and line endings, refuses a duplicate key, and its output parses back to the settings it was given. On a Plus 2 W: a BASIC program `SAVE`d onto a new tape, loaded back by `LOAD` after a power cycle, and the `.uef` loaded in another Atom emulator; the status line seen on the panel through a tape load and a disc access, with the border on and off; a setting changed and saved from the menu, the machine powered up with it, and the file read on a computer with the user's comments intact; the recorder's hook measured against an M10 control with `perf-run.sh` — **done** 2026-09-26, but for the `.uef` in another emulator, which could not be got working. On the host every check passes, `SAVE ""` loading back by `LOAD ""` and a full tape too. On a Plus 2 W: a new tape made from the menu (`TAPE01.UEF`), a BASIC program `SAVE`d onto it, and after a power cycle `LOAD`ed and `RUN`; a read-only tape refusing to record; the status line showing a UEF's `PLAY`, `STOP` and position and `D0 …` after a disc access, gone at once on BREAK, with the border on and off and in colour and mono; settings saved from the menu with `TAPE01.UEF` in the deck, back after a power cycle, and the file read on a computer with its comments intact (a value put into an empty line landed in the comment column, fixed after, §11.6); the recorder's hook costing nothing measurable against a build without it, and M11 within 1 % of the tree before it (§6.3) |
 
 | **M12** | The rest of the menu (§13.1): the Machine page, and a 2 MHz guest clock (§12.1); the About page; the perf line; Pause with the backlight dimmed. BASIC's OR, `|`, and the other shifted `@` `[` `\` `]` `^`, typable (§10.3) | **done** 2026-09-26. On a Plus 2 W on 2026-09-26: the four perf workloads at 2 MHz with zero underruns and zero late refills, written into §6.3; the perf line on and off at 1 MHz and M12 against M11, all within 0.7 %; BASIC's OR typed over the UART, `IF 5|3=7 P.$7` ringing the bell once and `IF 5|3=6` not. Checked by hand on the board the same day: each Machine setting changed, applied and seen from the guest, with a restart refused while recording, and the machine saved from the menu and back after a power cycle; the About page's hashes read against §11.1; Pause dimming the panel and silencing the guest, the resuming key not typed, the backlight restored, a playing tape stopping and carrying on, and `Alt`+`M` from a pause; the perf line on from the Display page. Then about ten minutes paused: the heartbeat across it read rt 0.008 for five guest seconds, about 625 s of wall time, with zero I²C errors before and after and zero underruns and late refills. On the host, all done on 2026-09-26, 31 CTest runs passing: `test_field`, `test_audio`, `test_i8271`, `test_boot`, `test_disc`, `test_tape`, `test_snapshot` and `test_cassette` each run again at 2 MHz as `_2mhz` (`PICO_ATOM_TEST_MHZ=2`). The bell measures 775.41 Hz against 775.19 Hz from its loop. `test_cassette_2mhz` answered §16: the ROM writes a tape at 2 MHz and cannot read one, so the deck plays only at 1 MHz. Asked for: `test_boot`'s sweep types `|`, `{`, `}`, `` ` `` and `~` through the MOS, and `PRINT 5|3` answers 7. `test_field`, `test_audio`, `test_i8271` and `test_boot` pass at 2 MHz as at 1. At 2 MHz, `FS` is seen and escaped once per 33,333-cycle field. The MOS bell is measured at the pitch its loop's cycle count gives at 2 MHz. `*CAT` and `*LOAD` work at 2 MHz. `test_cassette` at 2 MHz settles §16's tape question, and the deck does what the answer requires. `test_snapshot` refuses a file taken at the other clock and leaves the machine unchanged, and loads a pre-M12 file as 1 MHz. `test_settings` reads and rewrites `clock`, `utility`, `perf`, `upper_ram` and `dos`. `test_status` formats the perf line and `PAUSED`. On a Plus 2 W: each Machine setting changed and applied, and the change seen from the guest: RAM at `#4000` present or not, `*DOS` answering or not, the utility ROM's commands, and the bell an octave up with the heartbeat counting 2,000,000 guest cycles a second. A restart refused while recording. The machine saved from the menu and back after a power cycle. The four perf workloads at 2 MHz with zero underruns and zero late refills, written into §6.3. The perf line on and off at 1 MHz, within the ~2 % spread. The About page's hashes read against §11.1. `PRINT 5|3` typed on the PicoCalc keyboard answers 7. `Alt`+`P` dims the panel and silences the guest. A playing tape stops advancing and carries on after resume. The key that resumes is not typed. The backlight goes back to its level, the southbridge's own included. Ten minutes paused with zero I²C errors |
+| **M13** | The host clock as a setting, 150 or 300 MHz (§3.2), and a 4 MHz guest on a 300 MHz host (§12.1); the battery gauge on the heartbeat (§15.3) | **built** 2026-09-27. On the host: 39 CTest runs passing, the clock tests a third time as `_4mhz`, `test_snapshot` holding 4 MHz files to version 2 and 1 and 2 MHz ones to M12's bytes, `test_settings` reading and rewriting `host_clock` and `clock = 4`. On a Plus 2 W: 150 MHz unchanged against M12; at 300 MHz the flash's QMI divider read 6 with RX delay 4, 50 MHz as at 150; the four perf workloads at 4 MHz with zero underruns, late refills, dropped snapshots and I²C errors, written into §6.3; §15.3's soak at 300 MHz and 4 MHz passing on USB power and then on battery; the gauge reading `100% charging` on USB and then `100%`, still on USB, once the charge finished; the die temperature on the heartbeat, from 23 °C at 150 MHz idle to 27 °C under load at 300. Checked by hand the same day: *Pico clock* set to 300 MHz on the Machine page and applied, the Pico restarting at 300 MHz with the guest at 1 MHz, and a game loaded from a UEF, at about twice 150 MHz's turbo by eye (§11.3), and played without a problem. Also by hand: the About page reading 300 MHz, 4 MHz offered and applied on the Machine page, and *Pico clock* set back to 150 MHz taking the 4 MHz guest to 2 |
 
 M4 is the milestone that matters; everything before it is scaffolding and
 everything after it is refinement.
@@ -2909,8 +3026,8 @@ scaled display, which the menu once listed, are dropped (§8.2, §8.6).
 | **Tearing on full-screen change** (§8.5) | cosmetic | accepted; band presents localise it. No TE line exists to fix it with |
 | **SRAM growth past budget** | link failure, or worse, a heap that fails at runtime | `config.h`, and CI prints `arm-none-eabi-size` on every build (it reports, it does not fail); §5 measured 49 % used, 51 % headroom, at 2026-09-25 |
 | **Shipping ROMs** | licence violation | user supplies ROMs; the build has no ROM binaries and a boot without them shows a page naming what is missing |
-| **300 MHz turbo build corrupts data** | silent, intermittent | not shipped by default; if enabled, the hardware notes' §3 clock checklist is mandatory and the flash-integrity concern is real |
-| **A 2 MHz guest leaves core 0 no margin** (§12.1) | audio underruns at 2 MHz in the heaviest workloads | estimated at 63–87 % of core 0 from §6.3's headroom. M12's done-when requires zero underruns across the four workloads at 2 MHz, and the perf line (§13.1) shows the margin live. 4 MHz is not offered for this reason |
+| **300 MHz corrupts data** (§3.2) | silent, intermittent | off by default, and a setting the user chooses. The hardware notes' §3 checklist is applied in `board_init_clocks()`: the rail first, the flash's QMI timing scaled so it runs at the bootrom's 50 MHz, and every derived rate re-derived. §15.3's soak ran at 300 MHz and 4 MHz, on USB and on battery (§17). The die's temperature is on the heartbeat (§12.3): 23 °C idle at 150 MHz, 27 °C under load at 300, on USB at room temperature |
+| **A 2 or 4 MHz guest leaves core 0 no margin** (§12.1) | audio underruns in the heaviest workloads | measured, not estimated: 86 % of core 0 idle at 2 MHz on 150 and 85 % at 4 MHz on 300, with zero underruns across the four workloads at each (§6.3), and the perf line (§13.1) shows the margin live. 4 MHz on a 150 MHz host is not offered, and a file that asks for it gets 2 |
 
 ---
 

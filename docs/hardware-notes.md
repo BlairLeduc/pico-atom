@@ -374,6 +374,23 @@ but the bootrom's divider is conservative, 300 MHz has run test sessions
 on the RP2350 boards above. Do not assume an excessive flash clock always
 fails immediately or visibly; qualify data integrity as well as startup.
 
+What the bootrom leaves, read off `qmi_hw->m[0].timing` on a Plus 2 W on
+2026-09-27 in a build without an embedded boot stage 2 (the SDK's default on
+RP2350): **clkdiv 3, RX delay 2**, so 50 MHz at 150 MHz and 100 MHz at 300 if
+left alone. The divider is a register you can move. Double both fields
+before raising the PLL and the flash sees at 300 MHz exactly what it saw at
+150. The RX delay counts half `clk_sys` cycles, so it must scale too. Do it
+from SRAM with interrupts off, since nothing may fetch from flash while the
+timing changes. The emulator does this at power-on (design.md §3.2).
+
+**The core rail survives a reset.** A 150 MHz build flashed over SWD after a
+300 MHz run, or restarted by the watchdog, comes back with the rail still at
+1.20 V: the regulator is not in the domain a system reset clears. The QMI
+timing is set again by the bootrom, but the voltage is not. So a firmware
+that ever raises the rail must set it at 150 MHz too, after the clock.
+Found on a Plus 2 W on 2026-09-27 by reading `vreg_get_voltage()` in the
+banner.
+
 ---
 
 ## 4. The display
@@ -831,7 +848,7 @@ bus must not hang the machine.
 | `0x08` | `RST` | — | **a read resets the MCU** after 1 s; a write resets after *value* seconds |
 | `0x09` | `FIF` | `[state, key]`, one event per read | `[0,0]` when empty |
 | `0x0A` | `BK2` | keyboard backlight | writable, steps of 32 |
-| `0x0B` | `BAT` | percent in bits 0–6, **bit 7 = charging** | refreshed by the MCU every 20 s, not on demand |
+| `0x0B` | `BAT` | percent in bits 0–6, **bit 7 = charging** | refreshed by the MCU every 20 s, not on demand. Bit 7 is the charger, not USB power: on a Plus 2 W on 2026-09-27 it read `100%` with bit 7 for over half an hour on USB, then `100%` without it, still on USB, once the charge finished. So bit 7 set proves USB power, and clear proves nothing |
 | `0x0C` | `C64_MTX` | 10 bytes of raw matrix bitmap | reply is longer than two bytes |
 | `0x0D` | `C64_JS` | arrows + Enter as a C64-style joystick | |
 | `0x0E` | `OFF` | — | write to power off; value is clamped to ≥6 and used as a **delay in seconds** |
@@ -1022,6 +1039,16 @@ channel returns a floating GPIO, which reads as a plausible number.
 
 The ADC block can be initialised lazily and the bias left on; `adc_init()`
 touches no GPIO function, so the audio PWM on GP26/27 is unaffected.
+
+**Unless the build's board is not the board.** The emulator builds for
+`pico2`, an RP2350A, and runs on a Plus 2 W, an RP2350B. There
+`ADC_TEMPERATURE_CHANNEL_NUM` is 4, which on the QFN-80 part is a GPIO. So
+`board_temp_init()` reads the package off `SYSINFO_PACKAGE_SEL` (1 = QFN-60)
+and chooses 4 or 8 itself, and writes `AINSEL` directly, since
+`adc_select_input()`'s check uses the header's channel count. On a Plus 2 W
+on 2026-09-27 the banner said QFN-80, input 8, and the reading passed the
+load test: 23 °C idle at 150 MHz, 25 °C at 300 MHz and a 4 MHz guest on
+boot, 27 °C after two and a half minutes of a compute loop.
 
 ### 8.2 The remaining ADC inputs
 

@@ -575,22 +575,24 @@ static int test_record(void) {
     return 0;
 }
 
-/* ---- M12: a 2 MHz guest (§12.1, §16) ----------------------------------- *
+/* ---- M12: a 2 MHz guest, and M13's 4 (§12.1, §16) ---------------------- *
  * §16's open question, settled by execution: the ROM's writer times each
  * bit against port C bit 4's reference, which is the crystal's and keeps
  * wall time, so it writes a real tape at 2 MHz; its reader times the
  * tape with its own loops, so at 2 MHz it reads nothing. The deck
- * therefore plays only at 1 MHz and records at either. */
-static int test_2mhz(void) {
+ * therefore plays only at 1 MHz and records at any clock. 4 MHz is held
+ * to the same. */
+static int test_fast(void) {
+    const unsigned mhz = guest_mhz();
     static const char *const prog[] = { "10 PRINT \"SIGNAL OK\"\n", "20 END\n", NULL };
     static uint8_t fast[sizeof uef];
     bool recorded;
 
-    /* The ROM's own SAVE at 2 MHz, off port C, framed by the model. */
+    /* The ROM's own SAVE at the fast clock, off port C, framed by the model. */
     if (record_program(prog, "SAVE \"PROG\"\n")) return 1;
     uint16_t load = 0;
     unsigned len = 0;
-    CHECK(block_header("PROG", &load, &len), "a PROG block is on the tape written at 2 MHz");
+    CHECK(block_header("PROG", &load, &len), "a PROG block is on the tape written at %u MHz", mhz);
     static uint8_t saved[256];
     memcpy(saved, &g.m.ram[load], len);
     memcpy(fast, uef, uef_len);
@@ -598,17 +600,17 @@ static int test_2mhz(void) {
 
     /* It is a tape: a 1 MHz Atom loads it. */
     guest_boot_at(&g, 1);
-    CHECK(atom_cassette_insert(&g.m, fast, fast_len), "the 2 MHz recording is a UEF");
+    CHECK(atom_cassette_insert(&g.m, fast, fast_len), "the %u MHz recording is a UEF", mhz);
     if (load_and_run("PROG", "SIGNAL OK")) return 1;
 
-    /* At 2 MHz the deck will not play, and says why. */
+    /* At the fast clock the deck will not play, and says why. */
     guest_boot(&g);
     atom_cassette_insert(&g.m, fast, fast_len);
     guest_type(&g, "LOAD \"PROG\"\n");
-    CHECK(screen_has(&g.m, "PLAY TAPE"), "the MOS asks for the tape at 2 MHz too");
+    CHECK(screen_has(&g.m, "PLAY TAPE"), "the MOS asks for the tape at %u MHz too", mhz);
     guest_tap(&g, 0x0Au);
     guest_fields(&g, 5);
-    CHECK(!g.m.cas.playing && g.m.cas.needs_1mhz, "the key does not start the deck at 2 MHz");
+    CHECK(!g.m.cas.playing && g.m.cas.needs_1mhz, "the key does not start the deck at %u MHz", mhz);
     atom_status_t st;
     atom_status(&g.m, &st);
     CHECK(st.deck == STATUS_DECK_NEEDS_1MHZ, "the status line says NEEDS 1 MHZ: %u", st.deck);
@@ -618,22 +620,23 @@ static int test_2mhz(void) {
     cassette_play(&g.m.cas, g.m.cpu.cycles, true);
     atom_cassette_sync_slow(&g.m);
     for (int i = 0; i < 1800 && g.m.cas.playing; i++) guest_fields(&g, 1);
-    printf("  2 MHz read   : deck %s, %u edges played\n",
+    printf("  %u MHz read   : deck %s, %u edges played\n", mhz,
            g.m.cas.ended ? "ran to the end" : "stopped", (unsigned)g.m.cas.edges);
     CHECK(g.m.cas.edges > 1000, "the tape was played at the ROM: %u edges",
           (unsigned)g.m.cas.edges);
     CHECK(memcmp(&g.m.ram[load], saved, len) != 0,
-          "the MOS read the tape at 2 MHz, which §16 says it cannot: remove the refusal");
+          "the MOS read the tape at %u MHz, which §16 says it cannot: remove the refusal",
+          mhz);
 
-    /* The core's recorder at 2 MHz, onto a new tape, loaded at 1 MHz. */
+    /* The core's recorder at the fast clock, onto a new tape, loaded at 1 MHz. */
     guest_boot(&g);
     size_t blank = new_tape(deck);
     atom_cassette_insert_rw(&g.m, deck, blank, sizeof deck);
     guest_type(&g, "10 PRINT \"RECORDED FAST\"\n");
     guest_type(&g, "20 END\n");
     unsigned w = save_to_deck("SAVE \"FAST\"\n", &recorded);
-    CHECK(recorded && w == 1, "SAVE at 2 MHz recorded, and went to the card");
-    CHECK(g.m.cas.rec.errors == 0, "every byte framed at 2 MHz: %u did not",
+    CHECK(recorded && w == 1, "SAVE at %u MHz recorded, and went to the card", mhz);
+    CHECK(g.m.cas.rec.errors == 0, "every byte framed at %u MHz: %u did not", mhz,
           (unsigned)g.m.cas.rec.errors);
     size_t rec_len = g.m.cas.uef.len;
     guest_boot_at(&g, 1);
@@ -648,8 +651,8 @@ int main(void) {
         printf("skipped: no kernel and BASIC images in %s\n", dir);
         return TEST_SKIP_CODE;
     }
-    if (guest_mhz() == 2u) {
-        if (test_2mhz()) return 1;
+    if (guest_mhz() != 1u) {
+        if (test_fast()) return 1;
         TEST_DONE();
     }
     if (test_round_trip()) return 1;

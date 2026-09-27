@@ -34,7 +34,7 @@
 
 struct atom_s;
 
-#define SNAP_VERSION     1u
+#define SNAP_VERSION     2u   /* the newest this build reads (snapshot.c) */
 #define SNAP_HEADER_LEN  20u
 #define SNAP_STATE_LEN   96u
 #define SNAP_PAYLOAD_LEN (SNAP_STATE_LEN + ATOM_ADDR_SPACE)
@@ -47,7 +47,7 @@ typedef enum {
     SNAP_NEWER,           /* a version this build does not know         */
     SNAP_CORRUPT,         /* the CRC does not match                     */
     SNAP_OTHER_MACHINE,   /* RAM populated differently, or another rate */
-    SNAP_OTHER_CLOCK,     /* the same machine at the other clock (§12.1) */
+    SNAP_OTHER_CLOCK,     /* the same machine at another clock (§12.1) */
     SNAP_OTHER_ROMS,      /* the ROMs fitted are not the ones it ran on */
     SNAP_BUSY,            /* a tape call, or the FDC mid-command        */
 } snap_status_t;

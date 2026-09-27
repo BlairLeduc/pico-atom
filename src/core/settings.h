@@ -28,6 +28,11 @@
 /* The utility socket's default file, in /atom/roms/ (§11.1, §13.1). */
 #define SETTINGS_UTILITY "utility.rom"
 
+/* The host clocks offered (§3.2): the rated 150 MHz, and 300, the only
+ * overclock that keeps the panel's SPI at 75 MHz. */
+#define SETTINGS_HOST_MHZ      150u
+#define SETTINGS_HOST_MHZ_FAST 300u
+
 typedef struct {
     /* The guest (§7.2): RAM at #4000-#7FFF, AtomDOS, the clock (§12.1). */
     atom_config_t machine;
@@ -47,6 +52,12 @@ typedef struct {
     unsigned backlight;     /* 1-15, as the menu shows it; 0 leaves the
                                southbridge's own level alone             */
     bool     turbo;         /* run unpaced while a UEF plays (§11.3)     */
+
+    /* The Pico's clk_sys in MHz, SETTINGS_HOST_MHZ or
+     * SETTINGS_HOST_MHZ_FAST (§3.2): read at power-on, before anything
+     * is brought up, and nowhere else. A 4 MHz guest needs the fast one;
+     * the port runs it at 2 otherwise. */
+    unsigned host_mhz;
 
     /* A layout's name, uppercase; "" is the standard map (§10.5). */
     char     keys[ATOM_KEYMAP_NAME_LEN + 1];
@@ -80,8 +91,8 @@ const char *settings_status_str(settings_status_t st);
 
 /* The menu's settings written into the file's text (§11.6): screen,
  * border, background, status, perf, backlight, volume, keys, tape,
- * drive0 and drive1, and the Machine page's upper_ram, dos, clock and
- * utility (§13.1). turbo is the file's alone. A backlight of 0 is left
+ * drive0 and drive1, and the Machine page's upper_ram, dos, clock,
+ * utility and host_clock (§13.1). turbo is the file's alone. A backlight of 0 is left
  * as the file has it. The text is edited, not regenerated:
  *
  *   - a key the file already gives keeps its line, its place, its
