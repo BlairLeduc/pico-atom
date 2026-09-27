@@ -89,6 +89,7 @@ each one loads.
   you want to `/atom/tapes/` and add `.atm` to each name: `GALAXI` becomes
   `GALAXI.atm`, and `LOAD "GALAXI"` finds it. The `.DSK` and `.dsd` images in
   the archive go in `/atom/discs/` as they are.
+- **Retro Software Releases**, <https://www.retrosoftware.co.uk/wiki/index.php?title=RetroReleases#Freeware> - High-quality freeware games
 - **Archive 13 as UEF**, <https://archive.org/details/atom-archive-13-uef> —
   an older release of the same archive converted to tape images, all in one zip,
   with a few `.uef` files to download on their own.
