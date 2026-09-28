@@ -29,6 +29,9 @@ int main(void) {
         CHECK(atom_clock_mhz(&d.machine) == 1u && !d.perf && strcmp(d.utility, "utility.rom") == 0,
               "1 MHz, no perf line, utility.rom in the socket (§13.1)");
         CHECK(d.host_mhz == 150u, "the host at its rated 150 MHz (§3.2)");
+        static const uint8_t pb[8] = { 2, 3, 4, 5, 21, 28, SETTINGS_PB_NC, SETTINGS_PB_NC };
+        CHECK(!d.port_b && memcmp(d.pb_gpio, pb, sizeof pb) == 0,
+              "port B off, PB0-PB5 on the side header's pins (§7.4)");
     }
 
     /* ---- an empty file, and one of comments, change nothing ----------- */
@@ -299,6 +302,42 @@ int main(void) {
         CHECK(REWRITE("host_clock = 300 # fast\n", &s) == SET_OK &&
               strncmp(out, "host_clock = 150 # fast\n", 24) == 0,
               "and set back: %.*s", (int)out_len, out);
+    }
+
+    /* ---- VIA port B on the GPIOs (§7.4) -------------------------------- */
+    {
+        CHECK(parse(&s, "via_port_b = on\nvia_port_b_pins = GP9 nc gp0  gp28 NC gp20 gp1 gp8\n",
+                    &line) == SET_OK && s.port_b, "on, with pins");
+        static const uint8_t want[8] = { 9, SETTINGS_PB_NC, 0, 28, SETTINGS_PB_NC, 20, 1, 8 };
+        CHECK(memcmp(s.pb_gpio, want, sizeof want) == 0, "every pin, in either case");
+        static const char *const bad[] = {
+            "via_port_b_pins = gp2 gp3 gp4 gp5 gp21 gp28 nc\n",          /* seven */
+            "via_port_b_pins = gp2 gp3 gp4 gp5 gp21 gp28 nc nc nc\n",    /* nine  */
+            "via_port_b_pins = gp2 gp3 gp4 gp5 gp21 gp28 nc gp2\n",      /* twice */
+            "via_port_b_pins = gp2 gp3 gp4 gp5 gp21 gp28 nc gp6\n",      /* i2c1  */
+            "via_port_b_pins = gp2 gp3 gp4 gp5 gp21 gp28 nc gp29\n",
+            "via_port_b_pins = gp2 gp3 gp4 gp5 gp21 gp28 nc 8\n",
+            "via_port_b_pins = gp2 gp3 gp4 gp5 gp21 gp28 nc gp\n",
+            "via_port_b_pins = gp2 gp3 gp4 gp5 gp21 gp28 nc gp100\n",
+            "via_port_b = yes\n",
+        };
+        for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+            CHECK(parse(&s, bad[i], &line) != SET_OK && line == 1 &&
+                  memcmp(s.pb_gpio, d.pb_gpio, sizeof s.pb_gpio) == 0 && !s.port_b,
+                  "refused, and nothing changed: %s", bad[i]);
+        }
+
+        settings_default(&s);
+        CHECK(REWRITE("", &s) == SET_OK && out_len == 0, "the defaults are not written");
+        s.port_b = true;
+        s.pb_gpio[0] = 21;
+        s.pb_gpio[4] = SETTINGS_PB_NC;
+        CHECK(REWRITE("", &s) == SET_OK &&
+              IS("via_port_b = on\nvia_port_b_pins = gp21 gp3 gp4 gp5 nc gp28 nc nc\n"),
+              "appended: %.*s", (int)out_len, out);
+        CHECK(REWRITE("via_port_b_pins = gp2 gp3 gp4 gp5 gp21 gp28 nc nc # stick\n", &s) == SET_OK &&
+              IS("via_port_b_pins = gp21 gp3 gp4 gp5 nc gp28 nc nc  # stick\nvia_port_b = on\n"),
+              "edited in place, the comment in its column: %.*s", (int)out_len, out);
     }
 
     /* The backlight: left alone at 0, which is the southbridge's own. */

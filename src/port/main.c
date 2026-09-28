@@ -37,6 +37,7 @@
 #include "mc6847.h"
 #include "menu.h"
 #include "pico_atom_version.h"
+#include "portb.h"
 #include "roms.h"
 #include "settingsio.h"
 #include "snappool.h"
@@ -426,6 +427,7 @@ static const char *machine_power_on(const atom_config_t *cfg, const char *utilit
     if (atom_clock_mhz(&run) == 4u && !host_fast()) run.clock_mhz = 2u;
     cfg = &run;
     atom_init(&g_atom, cfg);
+    portb_attach(&g_atom);                   /* atom_init cleared its hook */
     bool ok = roms_load(&g_atom, utility, &g_roms);
     snprintf(g_settings.utility, sizeof g_settings.utility, "%s", utility);
     atom_seed_rnd(&g_atom, get_rand_64());   /* power-on RAM is not zero (§7.2) */
@@ -568,10 +570,13 @@ static void core1_main(void) {
     g_settings.backlight = boot->backlight;
     g_settings.turbo     = boot->turbo;
     g_settings.perf      = boot->perf;
+    g_settings.port_b    = boot->port_b;
+    memcpy(g_settings.pb_gpio, boot->pb_gpio, sizeof g_settings.pb_gpio);
 #ifdef PICO_ATOM_BOOT_PERF
     g_settings.perf      = true;   /* over the file's */
 #endif
     display_set_look(g_settings.mono, g_settings.border, g_settings.dark_bg);
+    portb_set(&g_atom, g_settings.port_b, g_settings.pb_gpio);
     if (boot->backlight) (void)sb_write(SB_REG_BKL, (uint8_t)(boot->backlight * 16u), NULL);
 #if PICO_ATOM_MEASURE_PRESENT
     display_test_pattern();
@@ -967,6 +972,8 @@ int main(void) {
         uint32_t ran_us = time_us_32() - t0;
         run_us += ran_us;
         sec_run_us += ran_us;
+        /* T1's PB7 moves with no register written (portb.h, §7.4). */
+        if (g_atom.port_b) g_atom.port_b(&g_atom, true);
 
         bool turbo = turbo_now();
         if (turbo) turbo_fields++;

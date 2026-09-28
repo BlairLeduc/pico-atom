@@ -148,7 +148,9 @@ void atom_seed_rnd(atom_t *m, uint64_t seed) {
 
 void atom_copy(atom_t *dst, const atom_t *src) {
     if (dst == src) return;
+    void (*port_b)(struct atom_s *, bool) = dst->port_b;
     memcpy(dst, src, sizeof(*dst));
+    dst->port_b = port_b;
     for (unsigned p = 0; p < ATOM_PAGE_COUNT; p++) {
         if (src->page[p].read)  dst->page[p].read  = dst->ram + (src->page[p].read  - src->ram);
         if (src->page[p].write) dst->page[p].write = dst->ram + (src->page[p].write - src->ram);

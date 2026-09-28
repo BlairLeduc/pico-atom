@@ -11,6 +11,9 @@
 
 #include <stdbool.h>
 
+/* A build without the UART (PICO_ATOM_UART=0, the one that ships) has
+ * nowhere to log: log_printf discards, and log_pump does nothing. */
+
 /* Core 0. Formats and queues; drops the line whole, and counts it, if
  * the ring is full. Never waits. */
 void log_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

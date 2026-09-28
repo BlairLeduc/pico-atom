@@ -4,6 +4,7 @@
 #
 #   tools/build.sh                         # build/pico/pico-atom.uf2
 #   tools/build.sh -DPICO_ATOM_BOOT_DISC=/atom/discs/x.ssd build/pico-disc
+#   tools/build.sh -DPICO_ATOM_UART=OFF build/pico-release   # the one that ships
 #
 # Arguments starting -D are passed to CMake's configure step; another
 # argument names the build directory, which is configured first if it has
@@ -19,7 +20,7 @@ dir=
 defs=()
 while [ $# -gt 0 ]; do
     case "$1" in
-        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -D*) defs+=("$1"); shift ;;
         -*) echo "build.sh: unknown option $1" >&2; exit 2 ;;
         *) dir="$1"; shift ;;

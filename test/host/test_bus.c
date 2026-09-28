@@ -10,6 +10,24 @@
 
 static atom_t g_machine;
 
+/* Port B's pins as a port would attach them (§7.4): lines held low,
+ * and a record of what the chip drives. */
+static struct {
+    unsigned reads, writes;
+    uint8_t  low;         /* 1 = the line is held low */
+    uint8_t  driven;      /* via6522_pb_out at the last write */
+} g_pb;
+
+static void port_b(atom_t *m, bool write) {
+    if (write) {
+        g_pb.writes++;
+        g_pb.driven = via6522_pb_out(&m->via);
+    } else {
+        g_pb.reads++;
+        via6522_set_pb(&m->via, (uint8_t)~g_pb.low);
+    }
+}
+
 static atom_t *machine(const atom_config_t *cfg) {
     atom_init(&g_machine, cfg);
     return &g_machine;
@@ -149,6 +167,42 @@ int main(void) {
         atom_map_ram(m, 0x9800, 1);
         CHECK(m->page[0x98].write != NULL, "a one-byte map should cover its page");
         CHECK(m->page[0x99].write == NULL, "a one-byte map must not spill into #9900");
+    }
+
+    /* ---- port B's pins through the port's hook (§7.4) ----------------- */
+    {
+        atom_t *m = machine(&cfg);
+        CHECK(m->port_b == NULL, "nothing is attached to port B by default");
+        CHECK(bus_read(m, 0xB800) == 0xFF, "with nothing attached port B reads high");
+        m->port_b = port_b;
+        g_pb.low = 0x05u;
+        CHECK(bus_read(m, 0xB800) == 0xFAu && g_pb.reads == 1u, "a read of ORB sees the pins");
+        g_pb.low = 0x10u;
+        CHECK(bus_read(m, 0xB810) == 0xEFu && g_pb.reads == 2u, "and through a mirror");
+        (void)bus_read(m, 0xB802);
+        (void)bus_read(m, 0xB801);
+        (void)bus_read(m, 0xB80F);
+        CHECK(g_pb.reads == 2u, "no other register reads port B's pins");
+
+        bus_write(m, 0xB802, 0x0Fu);
+        CHECK(g_pb.writes == 1u && g_pb.driven == 0xF0u, "DDRB puts the latch out, zero from reset");
+        bus_write(m, 0xB800, 0x0Au);
+        CHECK(g_pb.writes == 2u && g_pb.driven == 0xFAu, "ORB drives the output bits");
+        g_pb.low = 0x30u;
+        CHECK(bus_read(m, 0xB800) == 0xCAu, "outputs read their latch, inputs their pins");
+        bus_write(m, 0xB80B, 0x00u);
+        CHECK(g_pb.writes == 3u, "an ACR write may move PB7");
+        bus_write(m, 0xB801, 0x00u);
+        bus_write(m, 0xB804, 0x00u);
+        CHECK(g_pb.writes == 3u, "no other register moves port B");
+
+        static atom_t copy;
+        atom_copy(&copy, m);
+        CHECK(copy.port_b == NULL, "a copy does not take the machine's pins");
+        copy.port_b = port_b;
+        m->port_b = NULL;
+        atom_copy(&copy, m);
+        CHECK(copy.port_b == port_b, "and keeps its own");
     }
 
     /* ---- the field rate is a constant, 60 Hz (§16) ------------------- */

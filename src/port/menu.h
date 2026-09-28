@@ -37,6 +37,11 @@ typedef struct {
     bool     status;      /* the status line (§8.2); core 1 draws it too */
     bool     perf;        /* the perf line (§13.1); core 1 draws it too  */
 
+    /* VIA port B on the GPIOs (§7.4), set by the menu through
+     * portb_set as they change. */
+    bool     port_b;
+    uint8_t  pb_gpio[SETTINGS_PB_BITS];
+
     /* 1-15 once the settings file or the menu has set it; 0 leaves the
      * southbridge's own level, and a save leaves the file's line. */
     unsigned backlight;

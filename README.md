@@ -280,6 +280,8 @@ clock     = 1          # the Atom's MHz: 1, 2, or 4 with host_clock = 300
 utility   = utility.rom # a file in /atom/roms/ for #A000, or none
 perf      = off        # the emulator's figures along the top; or on
 host_clock = 150       # the PicoCalc's MHz: 150, or 300, an overclock
+via_port_b = on        # the VIA's port B, the user port, on the side pins; or off
+via_port_b_pins = gp2 gp3 gp4 gp5 gp21 gp28 nc nc   # PB0 first; nc for none
 ```
 
 A name without a leading `/` is looked for in the tape or disc folder, and a
@@ -297,7 +299,7 @@ line it changes keeps its place and its comment, and only the value after the
 if it differs from the default. Comments, blank lines and anything it does not
 understand are left as they are. It saves the screen, border, background,
 status line, perf line, backlight, volume, keys, the tape in the deck, the
-discs in the drives, and the machine as it is running: `upper_ram`, `dos`,
+discs in the drives, VIA port B and its pins, and the machine as it is running: `upper_ram`, `dos`,
 `clock` and `utility`. `host_clock` is saved by the *Machine* page's *Apply*,
 and `turbo` is only ever what you wrote. If a
 setting appears twice, it saves nothing and says so, since it cannot tell

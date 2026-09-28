@@ -56,6 +56,14 @@ typedef struct atom_s {
     i8255_t  ppi;
     via6522_t via;       /* inert unless cfg.via_fitted */
 
+    /* Port B's pins on the host's (design.md §7.4), or NULL, the
+     * default, for nothing attached. Called before a read of ORB, with
+     * `write` false, to put the pins' levels on the chip; and after a
+     * write to ORB, DDRB or ACR, with `write` true, to drive what the
+     * chip now drives (via6522_pb_out). Not machine state: atom_init
+     * clears it, and snapshots and atom_copy leave it. */
+    void (*port_b)(struct atom_s *m, bool write);
+
     /* No mc6847_t here. The guest's video state is VRAM plus the five
      * mode bits, and both are read out through atom_vram() and
      * atom_vdg_mode() at snapshot time. The renderer, and its 8 KiB LUT,
@@ -148,7 +156,8 @@ uint32_t atom_run_field(atom_t *m);
 
 /* Copy a whole machine. The page table points into ram[], so a plain
  * struct assignment leaves the copy reading and writing the original's
- * memory; this moves the pointers across with the bytes. */
+ * memory; this moves the pointers across with the bytes. The copy
+ * keeps its own port_b hook: pins belong to one machine, not its state. */
 void atom_copy(atom_t *dst, const atom_t *src);
 
 /* Load a ROM image at a guest address, marking its pages PAGE_ROM. */

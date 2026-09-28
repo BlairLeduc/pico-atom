@@ -18,6 +18,7 @@
 #include "keymapio.h"
 #include "keymatrix.h"
 #include "log.h"
+#include "portb.h"
 #include "settingsio.h"
 #include "snapio.h"
 #include "southbridge.h"
@@ -48,19 +49,26 @@
 #define BKL_MAX   240u
 
 enum {
-    I_RESUME, I_DISCS, I_TAPES, I_SNAPS, I_DISPLAY, I_MACHINE, I_KEYS, I_VOLUME, I_RESET,
-    I_SAVE, I_ABOUT, I_COUNT
+    I_DISCS, I_TAPES, I_SNAPS, I_IO, I_MACHINE, I_RESET, I_SAVE, I_ABOUT, I_COUNT
 };
 
-/* Eleven items fill rows 1-11 under the title, then the deck on row 12
- * and the drives on row 13, above the status row (§13.1). */
-#define MAIN_TOP 1
+/* Eight items fill rows 2-9, a blank row under the title, then after
+ * another blank row the deck on row 11 and the drives on row 12, above
+ * the status row (§13.1). */
+#define MAIN_TOP 2
 
 /* The snapshot page: left and right choose the slot on any row (§11.5). */
 enum { S_SLOT, S_SAVE, S_LOAD, S_DELETE, S_COUNT };
 
-/* The display page (§8.7). */
-enum { D_COLOUR, D_BORDER, D_BACKGROUND, D_STATUS, D_PERF, D_BACKLIGHT, D_COUNT };
+/* The Input/Output page: the display (§8.7), then the backlight, the
+ * volume, the keymap (§10.5) and VIA port B's page (§7.4). */
+enum { D_COLOUR, D_BORDER, D_BACKGROUND, D_STATUS, D_PERF, D_BACKLIGHT, D_VOLUME, D_KEYS,
+       D_PORT_B, D_COUNT };
+
+/* VIA port B's page (§7.4): on or off on row 2, then PB0-PB7 on rows
+ * 4-11, each with a GPIO or none. */
+enum { P_ON, P_PB0, P_COUNT = P_PB0 + SETTINGS_PB_BITS };
+#define PB_TOP 4
 
 /* The Machine page (§13.1): five settings staged, and the restart that
  * applies them. The host clock is the Pico's (§3.2), and changing it
@@ -95,9 +103,11 @@ static struct {
     bool             snaps;
     int              snap_sel;
 
-    /* The display page. */
-    bool             display;
-    int              display_sel;
+    /* The Input/Output page, and port B's under it. */
+    bool             io;
+    int              io_sel;
+    bool             portb;
+    int              portb_sel;
 
     /* The Machine page: what is staged, against the running machine.
      * The utility is an index into s_utils, 0 being none. */
@@ -141,17 +151,11 @@ static void draw_main(void) {
 
     for (int i = 0; i < I_COUNT; i++) {
         switch (i) {
-        case I_RESUME: snprintf(line, sizeof line, " RESUME"); break;
         case I_SNAPS:  snprintf(line, sizeof line, " SNAPSHOTS..."); break;
         case I_TAPES:  snprintf(line, sizeof line, " TAPES..."); break;
         case I_DISCS:  snprintf(line, sizeof line, " DISCS..."); break;
-        case I_KEYS:
-            snprintf(line, sizeof line, " KEYS   < %s >",
-                     s.set->layout ? s.set->layout->name : "STANDARD");
-            break;
         case I_RESET:  snprintf(line, sizeof line, " RESET (BREAK)"); break;
-        case I_VOLUME: snprintf(line, sizeof line, " VOLUME < %u >", s.set->volume); break;
-        case I_DISPLAY: snprintf(line, sizeof line, " DISPLAY..."); break;
+        case I_IO:     snprintf(line, sizeof line, " INPUT/OUTPUT..."); break;
         case I_MACHINE: snprintf(line, sizeof line, " MACHINE..."); break;
         case I_SAVE:   snprintf(line, sizeof line, " SAVE SETTINGS"); break;
         case I_ABOUT:  snprintf(line, sizeof line, " ABOUT..."); break;
@@ -169,7 +173,7 @@ static void draw_main(void) {
     }
     snprintf(line, sizeof line, " TAPE IN: %.*s%s", cas->loaded ? 12 : 21,
              ins[0] ? (base ? base + 1 : ins) : "NONE", deck);
-    textpage_line(s.vram, MAIN_TOP + I_COUNT, line, false);
+    textpage_line(s.vram, MAIN_TOP + I_COUNT + 1, line, false);
 
     /* Each drive's image, without its directory or extension. */
     char name[ATOM_FDC_DRIVES][12];
@@ -181,7 +185,7 @@ static void draw_main(void) {
         if (dot && dot != name[d]) *dot = 0;
     }
     snprintf(line, sizeof line, " DISC 0: %-9.9s 1: %.9s", name[0], name[1]);
-    textpage_line(s.vram, MAIN_TOP + I_COUNT + 1, line, false);
+    textpage_line(s.vram, MAIN_TOP + I_COUNT + 2, line, false);
 }
 
 static void draw_tapes(void) {
@@ -242,7 +246,7 @@ static void draw_snaps(void) {
     }
 }
 
-static void draw_display(void) {
+static void draw_io(void) {
     char line[TEXT_COLS + 1];
     for (int i = 0; i < D_COUNT; i++) {
         switch (i) {
@@ -264,8 +268,33 @@ static void draw_display(void) {
         case D_BACKLIGHT:
             snprintf(line, sizeof line, " BACKLIGHT       < %u >", s.backlight / BKL_STEP);
             break;
+        case D_VOLUME:
+            snprintf(line, sizeof line, " VOLUME          < %u >", s.set->volume);
+            break;
+        case D_KEYS:
+            /* A card layout's name is cut to keep the column. */
+            snprintf(line, sizeof line, " KEYS            < %.11s >",
+                     s.set->layout ? s.set->layout->name : "STANDARD");
+            break;
+        case D_PORT_B:
+            snprintf(line, sizeof line, " VIA PORT B...     %s", s.set->port_b ? "ON" : "OFF");
+            break;
         }
-        textpage_line(s.vram, 2 + i, line, i == s.display_sel);
+        textpage_line(s.vram, 2 + i, line, i == s.io_sel);
+    }
+}
+
+static void draw_portb(void) {
+    char line[TEXT_COLS + 1];
+    snprintf(line, sizeof line, " VIA PORT B      < %s >", s.set->port_b ? "ON" : "OFF");
+    textpage_line(s.vram, 2, line, s.portb_sel == P_ON);
+    for (unsigned i = 0; i < SETTINGS_PB_BITS; i++) {
+        uint8_t gp = s.set->pb_gpio[i];
+        char pin[8];
+        if (gp == SETTINGS_PB_NC) snprintf(pin, sizeof pin, "NC");
+        else snprintf(pin, sizeof pin, "GP%u", gp);
+        snprintf(line, sizeof line, " PB%u             < %s >", i, pin);
+        textpage_line(s.vram, PB_TOP + (int)i, line, s.portb_sel == P_PB0 + (int)i);
     }
 }
 
@@ -358,12 +387,11 @@ static void draw_machine(void) {
         textpage_line(s.vram, 2 + i, line, i == s.machine_sel);
     }
     /* The VIA is shown and cannot be changed (§7.3). */
-    textpage_line(s.vram, 3 + M_COUNT, " 6522 VIA: FITTED, THE MOS NEEDS IT", false);
-    textpage_line(s.vram, 5 + M_COUNT, " A RESTART IS A POWER-ON: THE", false);
-    textpage_line(s.vram, 6 + M_COUNT, " PROGRAM IN MEMORY IS LOST.", false);
+    textpage_line(s.vram, 3 + M_COUNT, " A RESTART IS A POWER-ON: THE", false);
+    textpage_line(s.vram, 4 + M_COUNT, " PROGRAM IN MEMORY IS LOST.", false);
     /* §3.2: past the RP2350's rating, and what 4 MHz needs. */
-    textpage_line(s.vram, 7 + M_COUNT, " 300 MHZ IS AN OVERCLOCK, AND", false);
-    textpage_line(s.vram, 8 + M_COUNT, " 4 MHZ NEEDS IT.", false);
+    textpage_line(s.vram, 5 + M_COUNT, " 300 MHZ IS AN OVERCLOCK, AND", false);
+    textpage_line(s.vram, 6 + M_COUNT, " 4 MHZ NEEDS IT.", false);
 }
 
 /* First eight hex digits of a digest. */
@@ -450,14 +478,16 @@ static void draw(void) {
     textpage_clear(s.vram);
     textpage_line(s.vram, 0, s.tapes ? " PICO-ATOM: TAPES" : s.discs ? " PICO-ATOM: DISCS"
                              : s.snaps ? " PICO-ATOM: SNAPSHOTS"
-                             : s.display ? " PICO-ATOM: DISPLAY"
+                             : s.portb ? " PICO-ATOM: VIA PORT B"
+                             : s.io ? " PICO-ATOM: INPUT/OUTPUT"
                              : s.machine ? " PICO-ATOM: MACHINE"
                              : s.about ? " PICO-ATOM: ABOUT" : " PICO-ATOM", true);
     draw_battery();
     if (s.tapes) draw_tapes();
     else if (s.discs) draw_discs();
     else if (s.snaps) draw_snaps();
-    else if (s.display) draw_display();
+    else if (s.portb) draw_portb();
+    else if (s.io) draw_io();
     else if (s.machine) draw_machine();
     else if (s.about) draw_about();
     else draw_main();
@@ -465,7 +495,7 @@ static void draw(void) {
     textpage_line(s.vram, 15, s.tapes ? " ENTER INSERTS  ESC BACK"
                               : s.discs ? " < > DRIVE  ENTER INSERTS  ESC"
                               : s.snaps ? " < > SLOT  ENTER  ESC BACK"
-                              : s.display ? " < > CHANGES  ESC BACK"
+                              : s.portb || s.io ? " < > CHANGES  ESC BACK"
                               : s.machine ? " < > STAGES  ENTER  ESC BACK"
                               : s.about ? " ESC BACK"
                                         : " ARROWS  ENTER  ESC RESUMES", true);
@@ -583,6 +613,8 @@ static void save_settings(void) {
     out.volume = s.set->volume;
     out.backlight = s.set->backlight;
     out.perf = s.set->perf;
+    out.port_b = s.set->port_b;
+    memcpy(out.pb_gpio, s.set->pb_gpio, sizeof out.pb_gpio);
     /* The machine as it is running, not as the Machine page has it
      * staged (§11.6, §13.1). */
     out.machine.upper_ram = s.m->cfg.upper_ram;
@@ -724,27 +756,13 @@ static void key_main(uint8_t c) {
     switch (c) {
     case PC_UP:   s.item = (s.item + I_COUNT - 1) % I_COUNT; break;
     case PC_DOWN: s.item = (s.item + 1) % I_COUNT; break;
-    case PC_LEFT:
-    case PC_RIGHT: {
-        int dir = c == PC_RIGHT ? 1 : -1;
-        if (s.item == I_KEYS) {
-            cycle_keys(dir);
-        } else if (s.item == I_VOLUME) {
-            int v = (int)s.set->volume + dir;
-            s.set->volume = (unsigned)(v < 0 ? 0 : v > 8 ? 8 : v);
-            __dmb();           /* the volume before the request for it */
-            s.set->beep++;
-        }
-        break;
-    }
     case PC_ENTER:
         s.status[0] = 0;
         switch (s.item) {
-        case I_RESUME: s.done = true; break;
         case I_SNAPS:  s.snaps = true; s.snap_sel = S_SAVE; break;
         case I_TAPES:  open_tapes(); break;
         case I_DISCS:  open_discs(); break;
-        case I_DISPLAY: s.display = true; s.display_sel = D_COLOUR; break;
+        case I_IO:     s.io = true; s.io_sel = D_COLOUR; break;
         case I_MACHINE: open_machine(); break;
         case I_ABOUT:  open_about(); break;
         case I_RESET:  s.m->cpu.reset_pending = true; s.done = true; break;
@@ -781,26 +799,43 @@ static void key_snaps(uint8_t c) {
 
 /* Each change shows at once: the page itself is drawn through the
  * renderer it changes. */
-static void key_display(uint8_t c) {
+static void key_io(uint8_t c) {
     switch (c) {
-    case PC_UP:   s.display_sel = (s.display_sel + D_COUNT - 1) % D_COUNT; break;
-    case PC_DOWN: s.display_sel = (s.display_sel + 1) % D_COUNT; break;
+    case PC_UP:   s.io_sel = (s.io_sel + D_COUNT - 1) % D_COUNT; break;
+    case PC_DOWN: s.io_sel = (s.io_sel + 1) % D_COUNT; break;
     case PC_LEFT:
     case PC_RIGHT:
     case PC_ENTER:
-        if (s.display_sel == D_BACKLIGHT) {
+        if (s.io_sel == D_PORT_B) {
+            if (c == PC_ENTER) { s.portb = true; s.portb_sel = P_ON; s.status[0] = 0; }
+            break;
+        }
+        if (s.io_sel == D_BACKLIGHT) {
             if (c != PC_ENTER) set_backlight(c == PC_RIGHT ? 1 : -1);
             break;
         }
-        if (s.display_sel == D_STATUS || s.display_sel == D_PERF) {
+        if (s.io_sel == D_VOLUME || s.io_sel == D_KEYS) {
+            if (c == PC_ENTER) break;
+            int dir = c == PC_RIGHT ? 1 : -1;
+            if (s.io_sel == D_KEYS) {
+                cycle_keys(dir);
+            } else {
+                int v = (int)s.set->volume + dir;
+                s.set->volume = (unsigned)(v < 0 ? 0 : v > 8 ? 8 : v);
+                __dmb();           /* the volume before the request for it */
+                s.set->beep++;
+            }
+            break;
+        }
+        if (s.io_sel == D_STATUS || s.io_sel == D_PERF) {
             /* Core 1 draws the lines; they show once the menu closes. */
-            if (s.display_sel == D_STATUS) s.set->status = !s.set->status;
+            if (s.io_sel == D_STATUS) s.set->status = !s.set->status;
             else s.set->perf = !s.set->perf;
             break;
         }
-        if (s.display_sel == D_COLOUR) {
+        if (s.io_sel == D_COLOUR) {
             s.set->mono = !s.set->mono;
-        } else if (s.display_sel == D_BACKGROUND) {
+        } else if (s.io_sel == D_BACKGROUND) {
             s.set->dark_bg = !s.set->dark_bg;
         } else {
             s.set->border = !s.set->border;
@@ -810,7 +845,62 @@ static void key_display(uint8_t c) {
         display_set_look(s.set->mono, s.set->border, s.set->dark_bg);
         break;
     case PC_ESC:
-        s.display = false;
+        s.io = false;
+        break;
+    }
+}
+
+/* Port B's pins as the page has them, applied at once (§7.4); the
+ * status row says what the UART has lost to them: the log with TX, the
+ * typed keys with RX. */
+static void apply_portb(void) {
+    portb_set(s.m, s.set->port_b, s.set->pb_gpio);
+    bool tx = portb_has_uart_tx(), rx = portb_has_uart_rx();
+    say(tx && rx ? " GP4/GP5: NO UART LOG OR KEYS"
+        : tx     ? " GP4: NO UART LOG"
+        : rx     ? " GP5: NO UART KEYS"
+                 : "", "");
+}
+
+/* The next GPIO for PB`bit` in direction `dir`: NC, then the free pins
+ * in order (settings.h), passing any another bit holds. */
+static uint8_t next_gpio(unsigned bit, int dir) {
+    uint8_t list[33];
+    unsigned n = 0, at = 0;
+    list[n++] = SETTINGS_PB_NC;
+    for (unsigned gp = 0; gp < 32u; gp++)
+        if (SETTINGS_PB_GPIOS & (1u << gp)) list[n++] = (uint8_t)gp;
+    for (unsigned i = 0; i < n; i++)
+        if (list[i] == s.set->pb_gpio[bit]) at = i;
+    for (unsigned step = 0; step < n; step++) {
+        at = (at + (dir > 0 ? 1u : n - 1u)) % n;
+        bool taken = false;
+        for (unsigned i = 0; i < SETTINGS_PB_BITS; i++)
+            if (i != bit && list[at] != SETTINGS_PB_NC && s.set->pb_gpio[i] == list[at]) taken = true;
+        if (!taken) break;
+    }
+    return list[at];
+}
+
+static void key_portb(uint8_t c) {
+    switch (c) {
+    case PC_UP:   s.portb_sel = (s.portb_sel + P_COUNT - 1) % P_COUNT; break;
+    case PC_DOWN: s.portb_sel = (s.portb_sel + 1) % P_COUNT; break;
+    case PC_LEFT:
+    case PC_RIGHT:
+    case PC_ENTER:
+        if (s.portb_sel == P_ON) {
+            s.set->port_b = !s.set->port_b;
+        } else {
+            if (c == PC_ENTER) break;
+            unsigned bit = (unsigned)(s.portb_sel - P_PB0);
+            s.set->pb_gpio[bit] = next_gpio(bit, c == PC_RIGHT ? 1 : -1);
+        }
+        apply_portb();
+        break;
+    case PC_ESC:
+        s.portb = false;
+        s.status[0] = 0;
         break;
     }
 }
@@ -949,7 +1039,8 @@ static void keys(void) {
         if (s.tapes) key_tapes(c);
         else if (s.discs) key_discs(c);
         else if (s.snaps) key_snaps(c);
-        else if (s.display) key_display(c);
+        else if (s.portb) key_portb(c);
+        else if (s.io) key_io(c);
         else if (s.machine) key_machine(c);
         else if (s.about) key_about(c);
         else key_main(c);

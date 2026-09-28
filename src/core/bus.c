@@ -55,9 +55,12 @@ uint8_t ATOM_HOT1(bus_read_slow)(atom_t *m, uint16_t a) {
             return v;
         }
         if (IS_VIA(a) && m->cfg.via_fitted) {
-            /* Reading T1C-L or T2C-L clears a flag, so the IRQ line can
-             * drop on a read. */
-            uint8_t v = via6522_read(&m->via, (uint8_t)(a & 15u));
+            /* Port B's pins are brought up to date only when they can
+             * be seen (§7.4). Reading T1C-L or T2C-L clears a flag, so
+             * the IRQ line can drop on a read. */
+            uint8_t reg = (uint8_t)(a & 15u);
+            if (reg == VIA_ORB && m->port_b) m->port_b(m, false);
+            uint8_t v = via6522_read(&m->via, reg);
             m6502_set_irq(&m->cpu, M6502_IRQ_VIA, via6522_irq(&m->via));
             m->open_bus = v;
             return v;
@@ -115,8 +118,13 @@ void ATOM_HOT1(bus_write_slow)(atom_t *m, uint16_t a, uint8_t v) {
             return;
         }
         if (IS_VIA(a) && m->cfg.via_fitted) {
-            via6522_write(&m->via, (uint8_t)(a & 15u), v);
+            uint8_t reg = (uint8_t)(a & 15u);
+            via6522_write(&m->via, reg, v);
             m6502_set_irq(&m->cpu, M6502_IRQ_VIA, via6522_irq(&m->via));
+            /* What the chip drives on port B moves only here, and with
+             * T1's PB7, which the port follows once a field (§7.4). */
+            if (m->port_b && (reg == VIA_ORB || reg == VIA_DDRB || reg == VIA_ACR))
+                m->port_b(m, true);
             return;
         }
         return;
