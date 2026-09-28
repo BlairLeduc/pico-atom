@@ -1100,12 +1100,12 @@ static void keys(void) {
     }
 }
 
-void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram, unsigned page) {
+void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram, unsigned page, bool alt) {
     memset(&s, 0, sizeof s);
     s.m = m;
     s.set = set;
     s.vram = vram;
-    s.alt = true;      /* it was opened with Alt held */
+    s.alt = alt;       /* Alt+M or Alt+H has it held; F1-F5 and F10 do not */
 
     int err = storage_mount();
     s.card = err == 0;

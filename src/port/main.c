@@ -127,8 +127,10 @@ static volatile uint32_t g_power_ons;
 
 static volatile uint32_t g_handoff = HANDOFF_NONE;
 
-/* With HANDOFF_MENU: the page to open, 0 for the main page (menu.h). */
+/* With HANDOFF_MENU: the page to open, 0 for the main page (menu.h), and
+ * whether Alt was down when it was asked for. */
 static volatile uint32_t g_menu_page;
+static volatile bool g_menu_alt;
 
 /* What the settings file said at boot, and what a save from the menu
  * wrote since (design.md §11.6, §11.7). Core 1's. */
@@ -466,10 +468,12 @@ static const char *machine_power_on(const atom_config_t *cfg, const char *utilit
  * it (menu.h), or -1. The menu's own keys, not a layout's. */
 static int menu_key(bool alt, uint8_t c) {
     if (alt && c >= 'a' && c <= 'z') c = (uint8_t)(c - ('a' - 'A'));
-    uint8_t want = (alt ? KM_ALT : 0u) | KM_MENU;
     for (size_t i = 0; i < keymap_picocalc_len; i++) {
         const keymap_t *e = &keymap_picocalc[i];
-        if (e->code == c && (e->flags & (KM_ALT | KM_MENU)) == want) return e->row;
+        /* An Alt chord only with Alt down; F1-F5 and F10 either way, as
+         * Pause is entered with Alt still held. */
+        if (e->code == c && (e->flags & KM_MENU) && (alt || !(e->flags & KM_ALT)))
+            return e->row;
     }
     return -1;
 }
@@ -480,10 +484,11 @@ static int menu_key(bool alt, uint8_t c) {
  * Alt+M goes to the menu instead, the backlight restored first, and
  * F1-F5, F10 and Alt+H to its pages. The card is not mounted and no page is drawn. The keyboard
  * is polled at 30 Hz, which keeps the MCU's bus watchdog fed
- * (hardware-notes.md §6.1). Returns -1 to resume, or the menu's page. */
+ * (hardware-notes.md §6.1). Returns -1 to resume, or the menu's page,
+ * with whether Alt was down at the end in `alt_out`. */
 #define BKL_LOWEST 16u
 
-static int pause_run(void) {
+static int pause_run(bool *alt_out) {
     char line[ATOM_STATUS_COLS + 1];
     status_paused_format(line);
     display_status(line);
@@ -524,6 +529,7 @@ static int pause_run(void) {
 
     if (dimmed) (void)sb_write(SB_REG_BKL, level, NULL);
     printf("  pause        : resumed%s\n", menu >= 0 ? " into the menu" : "");
+    *alt_out = alt;
     return menu;
 }
 
@@ -694,10 +700,11 @@ static void core1_main(void) {
             } else if (g_handoff == HANDOFF_DISC) {
                 (void)discio_serve(&g_atom);
             } else if (g_handoff == HANDOFF_PAUSE) {
-                int page = pause_run();
-                if (page >= 0) menu_run(&g_atom, &g_settings, s_scene, (unsigned)page);
+                bool alt;
+                int page = pause_run(&alt);
+                if (page >= 0) menu_run(&g_atom, &g_settings, s_scene, (unsigned)page, alt);
             } else {
-                menu_run(&g_atom, &g_settings, s_scene, g_menu_page);
+                menu_run(&g_atom, &g_settings, s_scene, g_menu_page, g_menu_alt);
             }
             __dmb();
             g_handoff = HANDOFF_NONE;
@@ -977,6 +984,7 @@ int main(void) {
          * counted in guest cycles stops with it. */
         if (g_keys.menu_request || g_keys.pause_request) {
             g_menu_page = g_keys.menu_page;
+            g_menu_alt = g_keys.alt;
             if (park_for_ui(g_keys.menu_request ? HANDOFF_MENU : HANDOFF_PAUSE)) {
                 /* A new machine, its clock started again (§13.1). */
                 hb_cycles = sec_cycles = g_atom.cpu.cycles;

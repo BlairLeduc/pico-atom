@@ -84,7 +84,9 @@ _Static_assert(MENU_PAGE_HELP > MENU_FKEYS, "the help page is none of the items'
 
 /* Run the menu until it is closed. `vram` is a page core 1 owns. `page`
  * is 0 for the main page, 1-MENU_FKEYS to open with that item's page, as
- * F1-F5 ask, or MENU_PAGE_HELP; closing that page closes the menu. */
-void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram, unsigned page);
+ * F1-F5 ask, or MENU_PAGE_HELP; closing that page closes the menu. `alt`
+ * is whether Alt was down when it was asked for, so that Alt+M closes it
+ * only as a chord. */
+void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram, unsigned page, bool alt);
 
 #endif /* PICO_ATOM_MENU_H */
