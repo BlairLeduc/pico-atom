@@ -74,7 +74,17 @@ typedef struct {
     const char *(*restart)(const atom_config_t *cfg, const char *utility);
 } menu_settings_t;
 
-/* Run the menu until it is closed. `vram` is a page core 1 owns. */
-void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram);
+/* F1-F5 open the main page's first five items from the running Atom or
+ * from Pause (§13). Inside the menu they do nothing. */
+#define MENU_FKEYS 5
+
+/* Alt+H and F10 open a page of these keys, from the same places. */
+#define MENU_PAGE_HELP KM_PAGE_HELP
+_Static_assert(MENU_PAGE_HELP > MENU_FKEYS, "the help page is none of the items'");
+
+/* Run the menu until it is closed. `vram` is a page core 1 owns. `page`
+ * is 0 for the main page, 1-MENU_FKEYS to open with that item's page, as
+ * F1-F5 ask, or MENU_PAGE_HELP; closing that page closes the menu. */
+void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram, unsigned page);
 
 #endif /* PICO_ATOM_MENU_H */

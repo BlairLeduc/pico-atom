@@ -887,7 +887,7 @@ underflow or the shift clock's next edge, and nothing else (§6.3). So T2's
 count and the shift clock lag between those events; a read of T2 or SR brings
 them up to date, and so does the snapshot.
 
-**Port B can go out to the PicoCalc's GPIOs** (`portb.c`, the Input/Output
+**Port B can go out to the PicoCalc's GPIOs** (`portb.c`, the Setup
 page's *VIA port B*, since 2026-09-28). On a real Atom, port B was the user
 port that owners wired up for their own projects: lights, relays, switches,
 sensors. Each of PB0–PB7 may be given one of the pins the PicoCalc leaves free
@@ -1001,7 +1001,7 @@ position and the turbo ratio at most once a wall-clock second; a change of
 state shows at once. The line is blanked while the menu is open, since the
 menu can change what it says, and the first present after it closes draws it
 again. A setting turns the line off (`status`, §11.7, and the
-Display page). It is drawn green on black in the screen's palette, so in
+Setup page). It is drawn green on black in the screen's palette, so in
 mono it is the screen's grey, and a change of palette redraws it.
 On a Plus 2 W on 2026-09-26 the line showed a UEF's `PLAY`, `STOP` and
 position, and `D0 …` during a disc access, which went at once on BREAK. Without a character ROM it
@@ -1555,7 +1555,7 @@ printable character, which names the key it is on, shifted or not. A target is
 an Atom key by its keycap name (`BREAK` excepted: it is the reset line, and not
 a game's to have) or `CTRL`, `SHIFT` or `REPT`.
 
-**In the menu** the item is `KEYS < STANDARD >` on the Input/Output page
+**In the menu** the item is `KEYS < STANDARD >` on the Setup page
 (§13), and left/right cycles through
 the built-in layouts, then the card's. The choice is part of the settings, and
 M11's *Save settings* writes it to the settings file (§11.6). It is not part of a snapshot (§11.5): a snapshot
@@ -2475,13 +2475,28 @@ settings file (§11.7), and the menu's status row names the file's first problem
 | Disc | attach/detach drive 0/1 (phase 3) |
 | Snapshot | save, load, delete |
 | Machine | RAM below the screen (16 or 32 KiB), guest clock (1 or 2 MHz), AtomDOS, the utility ROM; applied by a restart (§13.1) |
-| Input/Output | colour or mono, border, background, status line, perf line (§13.1), backlight, volume, the game keymap in force: standard, a built-in layout, or one from the card (§10.5), and *VIA port B...*, a page that turns port B on the GPIOs on and off and gives each bit its pin (§7.4) |
+| Setup | colour or mono, border, background, status line, perf line (§13.1), backlight, volume, the game keymap in force: standard, a built-in layout, or one from the card (§10.5), and *VIA port B...*, a page that turns port B on the GPIOs on and off and gives each bit its pin (§7.4) |
 | About | firmware, board, ROM identification by SHA-1, the settings file's state (§13.1) |
 
 Reset and *Save settings* are on the main page. On 2026-09-27 the
 Display page became Input/Output and took Volume and Keys from the main
-page, and Resume went: `Esc` does the same. Pause is a key,
-`Alt`+`P`, and not a menu item (§13.1).
+page, and Resume went: `Esc` does the same. On 2026-09-28 Input/Output
+became Setup: how the emulator behaves, beside Machine, what the Atom is. Pause is a key,
+`Alt`+`P`, and not a menu item (§13.1). On 2026-09-28 `F1`–`F5` became
+Tapes, Discs, Snapshots, Setup and Machine, the main page's first five
+items in order. A function key opens the menu at its page from the running
+Atom and from Pause, as `Alt`+`M` opens it at the main page, and leaving that
+page, by `Esc` or by a choice that closes it, goes back to the Atom, not to the
+main page. `F10` (the MCU's Shift+`F5`, `0x90`) and `Alt`+`H` open a page of
+the keys the emulator takes for itself, the same way; it is not on the main
+page. Inside the menu the function keys do nothing: the arrows and `Enter`
+get about it. The keyboard
+MCU sends `F1`–`F5` as `0x81`–`0x85`; they are `KM_MENU` entries in the
+standard map whose row is the page. The Atom has no function keys, and a
+layout cannot name them, so they are the menu's under any layout (§10.5).
+Verified on a Plus 2 W on 2026-09-28: `F1`–`F5`, `F10` and `Alt`+`H` from the
+Atom, each page going back to the Atom as it closes, the Setup page's new name,
+Tapes above Discs, and the About page's temperature.
 
 Of that table, as built: Tape (without a position control, since recording
 only appends), Keys, Disc and Snapshot are there; Display has colour or mono,
@@ -2605,7 +2620,7 @@ starts the counters it keeps against the guest's clock again.
 
 ```
  PICO-ATOM <GIT DESCRIBE>
- BOARD PIMORONI_PICO_PLUS2_W_RP2
+ BOARD PIMORONI_PICO_PLUS2_W 23C
  RP2350 <REV>  150 MHZ  SB <VER>
  MACHINE 32K 1 MHZ DOS VIA
 
@@ -2623,7 +2638,11 @@ The version is `git describe --always --dirty`, generated into
 runs on every build and which rewrites the header only when the text
 changes. It is not taken at configure time, because a configure-time value
 goes stale on the next commit. The startup banner prints it too. The board
-line is `board_info_t`'s SDK board name, cut to fit the page's 32 columns. The southbridge's `VER` is read when the page
+line is `board_info_t`'s SDK board name, cut to 21 characters, and since
+2026-09-28 the die's temperature at its right end: `board_temp_c()`, whole
+degrees and uncalibrated (hardware-notes.md §8.1), read as the page opens and
+again every 5 s with the battery while it is open. The menu is core 1's, and
+so is the ADC. The southbridge's `VER` is read when the page
 opens. Each ROM slot shows its file, its state and the first eight hex
 digits of its SHA-1. `OK` means the image §11.1 records, `??` a loaded
 image that is not it, `ANY` the utility socket, which takes any image,
@@ -2634,7 +2653,7 @@ The last line is the settings file's first problem, or `OK`.
 
 **The perf line.** One line of the heartbeat's figures (§12.3), on the
 panel, off by default. The setting is `perf` (§11.7) and a row on the
-Display page. It uses the top band's outer 16 rows, opposite the status
+Setup page. It uses the top band's outer 16 rows, opposite the status
 line: 40 cells of 8×12 at y = 2–13 (`ATOM_PERF_Y`). The border never fills
 those rows (§8.7).
 

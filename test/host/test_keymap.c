@@ -319,7 +319,7 @@ int main(void) {
         keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_ALT);
         keymatrix_event(&k, KEY_EV_PRESSED, 'M');
         keymatrix_field(&k, &m);
-        CHECK(k.menu_request, "Alt+M requests the menu");
+        CHECK(k.menu_request && k.menu_page == 0, "Alt+M requests the menu's main page");
         bool any = false;
         for (unsigned c = 0; c < ATOM_KEY_COLS; c++) any |= m.key_col[c] != 0;
         CHECK(!any && !m.key_shift && !m.key_rept, "Alt+M reached the matrix");
@@ -333,6 +333,38 @@ int main(void) {
         any = false;
         for (unsigned c = 0; c < ATOM_KEY_COLS; c++) any |= m.key_col[c] != 0;
         CHECK(!any && !m.key_shift && !m.key_rept, "Alt+P reached the matrix");
+
+        /* F1-F5 ask for the menu at a page, the main page's items in
+         * order (§13); F6, Shift+F1, is nothing. */
+        for (unsigned f = 0; f < 5; f++) {
+            fresh();
+            keymatrix_event(&k, KEY_EV_PRESSED, (uint8_t)(PICOCALC_KEY_F1 + f));
+            keymatrix_field(&k, &m);
+            CHECK(k.menu_request && k.menu_page == f + 1, "F%u requests page %u, got %u",
+                  f + 1, f + 1, k.menu_page);
+            any = false;
+            for (unsigned c = 0; c < ATOM_KEY_COLS; c++) any |= m.key_col[c] != 0;
+            CHECK(!any && !m.key_shift && !m.key_rept, "F%u reached the matrix", f + 1);
+        }
+        fresh();
+        keymatrix_event(&k, KEY_EV_PRESSED, 0x86u);
+        keymatrix_field(&k, &m);
+        CHECK(!k.menu_request, "F6 requests nothing");
+
+        /* F10, Shift+F5, and Alt+H ask for the page of keys. */
+        fresh();
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_SHIFT_L);
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_F10);
+        keymatrix_field(&k, &m);
+        CHECK(k.menu_request && k.menu_page == KM_PAGE_HELP, "F10 requests the keys");
+        fresh();
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_ALT);
+        keymatrix_event(&k, KEY_EV_PRESSED, 'H');
+        keymatrix_field(&k, &m);
+        CHECK(k.menu_request && k.menu_page == KM_PAGE_HELP, "Alt+H requests the keys");
+        any = false;
+        for (unsigned c = 0; c < ATOM_KEY_COLS; c++) any |= m.key_col[c] != 0;
+        CHECK(!any, "Alt+H reached the matrix");
     }
 
     /* ---- the queue is bounded, and never loses a release ------------- */
@@ -479,6 +511,11 @@ int main(void) {
         keymatrix_event(&k, KEY_EV_PRESSED, 'M');
         keymatrix_field(&k, &m);
         CHECK(k.menu_request && !m.key_ctrl, "Alt+M is the menu under any layout");
+        fresh();
+        keymatrix_set_layout(&k, &greedy);
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_F1 + 2);
+        keymatrix_field(&k, &m);
+        CHECK(k.menu_request && k.menu_page == 3, "F3 is the menu under any layout");
         fresh();
         keymatrix_set_layout(&k, &greedy);
         keymatrix_event(&k, KEY_EV_PRESSED, 'M');   /* Shift+m */

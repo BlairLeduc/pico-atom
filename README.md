@@ -116,6 +116,8 @@ The emulator boots straight to the Atom's `>` prompt.
 | `LOCK` | `Alt`+`L` |
 | `BREAK` | `Alt`+`K` |
 | the emulator's menu | `Alt`+`M` |
+| one menu page, then back to the Atom | `F1` Tapes, `F2` Discs, `F3` Snapshots, `F4` Setup, `F5` Machine |
+| these keys, on the panel | `F10` or `Alt`+`H` |
 | pause | `Alt`+`P` |
 
 `|`, `{`, `}`, `` ` `` and `~` are the Atom's shifted `\`, `[`, `]`, `@` and
@@ -124,7 +126,7 @@ The emulator boots straight to the Atom's `>` prompt.
 
 **Pause.** `Alt`+`P` stops the Atom where it is, silences it and dims the
 screen. The bottom line says `PAUSED`. Any key carries on, and that key is not
-typed. `Alt`+`M` goes to the menu instead. A tape that was playing stops with
+typed. `Alt`+`M` goes to the menu instead, and `F1`–`F5`, `F10` and `Alt`+`H` to its pages. A tape that was playing stops with
 the Atom and carries on with it.
 
 **Tapes** are `.atm` files in `/atom/tapes/` on the card. `LOAD "NAME"` and
@@ -218,7 +220,7 @@ file and the line.
 kept in `/atom/snaps/`. They contain no ROM bytes, and load only over the same
 ROMs.
 
-The menu's *Display* page switches the screen between colour and **mono**,
+The menu's *Setup* page switches the screen between colour and **mono**,
 which is how most Atoms looked without the colour board. In mono, blue and red
 are the darkest grey. It also turns the **border** on or off. The border is
 the colour the video chip draws around its picture: black in text modes, and
@@ -250,7 +252,7 @@ sounds an octave higher, but `WAIT` and the screen keep their speed. At 4 MHz
 it is four times as fast and two octaves higher. A snapshot taken at one clock
 does not load at another. The *About* page shows the
 firmware's version, the board, and each ROM with the first eight digits of its
-SHA-1, to check against the list above. The *Display* page's *Perf line* puts
+SHA-1, to check against the list above. The *Setup* page's *Perf line* puts
 the emulator's own figures along the top of the screen: how much of the
 PicoCalc's first core the Atom takes, how many times real time it could run,
 the slowest screen update in the last second, frames dropped, and sound
