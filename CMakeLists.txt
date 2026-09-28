@@ -106,6 +106,7 @@ else()
     add_executable(pico-atom
         src/port/main.c
         src/port/menu.c
+        src/port/portb.c
         src/port/snapio.c
         src/port/textpage.c
         src/port/audio.c
@@ -148,6 +149,18 @@ else()
     # arrives on UART1 at the guest (tools/uart-type.sh).
     option(PICO_ATOM_AUDIO "Audio output, and pacing on the PCM queue" ON)
     option(PICO_ATOM_UART_KEYS "Type characters received on UART1 at the guest" ON)
+
+    # PICO_ATOM_UART=OFF is the build that ships: nothing on UART1, no log
+    # and no keys typed over it, so GP4 and GP5 are free and VIA port B is
+    # on the GPIOs by default (design.md §7.4). ON, the default, is the
+    # development build, which flash.sh's checks, uart-log.sh, uart-type.sh
+    # and the soak need (hardware-notes.md §2.7).
+    option(PICO_ATOM_UART "Log and type keys over UART1 on GP4/GP5 (development)" ON)
+    if (PICO_ATOM_UART)
+        set(PICO_ATOM_UART_ON 1)
+    else()
+        set(PICO_ATOM_UART_ON 0)
+    endif()
 
     # How much of the core's hot path runs from SRAM (src/core/hot.h).
     # Each tier was measured on the board; design.md §6.3 has the table
@@ -207,7 +220,9 @@ else()
     target_compile_definitions(pico-atom PRIVATE
         PICO_ATOM_HAVE_FONT=${PICO_ATOM_HAVE_FONT}
         PICO_ATOM_AUDIO=$<BOOL:${PICO_ATOM_AUDIO}>
-        PICO_ATOM_UART_KEYS=$<BOOL:${PICO_ATOM_UART_KEYS}>
+        PICO_ATOM_UART=${PICO_ATOM_UART_ON}
+        PICO_ATOM_UART_KEYS=$<AND:${PICO_ATOM_UART_ON},$<BOOL:${PICO_ATOM_UART_KEYS}>>
+        PICO_ATOM_PORT_B_DEFAULT=$<NOT:${PICO_ATOM_UART_ON}>
         PICO_ATOM_RAM_TIER=${PICO_ATOM_RAM_TIER}
         PICO_CLOCK_ADJUST_PERI_CLOCK_WITH_SYS_CLOCK=1
         # UART1 at 115200 8-N-1, TX GP4 / RX GP5 (hardware-notes §2.7).
@@ -233,7 +248,7 @@ else()
         hardware_watchdog
     )
 
-    pico_enable_stdio_uart(pico-atom 1)
+    pico_enable_stdio_uart(pico-atom ${PICO_ATOM_UART_ON})
     pico_enable_stdio_usb(pico-atom 0)
 
     pico_add_extra_outputs(pico-atom)

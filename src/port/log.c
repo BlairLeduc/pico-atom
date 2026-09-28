@@ -18,6 +18,10 @@ static volatile uint32_t s_tail;       /* written by core 1 only */
 static volatile unsigned s_dropped;
 
 void log_printf(const char *fmt, ...) {
+#if !PICO_ATOM_UART
+    (void)fmt;          /* nowhere to send it, so not even formatted */
+    return;
+#else
     char line[512];
     va_list ap;
     va_start(ap, fmt);
@@ -42,9 +46,13 @@ void log_printf(const char *fmt, ...) {
     }
     __dmb();                    /* the bytes land before the index moves */
     s_head = head;
+#endif
 }
 
 void log_pump(void) {
+#if !PICO_ATOM_UART
+    return;             /* the UART was never brought up */
+#endif
     uint32_t tail = s_tail;
     uint32_t head = s_head;
     if (tail == head) return;

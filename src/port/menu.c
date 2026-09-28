@@ -18,6 +18,7 @@
 #include "keymapio.h"
 #include "keymatrix.h"
 #include "log.h"
+#include "portb.h"
 #include "settingsio.h"
 #include "snapio.h"
 #include "southbridge.h"
@@ -60,9 +61,14 @@ enum {
 enum { S_SLOT, S_SAVE, S_LOAD, S_DELETE, S_COUNT };
 
 /* The Input/Output page: the display (§8.7), then the backlight, the
- * volume and the keymap (§10.5). */
+ * volume, the keymap (§10.5) and VIA port B's page (§7.4). */
 enum { D_COLOUR, D_BORDER, D_BACKGROUND, D_STATUS, D_PERF, D_BACKLIGHT, D_VOLUME, D_KEYS,
-       D_COUNT };
+       D_PORT_B, D_COUNT };
+
+/* VIA port B's page (§7.4): on or off on row 2, then PB0-PB7 on rows
+ * 4-11, each with a GPIO or none. */
+enum { P_ON, P_PB0, P_COUNT = P_PB0 + SETTINGS_PB_BITS };
+#define PB_TOP 4
 
 /* The Machine page (§13.1): five settings staged, and the restart that
  * applies them. The host clock is the Pico's (§3.2), and changing it
@@ -97,9 +103,11 @@ static struct {
     bool             snaps;
     int              snap_sel;
 
-    /* The Input/Output page. */
+    /* The Input/Output page, and port B's under it. */
     bool             io;
     int              io_sel;
+    bool             portb;
+    int              portb_sel;
 
     /* The Machine page: what is staged, against the running machine.
      * The utility is an index into s_utils, 0 being none. */
@@ -268,8 +276,25 @@ static void draw_io(void) {
             snprintf(line, sizeof line, " KEYS            < %.11s >",
                      s.set->layout ? s.set->layout->name : "STANDARD");
             break;
+        case D_PORT_B:
+            snprintf(line, sizeof line, " VIA PORT B...     %s", s.set->port_b ? "ON" : "OFF");
+            break;
         }
         textpage_line(s.vram, 2 + i, line, i == s.io_sel);
+    }
+}
+
+static void draw_portb(void) {
+    char line[TEXT_COLS + 1];
+    snprintf(line, sizeof line, " VIA PORT B      < %s >", s.set->port_b ? "ON" : "OFF");
+    textpage_line(s.vram, 2, line, s.portb_sel == P_ON);
+    for (unsigned i = 0; i < SETTINGS_PB_BITS; i++) {
+        uint8_t gp = s.set->pb_gpio[i];
+        char pin[8];
+        if (gp == SETTINGS_PB_NC) snprintf(pin, sizeof pin, "NC");
+        else snprintf(pin, sizeof pin, "GP%u", gp);
+        snprintf(line, sizeof line, " PB%u             < %s >", i, pin);
+        textpage_line(s.vram, PB_TOP + (int)i, line, s.portb_sel == P_PB0 + (int)i);
     }
 }
 
@@ -453,6 +478,7 @@ static void draw(void) {
     textpage_clear(s.vram);
     textpage_line(s.vram, 0, s.tapes ? " PICO-ATOM: TAPES" : s.discs ? " PICO-ATOM: DISCS"
                              : s.snaps ? " PICO-ATOM: SNAPSHOTS"
+                             : s.portb ? " PICO-ATOM: VIA PORT B"
                              : s.io ? " PICO-ATOM: INPUT/OUTPUT"
                              : s.machine ? " PICO-ATOM: MACHINE"
                              : s.about ? " PICO-ATOM: ABOUT" : " PICO-ATOM", true);
@@ -460,6 +486,7 @@ static void draw(void) {
     if (s.tapes) draw_tapes();
     else if (s.discs) draw_discs();
     else if (s.snaps) draw_snaps();
+    else if (s.portb) draw_portb();
     else if (s.io) draw_io();
     else if (s.machine) draw_machine();
     else if (s.about) draw_about();
@@ -468,7 +495,7 @@ static void draw(void) {
     textpage_line(s.vram, 15, s.tapes ? " ENTER INSERTS  ESC BACK"
                               : s.discs ? " < > DRIVE  ENTER INSERTS  ESC"
                               : s.snaps ? " < > SLOT  ENTER  ESC BACK"
-                              : s.io ? " < > CHANGES  ESC BACK"
+                              : s.portb || s.io ? " < > CHANGES  ESC BACK"
                               : s.machine ? " < > STAGES  ENTER  ESC BACK"
                               : s.about ? " ESC BACK"
                                         : " ARROWS  ENTER  ESC RESUMES", true);
@@ -586,6 +613,8 @@ static void save_settings(void) {
     out.volume = s.set->volume;
     out.backlight = s.set->backlight;
     out.perf = s.set->perf;
+    out.port_b = s.set->port_b;
+    memcpy(out.pb_gpio, s.set->pb_gpio, sizeof out.pb_gpio);
     /* The machine as it is running, not as the Machine page has it
      * staged (§11.6, §13.1). */
     out.machine.upper_ram = s.m->cfg.upper_ram;
@@ -777,6 +806,10 @@ static void key_io(uint8_t c) {
     case PC_LEFT:
     case PC_RIGHT:
     case PC_ENTER:
+        if (s.io_sel == D_PORT_B) {
+            if (c == PC_ENTER) { s.portb = true; s.portb_sel = P_ON; s.status[0] = 0; }
+            break;
+        }
         if (s.io_sel == D_BACKLIGHT) {
             if (c != PC_ENTER) set_backlight(c == PC_RIGHT ? 1 : -1);
             break;
@@ -813,6 +846,56 @@ static void key_io(uint8_t c) {
         break;
     case PC_ESC:
         s.io = false;
+        break;
+    }
+}
+
+/* Port B's pins as the page has them, applied at once (§7.4); the
+ * status row says when the UART has lost its pins to them. */
+static void apply_portb(void) {
+    portb_set(s.m, s.set->port_b, s.set->pb_gpio);
+    say(portb_has_uart() ? " GP4/GP5: NO UART LOG OR KEYS" : "", "");
+}
+
+/* The next GPIO for PB`bit` in direction `dir`: NC, then the free pins
+ * in order (settings.h), passing any another bit holds. */
+static uint8_t next_gpio(unsigned bit, int dir) {
+    uint8_t list[33];
+    unsigned n = 0, at = 0;
+    list[n++] = SETTINGS_PB_NC;
+    for (unsigned gp = 0; gp < 32u; gp++)
+        if (SETTINGS_PB_GPIOS & (1u << gp)) list[n++] = (uint8_t)gp;
+    for (unsigned i = 0; i < n; i++)
+        if (list[i] == s.set->pb_gpio[bit]) at = i;
+    for (unsigned step = 0; step < n; step++) {
+        at = (at + (dir > 0 ? 1u : n - 1u)) % n;
+        bool taken = false;
+        for (unsigned i = 0; i < SETTINGS_PB_BITS; i++)
+            if (i != bit && list[at] != SETTINGS_PB_NC && s.set->pb_gpio[i] == list[at]) taken = true;
+        if (!taken) break;
+    }
+    return list[at];
+}
+
+static void key_portb(uint8_t c) {
+    switch (c) {
+    case PC_UP:   s.portb_sel = (s.portb_sel + P_COUNT - 1) % P_COUNT; break;
+    case PC_DOWN: s.portb_sel = (s.portb_sel + 1) % P_COUNT; break;
+    case PC_LEFT:
+    case PC_RIGHT:
+    case PC_ENTER:
+        if (s.portb_sel == P_ON) {
+            s.set->port_b = !s.set->port_b;
+        } else {
+            if (c == PC_ENTER) break;
+            unsigned bit = (unsigned)(s.portb_sel - P_PB0);
+            s.set->pb_gpio[bit] = next_gpio(bit, c == PC_RIGHT ? 1 : -1);
+        }
+        apply_portb();
+        break;
+    case PC_ESC:
+        s.portb = false;
+        s.status[0] = 0;
         break;
     }
 }
@@ -951,6 +1034,7 @@ static void keys(void) {
         if (s.tapes) key_tapes(c);
         else if (s.discs) key_discs(c);
         else if (s.snaps) key_snaps(c);
+        else if (s.portb) key_portb(c);
         else if (s.io) key_io(c);
         else if (s.machine) key_machine(c);
         else if (s.about) key_about(c);

@@ -18,6 +18,11 @@ void settings_default(settings_t *s) {
     s->backlight = 0u;
     s->turbo     = true;
     s->host_mhz  = SETTINGS_HOST_MHZ;
+    s->port_b    = PICO_ATOM_PORT_B_DEFAULT;
+    /* PB0-PB5 on the side header's pins (§7.4). */
+    static const uint8_t pb[SETTINGS_PB_BITS] = { 2, 3, 4, 5, 21, 28, SETTINGS_PB_NC,
+                                                  SETTINGS_PB_NC };
+    memcpy(s->pb_gpio, pb, sizeof pb);
     memcpy(s->utility, SETTINGS_UTILITY, sizeof SETTINGS_UTILITY);
 }
 
@@ -102,6 +107,35 @@ static settings_status_t utility(settings_t *s, const char *v) {
     return path(v, s->utility);
 }
 
+/* Eight GPIOs, PB0 first, each `gpN` or `nc`, none given twice (§7.4). */
+static settings_status_t pb_pins(settings_t *s, const char *v) {
+    uint8_t pins[SETTINGS_PB_BITS];
+    uint32_t used = 0;
+    for (unsigned i = 0; i < SETTINGS_PB_BITS; i++) {
+        while (isspace((unsigned char)*v)) v++;
+        char tok[8];
+        size_t n = 0;
+        while (*v && !isspace((unsigned char)*v)) {
+            if (n + 1u >= sizeof tok) return SET_BAD_VALUE;
+            tok[n++] = *v++;
+        }
+        tok[n] = 0;
+        if (same_name(tok, "nc")) { pins[i] = SETTINGS_PB_NC; continue; }
+        unsigned gp;
+        if (toupper((unsigned char)tok[0]) != 'G' || toupper((unsigned char)tok[1]) != 'P' ||
+            number(tok + 2, 0u, 31u, &gp) != SET_OK || !(SETTINGS_PB_GPIOS & (1u << gp)) ||
+            (used & (1u << gp))) {
+            return SET_BAD_VALUE;
+        }
+        used |= 1u << gp;
+        pins[i] = (uint8_t)gp;
+    }
+    while (isspace((unsigned char)*v)) v++;
+    if (*v) return SET_BAD_VALUE;
+    memcpy(s->pb_gpio, pins, sizeof pins);
+    return SET_OK;
+}
+
 static settings_status_t keys(settings_t *s, const char *v) {
     if (!*v) return SET_BAD_VALUE;
     if (same_name(v, "standard")) { s->keys[0] = 0; return SET_OK; }
@@ -116,12 +150,13 @@ static settings_status_t keys(settings_t *s, const char *v) {
 enum {
     K_SCREEN, K_BORDER, K_BACKGROUND, K_STATUS, K_BACKLIGHT, K_VOLUME, K_KEYS, K_TAPE,
     K_TURBO, K_DRIVE0, K_DRIVE1, K_UPPER_RAM, K_DOS, K_CLOCK, K_UTILITY, K_PERF, K_HOST_CLOCK,
-    K_COUNT
+    K_PORT_B, K_PORT_B_PINS, K_COUNT
 };
 
 static const char *const k_names[K_COUNT] = {
     "screen", "border", "background", "status", "backlight", "volume", "keys", "tape",
     "turbo", "drive0", "drive1", "upper_ram", "dos", "clock", "utility", "perf", "host_clock",
+    "via_port_b", "via_port_b_pins",
 };
 
 static settings_status_t apply(settings_t *s, unsigned k, const char *v) {
@@ -144,6 +179,8 @@ static settings_status_t apply(settings_t *s, unsigned k, const char *v) {
     case K_UTILITY:   return utility(s, v);
     case K_PERF:      return on_off(v, &s->perf);
     case K_HOST_CLOCK: return host_clock(s, v);
+    case K_PORT_B:    return on_off(v, &s->port_b);
+    case K_PORT_B_PINS: return pb_pins(s, v);
     }
     return SET_UNKNOWN;
 }
@@ -277,12 +314,17 @@ static bool key_equal(unsigned k, const settings_t *a, const settings_t *b) {
     case K_UTILITY:    return same_name(a->utility, b->utility);
     case K_PERF:       return a->perf == b->perf;
     case K_HOST_CLOCK: return a->host_mhz == b->host_mhz;
+    case K_PORT_B:     return a->port_b == b->port_b;
+    case K_PORT_B_PINS: return memcmp(a->pb_gpio, b->pb_gpio, sizeof a->pb_gpio) == 0;
     }
     return true;
 }
 
+/* Room for any value_of that is not a path: eight `gpNN`s and spaces. */
+#define VALUE_MAX 40u
+
 /* The value a save writes for k. */
-static const char *value_of(unsigned k, const settings_t *s, char num[4]) {
+static const char *value_of(unsigned k, const settings_t *s, char num[VALUE_MAX]) {
     switch (k) {
     case K_SCREEN:     return s->mono ? "mono" : "colour";
     case K_BORDER:     return s->border ? "on" : "off";
@@ -309,6 +351,21 @@ static const char *value_of(unsigned k, const settings_t *s, char num[4]) {
     case K_UTILITY:    return s->utility[0] ? s->utility : "none";
     case K_PERF:       return s->perf ? "on" : "off";
     case K_HOST_CLOCK: return s->host_mhz == SETTINGS_HOST_MHZ_FAST ? "300" : "150";
+    case K_PORT_B:     return s->port_b ? "on" : "off";
+    case K_PORT_B_PINS: {
+        char *p = num;
+        for (unsigned i = 0; i < SETTINGS_PB_BITS; i++) {
+            uint8_t gp = s->pb_gpio[i];
+            if (i) *p++ = ' ';
+            if (gp == SETTINGS_PB_NC) { *p++ = 'n'; *p++ = 'c'; continue; }
+            *p++ = 'g';
+            *p++ = 'p';
+            if (gp >= 10u) *p++ = (char)('0' + gp / 10u);
+            *p++ = (char)('0' + gp % 10u);
+        }
+        *p = 0;
+        return num;
+    }
     }
     return "";
 }
@@ -396,7 +453,7 @@ settings_status_t settings_rewrite(const char *text, size_t len, const settings_
         bool applies = st == SET_OK && key < K_COUNT;
 
         if (applies && written(key, s) && !key_equal(key, &line_says, s)) {
-            char num[4];
+            char num[VALUE_MAX];
             emit_changed(&o, text + at, n, value_of(key, s, num));
         } else {
             emit(&o, text + at, n);
@@ -409,7 +466,7 @@ settings_status_t settings_rewrite(const char *text, size_t len, const settings_
     for (unsigned k = 0; k < K_COUNT; k++) {
         if (!written(k, s) || (present & (1u << k)) || key_equal(k, &def, s)) continue;
         if (o.n && buf[o.n - 1] != '\n') emit_str(&o, eol);
-        char num[4];
+        char num[VALUE_MAX];
         emit_str(&o, k_names[k]);
         emit_str(&o, " = ");
         emit_str(&o, value_of(k, s, num));

@@ -33,6 +33,24 @@
 #define SETTINGS_HOST_MHZ      150u
 #define SETTINGS_HOST_MHZ_FAST 300u
 
+/* VIA port B on the Pico's GPIOs (§7.4): a GPIO for each of PB0-PB7, or
+ * SETTINGS_PB_NC for none. Only the pins the PicoCalc leaves free may be
+ * given (hardware-notes.md §1.1): GP0-GP5, GP8, GP9, GP20, GP21, GP28.
+ * GP4 and GP5 are UART1's until port B takes them. */
+#define SETTINGS_PB_BITS   8u
+#define SETTINGS_PB_NC     0xFFu
+#define SETTINGS_PB_GPIOS  ((1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | \
+                            (1u << 5) | (1u << 8) | (1u << 9) | (1u << 20) | (1u << 21) | \
+                            (1u << 28))
+
+/* Whether port B is on the GPIOs by default (§7.4). The build says: off in
+ * the development build, whose log and keys are on UART1's GP4 and GP5,
+ * which the default pins include; on in the build that ships, which has
+ * no UART. The host build is the first kind. */
+#ifndef PICO_ATOM_PORT_B_DEFAULT
+#define PICO_ATOM_PORT_B_DEFAULT 0
+#endif
+
 typedef struct {
     /* The guest (§7.2): RAM at #4000-#7FFF, AtomDOS, the clock (§12.1). */
     atom_config_t machine;
@@ -58,6 +76,11 @@ typedef struct {
      * is brought up, and nowhere else. A 4 MHz guest needs the fast one;
      * the port runs it at 2 otherwise. */
     unsigned host_mhz;
+
+    /* VIA port B on the GPIOs, PICO_ATOM_PORT_B_DEFAULT by default (§7.4). pb_gpio[i] is PBi's GPIO, or SETTINGS_PB_NC; no
+     * GPIO is given twice. */
+    bool     port_b;
+    uint8_t  pb_gpio[SETTINGS_PB_BITS];
 
     /* A layout's name, uppercase; "" is the standard map (§10.5). */
     char     keys[ATOM_KEYMAP_NAME_LEN + 1];
@@ -91,8 +114,8 @@ const char *settings_status_str(settings_status_t st);
 
 /* The menu's settings written into the file's text (§11.6): screen,
  * border, background, status, perf, backlight, volume, keys, tape,
- * drive0 and drive1, and the Machine page's upper_ram, dos, clock,
- * utility and host_clock (§13.1). turbo is the file's alone. A backlight of 0 is left
+ * drive0 and drive1, via_port_b and via_port_b_pins (§7.4), and the
+ * Machine page's upper_ram, dos, clock, utility and host_clock (§13.1). turbo is the file's alone. A backlight of 0 is left
  * as the file has it. The text is edited, not regenerated:
  *
  *   - a key the file already gives keeps its line, its place, its

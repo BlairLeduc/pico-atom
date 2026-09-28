@@ -874,18 +874,57 @@ written for the chip meets a register that does not work:
 | T2 | One-shot on Φ2, or counting falling edges on PB6 (ACR bit 5), flagging when the count reaches zero. |
 | Shift register | All eight modes: in or out, clocked by T2 (half-cycles of T2's low latch + 2), by Φ2 (a bit every two cycles), or by an external clock on CB1. Eight bits then flag SR, except free-running out, which recirculates without a flag. |
 
-On an Atom nothing is wired to the control lines or to port B, the user
-port, and no printer is emulated. The outside world is therefore a set of calls
+In the emulator nothing is wired to the control lines, no printer is
+emulated, and port B, the user port, reaches the outside only when it is put
+on the GPIOs (below). The outside world is therefore a set of calls
 (`via6522_set_ca1()` and its kind, and `via6522_set_pb()` for the PB6 count)
-and fields to read. `test_via6522` drives the part through them, and a later
-user-port device would use the same calls. Timing is to the instruction, like
-the rest of the machine. The new state is in the snapshot (§11.5). A
+and fields to read. `test_via6522` drives the part through them. Timing is to
+the instruction, like the rest of the machine. The new state is in the snapshot (§11.5). A
 free-running shift under Φ2 is the only mode that has to be ticked
 cycle-exactly, and even then it is 16 steps a byte, out of line from the timers'
 per-instruction path. That path counts T1 and a single countdown to T2's next
 underflow or the shift clock's next edge, and nothing else (§6.3). So T2's
 count and the shift clock lag between those events; a read of T2 or SR brings
 them up to date, and so does the snapshot.
+
+**Port B can go out to the PicoCalc's GPIOs** (`portb.c`, the Input/Output
+page's *VIA port B*, since 2026-09-28). On a real Atom, port B was the user
+port that owners wired up for their own projects: lights, relays, switches,
+sensors. Each of PB0–PB7 may be given one of the pins the PicoCalc leaves free
+(hardware notes §1.1): GP0–GP5, GP8, GP9, GP20, GP21 or GP28, or none, and no
+pin twice. The defaults are PB0–PB5 on GP2, GP3, GP4, GP5, GP21 and GP28, the
+side header's pins, with PB6 and PB7 not connected.
+
+**Whether it is on by default depends on the build** (§14). The build that
+ships, `-DPICO_ATOM_UART=OFF`, has no UART at all, so GP4 and GP5 are free and
+port B is on. The development build, the default, keeps UART1 on GP4 and GP5
+for the log and for keys typed over it (hardware notes §2.7), and port B is off.
+If it is turned on there and holds a UART pin, the log does not reach the Debug
+Probe. While it holds GP5 the UART's receiver is off, so what arrives on the
+pin is not typed at the guest.
+
+The pins behave as the 6522's do. A bit DDRB makes an output is driven high
+or low from ORB, push-pull, and PB7 follows T1 when ACR bit 7 gives it the
+pin. An input has the pad's pull-up, so with nothing attached it reads 1, as
+the chip's port B does. The levels are 3.3 V, not the Atom's 5 V, at the
+pad's default drive strength. A circuit built for the Atom's user port may
+need a level shifter or a buffer.
+
+The core knows nothing of GPIOs. `atom_t.port_b` is a hook, NULL unless the
+port installs one. The bus calls it before a read of ORB, to put the pins'
+levels on the chip through `via6522_set_pb()`. It calls it again after a write
+to ORB, DDRB or ACR, to drive what `via6522_pb_out()` now says. Core 0 also
+calls it once a field, for T1's PB7, which moves without a register write. The
+pins are sampled only when ORB is read. So PB6 counts T2 pulses only at the
+edges those reads catch, and ACR's port B latch takes the level of the last
+read, not the level at CB1's edge; CB1 is not wired to a pin at all.
+`test_bus` holds the hook to those registers and no others.
+
+Verified on a Plus 2 W on 2026-09-28, in both builds:
+- The *VIA port B* page behaves as intended, with the UART warning only in the
+  development build.
+- An LED on a port B output was switched on and off from BASIC.
+- GP2 grounded read as PB0 low in BASIC.
 
 ---
 
@@ -2147,6 +2186,8 @@ still hold a `#`:
 | `utility` | a file name in `/atom/roms/` for the socket at `#A000`, or `none` (§13.1); a path is refused | `utility.rom` |
 | `perf` | `on`, `off`: the perf line (§13.1) | `off` |
 | `host_clock` | `150`, `300`: the Pico's `clk_sys` in MHz, read at power-on before anything else (§3.2) | `150` |
+| `via_port_b` | `on`, `off`: VIA port B on the GPIOs (§7.4) | `on` in the build that ships, `off` in the development build |
+| `via_port_b_pins` | eight pins, PB0 first, each `gpN` or `nc`, no pin twice (§7.4) | `gp2 gp3 gp4 gp5 gp21 gp28 nc nc` |
 
 A bare file name is looked for in `/atom/tapes/` or `/atom/discs/`, and a path
 from the root is taken as it stands. The VIA, the tape trap and the deck's cues
@@ -2434,7 +2475,7 @@ settings file (§11.7), and the menu's status row names the file's first problem
 | Disc | attach/detach drive 0/1 (phase 3) |
 | Snapshot | save, load, delete |
 | Machine | RAM below the screen (16 or 32 KiB), guest clock (1 or 2 MHz), AtomDOS, the utility ROM; applied by a restart (§13.1) |
-| Input/Output | colour or mono, border, background, status line, perf line (§13.1), backlight, volume, and the game keymap in force: standard, a built-in layout, or one from the card (§10.5) |
+| Input/Output | colour or mono, border, background, status line, perf line (§13.1), backlight, volume, the game keymap in force: standard, a built-in layout, or one from the card (§10.5), and *VIA port B...*, a page that turns port B on the GPIOs on and off and gives each bit its pin (§7.4) |
 | About | firmware, board, ROM identification by SHA-1, the settings file's state (§13.1) |
 
 Reset and *Save settings* are on the main page. On 2026-09-27 the
@@ -2760,6 +2801,15 @@ written.
 test binary that compiles `src/core/` with the system compiler and no SDK. The
 core building under `-Wall -Wextra -Werror` on both toolchains is the mechanism
 that keeps SDK dependencies from leaking downwards.
+
+The UF2 comes in two builds, since 2026-09-28. The default is the
+development build. It puts stdio on UART1 at GP4 and GP5, with the boot banner,
+the heartbeat and every log line, and types what arrives there at the guest. The
+tools that drive the board need it (hardware notes §2.7). `-DPICO_ATOM_UART=OFF`
+is the build that ships. It has no UART: nothing is logged or read there, and
+GP4 and GP5 are free for VIA port B, which is on by default (§7.4). A build
+switch sets that default, `PICO_ATOM_PORT_B_DEFAULT`, so `settings_default()`
+and the settings file's rewrite (§11.6) agree on it.
 
 `src/core/` uses no dynamic allocation. All state is in `atom_t` and in
 statically sized buffers from `config.h`, which makes the SRAM budget in §5 a

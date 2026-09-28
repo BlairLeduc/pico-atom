@@ -231,6 +231,13 @@ full battery has finished charging with USB still in (hardware-notes.md §6).
 temperature's ADC input is chosen from `SYSINFO_PACKAGE_SEL` at run time,
 not from the SDK's `ADC_TEMPERATURE_CHANNEL_NUM` (hardware-notes.md §8.1).
 
+**VIA port B on the GPIOs** (design.md §7.4, `portb.c`): the user port on
+the free pins, set up from the Input/Output page. It is push-pull like the
+6522, with pulled-up inputs. It is off by default in the development build and
+on in the build that ships, `-DPICO_ATOM_UART=OFF`, which has no UART. On a
+Plus 2 W on 2026-09-28, in both builds, an LED was switched from BASIC, and
+GP2 grounded read as PB0 low.
+
 ## The two documents
 
 | File | Authority on |
@@ -262,7 +269,16 @@ cmake -S . -B build/pico -DPICO_BOARD=pico2 -DCMAKE_BUILD_TYPE=Release
 cmake --build build/pico -j          # -> build/pico/pico-atom.uf2
 
 tools/build.sh                       # the same, finding the SDK and toolchain itself
+tools/build.sh -DPICO_ATOM_UART=OFF build/pico-release   # the build that ships
 ```
+
+**Two firmware builds.** The default is the development build: stdio, the
+log and typed keys on UART1 (GP4/GP5), which `uart-log.sh`,
+`uart-type.sh`, the perf runs and the soak all need.
+`-DPICO_ATOM_UART=OFF` is the build that ships. It has no UART: `log_printf`
+discards, stdio has no driver, UART keys are compiled out, and VIA port B is on
+the GPIOs by default (`PICO_ATOM_PORT_B_DEFAULT`, design.md §7.4). It says
+nothing on the UART, so check it on the panel, or read its counters over SWD.
 
 On hardware, with the Debug Probe's SWD and UART both connected:
 
@@ -378,6 +394,7 @@ read them with Python if a `grep` comes back empty.
 | `src/port/snapio.*` | snapshot slots in `/atom/snaps/`: temp file, publish, recovery on load |
 | `src/port/settingsio.*` | reads `/atom/pico-atom.cfg` at boot; the first problem for the menu's status row; *Save settings*, through `/atom/pico-atom.new` |
 | `src/port/keymapio.*` | the layouts the menu offers: built-in, then `/atom/keymaps/`; the first parse error for the status row |
+| `src/port/portb.*` | VIA port B, the user port, on the free GPIOs (design.md §7.4): push-pull outputs and pulled-up inputs, as the 6522's, the `atom_t.port_b` hook on core 0, and GP4/GP5 taken from UART1 and handed back |
 | `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer; the Machine and About pages (§13.1) |
 | `src/port/main.c` | core 0's field loop, turbo while a tape plays, core 1's bring-up and live present; `machine_power_on()`, for boot and the Machine page's restart; Pause; the perf line's counters; the park/handoff that gives core 1 the machine for tape calls, the menu and Pause; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot`, `test_tape` and `test_snapshot` run the real MOS when `roms/` holds the images |
