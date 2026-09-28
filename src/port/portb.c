@@ -16,10 +16,13 @@ static struct {
 /* The development build's UART1; the build that ships has none, and its
  * GP4 and GP5 are pins like the rest. */
 #if PICO_ATOM_UART
-#define UART_PINS ((1u << PICO_DEFAULT_UART_TX_PIN) | (1u << PICO_DEFAULT_UART_RX_PIN))
+#define UART_TX (1u << PICO_DEFAULT_UART_TX_PIN)
+#define UART_RX (1u << PICO_DEFAULT_UART_RX_PIN)
 #else
-#define UART_PINS 0u
+#define UART_TX 0u
+#define UART_RX 0u
 #endif
+#define UART_PINS (UART_TX | UART_RX)
 
 /* Core 0's. What the chip drives goes out, the level first so that a pin
  * turning to an output does not glitch; the rest are inputs. */
@@ -81,7 +84,7 @@ void portb_set(atom_t *m, bool on, const uint8_t pin[SETTINGS_PB_BITS]) {
     for (unsigned gp = 0; gp < 32u; gp++)
         if (s.held & (1u << gp)) claim(gp);
 #if PICO_ATOM_UART
-    if (s.held & (1u << PICO_DEFAULT_UART_RX_PIN))
+    if (s.held & UART_RX)
         hw_clear_bits(&uart_get_hw(uart_default)->cr, UART_UARTCR_RXE_BITS);
     else
         hw_set_bits(&uart_get_hw(uart_default)->cr, UART_UARTCR_RXE_BITS);
@@ -94,6 +97,10 @@ void portb_attach(atom_t *m) {
     if (m->port_b) pins(m, true);
 }
 
-bool portb_has_uart(void) {
-    return (s.held & UART_PINS) != 0;
+bool portb_has_uart_tx(void) {
+    return (s.held & UART_TX) != 0;
+}
+
+bool portb_has_uart_rx(void) {
+    return (s.held & UART_RX) != 0;
 }

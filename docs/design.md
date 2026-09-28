@@ -899,9 +899,9 @@ side header's pins, with PB6 and PB7 not connected.
 ships, `-DPICO_ATOM_UART=OFF`, has no UART at all, so GP4 and GP5 are free and
 port B is on. The development build, the default, keeps UART1 on GP4 and GP5
 for the log and for keys typed over it (hardware notes §2.7), and port B is off.
-If it is turned on there and holds a UART pin, the log does not reach the Debug
-Probe. While it holds GP5 the UART's receiver is off, so what arrives on the
-pin is not typed at the guest.
+If it is turned on there and holds GP4, the log does not reach the Debug Probe.
+While it holds GP5 the UART's receiver is off, so what arrives on the pin is not
+typed at the guest. The menu's status row names whichever is lost.
 
 The pins behave as the 6522's do. A bit DDRB makes an output is driven high
 or low from ORB, push-pull, and PB7 follows T1 when ACR bit 7 gives it the

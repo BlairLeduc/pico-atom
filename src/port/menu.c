@@ -851,10 +851,15 @@ static void key_io(uint8_t c) {
 }
 
 /* Port B's pins as the page has them, applied at once (§7.4); the
- * status row says when the UART has lost its pins to them. */
+ * status row says what the UART has lost to them: the log with TX, the
+ * typed keys with RX. */
 static void apply_portb(void) {
     portb_set(s.m, s.set->port_b, s.set->pb_gpio);
-    say(portb_has_uart() ? " GP4/GP5: NO UART LOG OR KEYS" : "", "");
+    bool tx = portb_has_uart_tx(), rx = portb_has_uart_rx();
+    say(tx && rx ? " GP4/GP5: NO UART LOG OR KEYS"
+        : tx     ? " GP4: NO UART LOG"
+        : rx     ? " GP5: NO UART KEYS"
+                 : "", "");
 }
 
 /* The next GPIO for PB`bit` in direction `dir`: NC, then the free pins

@@ -35,7 +35,9 @@ void portb_set(atom_t *m, bool on, const uint8_t pins[SETTINGS_PB_BITS]);
  * what the new machine's chip drives. */
 void portb_attach(atom_t *m);
 
-/* Whether port B holds the UART's TX or RX pin. */
-bool portb_has_uart(void);
+/* Whether port B holds the UART's TX pin, which the log goes out on,
+ * or its RX pin, which the typed keys come in on. */
+bool portb_has_uart_tx(void);
+bool portb_has_uart_rx(void);
 
 #endif /* PICO_ATOM_PORTB_H */

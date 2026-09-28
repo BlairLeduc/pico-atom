@@ -61,7 +61,7 @@ typedef struct atom_s {
      * `write` false, to put the pins' levels on the chip; and after a
      * write to ORB, DDRB or ACR, with `write` true, to drive what the
      * chip now drives (via6522_pb_out). Not machine state: atom_init
-     * clears it, and snapshots leave it. */
+     * clears it, and snapshots and atom_copy leave it. */
     void (*port_b)(struct atom_s *m, bool write);
 
     /* No mc6847_t here. The guest's video state is VRAM plus the five
@@ -156,7 +156,8 @@ uint32_t atom_run_field(atom_t *m);
 
 /* Copy a whole machine. The page table points into ram[], so a plain
  * struct assignment leaves the copy reading and writing the original's
- * memory; this moves the pointers across with the bytes. */
+ * memory; this moves the pointers across with the bytes. The copy
+ * keeps its own port_b hook: pins belong to one machine, not its state. */
 void atom_copy(atom_t *dst, const atom_t *src);
 
 /* Load a ROM image at a guest address, marking its pages PAGE_ROM. */
