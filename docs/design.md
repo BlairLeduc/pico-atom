@@ -1516,7 +1516,8 @@ printable character, which names the key it is on, shifted or not. A target is
 an Atom key by its keycap name (`BREAK` excepted: it is the reset line, and not
 a game's to have) or `CTRL`, `SHIFT` or `REPT`.
 
-**In the menu** the item is `KEYS < STANDARD >`, and left/right cycles through
+**In the menu** the item is `KEYS < STANDARD >` on the Input/Output page
+(§13), and left/right cycles through
 the built-in layouts, then the card's. The choice is part of the settings, and
 M11's *Save settings* writes it to the settings file (§11.6). It is not part of a snapshot (§11.5): a snapshot
 is guest state, and a layout is a fact about the host's keyboard.
@@ -2430,14 +2431,15 @@ settings file (§11.7), and the menu's status row names the file's first problem
 | Menu | Does |
 |---|---|
 | Tape | attach/detach an image, rewind, play, record, position |
-| Keys | the game keymap in force: standard, a built-in layout, or one from the card (§10.5) |
 | Disc | attach/detach drive 0/1 (phase 3) |
 | Snapshot | save, load, delete |
 | Machine | RAM below the screen (16 or 32 KiB), guest clock (1 or 2 MHz), AtomDOS, the utility ROM; applied by a restart (§13.1) |
-| Display | colour or mono, border, background, status line, perf line (§13.1), backlight |
+| Input/Output | colour or mono, border, background, status line, perf line (§13.1), backlight, volume, and the game keymap in force: standard, a built-in layout, or one from the card (§10.5) |
 | About | firmware, board, ROM identification by SHA-1, the settings file's state (§13.1) |
 
-Volume, Reset and *Save settings* are on the main page. Pause is a key,
+Reset and *Save settings* are on the main page. On 2026-09-27 the
+Display page became Input/Output and took Volume and Keys from the main
+page, and Resume went: `Esc` does the same. Pause is a key,
 `Alt`+`P`, and not a menu item (§13.1).
 
 Of that table, as built: Tape (without a position control, since recording
