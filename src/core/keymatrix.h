@@ -31,9 +31,15 @@
 #define KM_PAUSE  0x80u   /* no cell: pause the guest (§13.1)           */
 #define KM_NOCELL (KM_REPT | KM_BREAK | KM_MENU | KM_LINE | KM_PAUSE)
 
+/* The menu's page of keys, after the main page's first five items. */
+#define KM_PAGE_HELP 6u
+
 typedef struct {
     uint8_t code;         /* host key code, as translated by the MCU */
-    uint8_t row, col;     /* Atom matrix cell; ignored under KM_NOCELL */
+    uint8_t row, col;     /* Atom matrix cell; ignored under KM_NOCELL,
+                           * except that KM_MENU's row is the menu page
+                           * it opens: 0 the main page, n the nth item,
+                           * or KM_PAGE_HELP */
     uint8_t flags;
 } keymap_t;
 
@@ -96,6 +102,10 @@ bool keymap_atom_target_named(const char *name, keymap_t *out);
 #define PICOCALC_KEY_SHIFT_R  0xA3u
 #define PICOCALC_KEY_CTRL     0xA5u
 
+/* F1-F5 unshifted; Shift makes them F6-F10, 0x86-0x90 (keyboard.h). */
+#define PICOCALC_KEY_F1       0x81u
+#define PICOCALC_KEY_F10      0x90u
+
 #define KEY_EV_PRESSED   1u
 #define KEY_EV_HELD      2u
 #define KEY_EV_RELEASED  3u
@@ -140,6 +150,7 @@ typedef struct {
 
     /* Set on a press, cleared by whoever acts on it. */
     bool menu_request;
+    uint8_t menu_page;    /* with menu_request: the entry's row */
     bool pause_request;
 } keymatrix_t;
 

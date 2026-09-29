@@ -232,11 +232,18 @@ temperature's ADC input is chosen from `SYSINFO_PACKAGE_SEL` at run time,
 not from the SDK's `ADC_TEMPERATURE_CHANNEL_NUM` (hardware-notes.md §8.1).
 
 **VIA port B on the GPIOs** (design.md §7.4, `portb.c`): the user port on
-the free pins, set up from the Input/Output page. It is push-pull like the
+the free pins, set up from the Setup page. It is push-pull like the
 6522, with pulled-up inputs. It is off by default in the development build and
 on in the build that ships, `-DPICO_ATOM_UART=OFF`, which has no UART. On a
 Plus 2 W on 2026-09-28, in both builds, an LED was switched from BASIC, and
 GP2 grounded read as PB0 low.
+
+**Menu keys** (design.md §13): `F1`–`F5` open Tapes, Discs, Snapshots,
+Setup (was Input/Output) and Machine straight from the Atom or Pause, and
+closing the page goes back to the Atom; `F10` and `Alt`+`H` open a page of
+the keys. They are `KM_MENU` entries whose row is the page (`KM_PAGE_HELP`
+for the keys). Inside the menu they do nothing. The About page shows the
+die's temperature on the board line. Verified on a Plus 2 W on 2026-09-28.
 
 ## The two documents
 

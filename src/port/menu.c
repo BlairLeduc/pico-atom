@@ -49,8 +49,10 @@
 #define BKL_MAX   240u
 
 enum {
-    I_DISCS, I_TAPES, I_SNAPS, I_IO, I_MACHINE, I_RESET, I_SAVE, I_ABOUT, I_COUNT
+    I_TAPES, I_DISCS, I_SNAPS, I_IO, I_MACHINE, I_RESET, I_SAVE, I_ABOUT, I_COUNT
 };
+
+_Static_assert(I_MACHINE + 1 == MENU_FKEYS, "F1-F5 are the first five items");
 
 /* Eight items fill rows 2-9, a blank row under the title, then after
  * another blank row the deck on row 11 and the drives on row 12, above
@@ -60,7 +62,7 @@ enum {
 /* The snapshot page: left and right choose the slot on any row (§11.5). */
 enum { S_SLOT, S_SAVE, S_LOAD, S_DELETE, S_COUNT };
 
-/* The Input/Output page: the display (§8.7), then the backlight, the
+/* The Setup page: the display (§8.7), then the backlight, the
  * volume, the keymap (§10.5) and VIA port B's page (§7.4). */
 enum { D_COLOUR, D_BORDER, D_BACKGROUND, D_STATUS, D_PERF, D_BACKLIGHT, D_VOLUME, D_KEYS,
        D_PORT_B, D_COUNT };
@@ -93,6 +95,7 @@ static struct {
     unsigned         backlight;
     int              battery;   /* SB_REG_BAT's byte, -1 if unread */
     char             status[TEXT_COLS + 1];
+    bool             direct;    /* opened at a page by F1-F5 */
 
     /* The tape page. */
     bool             tapes;
@@ -103,7 +106,7 @@ static struct {
     bool             snaps;
     int              snap_sel;
 
-    /* The Input/Output page, and port B's under it. */
+    /* The Setup page, and port B's under it. */
     bool             io;
     int              io_sel;
     bool             portb;
@@ -117,9 +120,14 @@ static struct {
     unsigned         st_mhz, st_host;
     unsigned         st_util, n_utils;
 
-    /* The About page, and the southbridge's version, read as it opens. */
+    /* The page of keys (MENU_PAGE_HELP). */
+    bool             help;
+
+    /* The About page, and the southbridge's version, read as it opens;
+     * the die's temperature then, and with the battery after. */
     bool             about;
     int              sb_ver;
+    int              temp_c;
 
     /* The disc page: row 0 empties the drive, the images follow. */
     bool             discs;
@@ -155,7 +163,7 @@ static void draw_main(void) {
         case I_TAPES:  snprintf(line, sizeof line, " TAPES..."); break;
         case I_DISCS:  snprintf(line, sizeof line, " DISCS..."); break;
         case I_RESET:  snprintf(line, sizeof line, " RESET (BREAK)"); break;
-        case I_IO:     snprintf(line, sizeof line, " INPUT/OUTPUT..."); break;
+        case I_IO:     snprintf(line, sizeof line, " SETUP..."); break;
         case I_MACHINE: snprintf(line, sizeof line, " MACHINE..."); break;
         case I_SAVE:   snprintf(line, sizeof line, " SAVE SETTINGS"); break;
         case I_ABOUT:  snprintf(line, sizeof line, " ABOUT..."); break;
@@ -421,8 +429,10 @@ static void draw_about(void) {
     upper(name, sizeof name, PICO_ATOM_VERSION, 21);
     snprintf(line, sizeof line, " PICO-ATOM %.21s", name);
     textpage_line(s.vram, 2, line, false);
-    upper(name, sizeof name, b->sdk_board, 25);
-    snprintf(line, sizeof line, " BOARD %.25s", name);
+    /* The die's temperature, whole degrees and uncalibrated
+     * (hardware-notes.md §8.1), at the row's right end. */
+    upper(name, sizeof name, b->sdk_board, 21);
+    snprintf(line, sizeof line, " BOARD %-21.21s%3dC", name, s.temp_c);
     textpage_line(s.vram, 3, line, false);
     upper(name, sizeof name, b->sdk_platform, 8);
     char sb[4] = "??";
@@ -455,6 +465,29 @@ static void draw_about(void) {
     textpage_line(s.vram, 8 + ROM_SLOT_COUNT, line, false);
 }
 
+/* The keys the emulator takes for itself (§10.3, §13), one a row. */
+static void draw_help(void) {
+    static const char *const keys[][2] = {
+        { "F1",         "TAPES" },
+        { "F2",         "DISCS" },
+        { "F3",         "SNAPSHOTS" },
+        { "F4",         "SETUP" },
+        { "F5",         "MACHINE" },
+        { "F10, ALT+H", "THESE KEYS" },
+        { "ALT+M",      "MENU" },
+        { "ALT+P",      "PAUSE" },
+        { "ALT+K",      "BREAK" },
+        { "ALT+C",      "COPY" },
+        { "ALT+L",      "LOCK" },
+        { "TAB",        "REPT" },
+    };
+    char line[TEXT_COLS + 1];
+    for (unsigned i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        snprintf(line, sizeof line, " %-11s %s", keys[i][0], keys[i][1]);
+        textpage_line(s.vram, 2 + (int)i, line, false);
+    }
+}
+
 /* The title row's right end: the charge, and CHG in place of BAT while
  * it charges (bit 7, hardware-notes.md §6). Nothing if it could not be
  * read. */
@@ -479,9 +512,10 @@ static void draw(void) {
     textpage_line(s.vram, 0, s.tapes ? " PICO-ATOM: TAPES" : s.discs ? " PICO-ATOM: DISCS"
                              : s.snaps ? " PICO-ATOM: SNAPSHOTS"
                              : s.portb ? " PICO-ATOM: VIA PORT B"
-                             : s.io ? " PICO-ATOM: INPUT/OUTPUT"
+                             : s.io ? " PICO-ATOM: SETUP"
                              : s.machine ? " PICO-ATOM: MACHINE"
-                             : s.about ? " PICO-ATOM: ABOUT" : " PICO-ATOM", true);
+                             : s.about ? " PICO-ATOM: ABOUT"
+                             : s.help ? " PICO-ATOM: KEYS" : " PICO-ATOM", true);
     draw_battery();
     if (s.tapes) draw_tapes();
     else if (s.discs) draw_discs();
@@ -490,6 +524,7 @@ static void draw(void) {
     else if (s.io) draw_io();
     else if (s.machine) draw_machine();
     else if (s.about) draw_about();
+    else if (s.help) draw_help();
     else draw_main();
     textpage_line(s.vram, 14, s.status, false);
     textpage_line(s.vram, 15, s.tapes ? " ENTER INSERTS  ESC BACK"
@@ -498,6 +533,7 @@ static void draw(void) {
                               : s.portb || s.io ? " < > CHANGES  ESC BACK"
                               : s.machine ? " < > STAGES  ENTER  ESC BACK"
                               : s.about ? " ESC BACK"
+                              : s.help ? " ESC RESUMES"
                                         : " ARROWS  ENTER  ESC RESUMES", true);
     display_present(s.vram, 0, NULL);
 }
@@ -659,6 +695,7 @@ static void open_about(void) {
     uint8_t r[2];
     s.about = true;
     s.sb_ver = sb_read(SB_REG_VER, r) == SB_OK ? r[1] : -1;
+    s.temp_c = board_temp_c();
     s.status[0] = 0;
 }
 
@@ -750,24 +787,32 @@ static void key_about(uint8_t c) {
     if (c == PC_ESC || c == PC_ENTER) s.about = false;
 }
 
+static void key_help(uint8_t c) {
+    if (c == PC_ESC || c == PC_ENTER) s.help = false;
+}
+
 /* ---- keys ----------------------------------------------------------------- */
+
+static void open_item(void) {
+    s.status[0] = 0;
+    switch (s.item) {
+    case I_SNAPS:  s.snaps = true; s.snap_sel = S_SAVE; break;
+    case I_TAPES:  open_tapes(); break;
+    case I_DISCS:  open_discs(); break;
+    case I_IO:     s.io = true; s.io_sel = D_COLOUR; break;
+    case I_MACHINE: open_machine(); break;
+    case I_ABOUT:  open_about(); break;
+    case I_RESET:  s.m->cpu.reset_pending = true; s.done = true; break;
+    case I_SAVE:   save_settings(); break;
+    }
+}
 
 static void key_main(uint8_t c) {
     switch (c) {
     case PC_UP:   s.item = (s.item + I_COUNT - 1) % I_COUNT; break;
     case PC_DOWN: s.item = (s.item + 1) % I_COUNT; break;
     case PC_ENTER:
-        s.status[0] = 0;
-        switch (s.item) {
-        case I_SNAPS:  s.snaps = true; s.snap_sel = S_SAVE; break;
-        case I_TAPES:  open_tapes(); break;
-        case I_DISCS:  open_discs(); break;
-        case I_IO:     s.io = true; s.io_sel = D_COLOUR; break;
-        case I_MACHINE: open_machine(); break;
-        case I_ABOUT:  open_about(); break;
-        case I_RESET:  s.m->cpu.reset_pending = true; s.done = true; break;
-        case I_SAVE:   save_settings(); break;
-        }
+        open_item();
         break;
     case PC_ESC:
         s.done = true;
@@ -1043,17 +1088,24 @@ static void keys(void) {
         else if (s.io) key_io(c);
         else if (s.machine) key_machine(c);
         else if (s.about) key_about(c);
+        else if (s.help) key_help(c);
         else key_main(c);
+        /* A page F1-F5 opened goes back to the Atom, not the main page. */
+        if (s.direct && !(s.tapes || s.discs || s.snaps || s.portb || s.io ||
+                          s.machine || s.about || s.help)) {
+            s.done = true;
+            break;
+        }
         draw();
     }
 }
 
-void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram) {
+void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram, unsigned page, bool alt) {
     memset(&s, 0, sizeof s);
     s.m = m;
     s.set = set;
     s.vram = vram;
-    s.alt = true;      /* it was opened with Alt held */
+    s.alt = alt;       /* Alt+M or Alt+H has it held; F1-F5 and F10 do not */
 
     int err = storage_mount();
     s.card = err == 0;
@@ -1075,6 +1127,20 @@ void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram) {
                      (unsigned long)cas->rec.errors);
     }
     if (!s.status[0] && settingsio_error()[0]) say(" %.30s", settingsio_error());
+
+    /* Opened by F1-F5, F10 or Alt+H: that page, keeping what the status
+     * row says, and closing it closes the menu. */
+    if (page == MENU_PAGE_HELP) {
+        s.direct = true;
+        s.help = true;
+    } else if (page >= 1u && page <= MENU_FKEYS) {
+        s.direct = true;
+        char said[sizeof s.status];
+        memcpy(said, s.status, sizeof said);
+        s.item = (int)page - 1;
+        open_item();
+        if (!s.status[0]) memcpy(s.status, said, sizeof said);
+    }
 
     uint8_t r[2] = { 0, 0 };
     s.backlight = sb_read(SB_REG_BKL, r) == SB_OK ? r[1] : 0u;
@@ -1104,7 +1170,13 @@ void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram) {
             keys();
             if (!s.done && last_poll - last_bat >= BAT_POLL_US) {
                 last_bat = last_poll;
-                if (read_battery()) draw();
+                bool changed = read_battery();
+                if (s.about) {
+                    int t = board_temp_c();
+                    changed |= t != s.temp_c;
+                    s.temp_c = t;
+                }
+                if (changed) draw();
             }
         }
         log_pump();

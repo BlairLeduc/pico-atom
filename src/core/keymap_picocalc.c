@@ -183,6 +183,17 @@ const keymap_t keymap_picocalc[] = {
     { 'K', NOCELL,  KM_ALT | KM_BREAK },
     { 'M', NOCELL,  KM_ALT | KM_MENU },
     { 'P', NOCELL,  KM_ALT | KM_PAUSE },
+    { 'H', KM_PAGE_HELP, 0, KM_ALT | KM_MENU },   /* the keys (§13) */
+
+    /* F1-F5 open the menu at a page (§13): the row is the page, the
+     * main page's items in order. The Atom has no function keys, and a
+     * layout cannot name them, so they are the menu's everywhere. */
+    { PICOCALC_KEY_F1 + 0, 1, 0, KM_MENU },
+    { PICOCALC_KEY_F1 + 1, 2, 0, KM_MENU },
+    { PICOCALC_KEY_F1 + 2, 3, 0, KM_MENU },
+    { PICOCALC_KEY_F1 + 3, 4, 0, KM_MENU },
+    { PICOCALC_KEY_F1 + 4, 5, 0, KM_MENU },
+    { PICOCALC_KEY_F10, KM_PAGE_HELP, 0, KM_MENU },
 };
 
 const size_t keymap_picocalc_len = sizeof keymap_picocalc / sizeof keymap_picocalc[0];

@@ -125,7 +125,7 @@ static bool apply_head(keymatrix_t *k) {
     bool from_layout;
     const keymap_t *e = lookup(k, ev.code, &from_layout);
     if (!e) return true;
-    if (e->flags & KM_MENU) k->menu_request = true;
+    if (e->flags & KM_MENU) { k->menu_request = true; k->menu_page = e->row; }
     if (e->flags & KM_PAUSE) k->pause_request = true;
     if (k->n >= ATOM_KEY_HELD_MAX) return true;  /* more keys than fingers */
 
