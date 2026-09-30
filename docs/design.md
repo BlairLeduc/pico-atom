@@ -2623,8 +2623,8 @@ starts the counters it keeps against the guest's clock again.
 
 ```
  PICO-ATOM <GIT DESCRIBE>
- BOARD PIMORONI_PICO_PLUS2_W 23C
- RP2350 <REV>  150 MHZ  SB <VER>
+ BOARD PIMORONI_PICO_PLUS2_W
+ RP2350 REV <REV> 150 MHZ SB <VER>  23C
  MACHINE 32K 1 MHZ DOS VIA
 
  #F000 AKERNEL.ROM  OK  2621F27D
@@ -2641,10 +2641,13 @@ The version is `git describe --always --dirty`, generated into
 runs on every build and which rewrites the header only when the text
 changes. It is not taken at configure time, because a configure-time value
 goes stale on the next commit. The startup banner prints it too. The board
-line is `board_info_t`'s SDK board name, cut to 21 characters, and since
-2026-09-28 the die's temperature at its right end: `board_temp_c()`, whole
-degrees and uncalibrated (hardware-notes.md §8.1), read as the page opens and
-again every 5 s with the battery while it is open. The menu is core 1's, and
+line is `board_info_t`'s SDK board name, cut to 21 characters. The chip
+line is the SDK platform, the chip's revision, `clk_sys` and the
+southbridge's `VER`, and since 2026-09-29 the die's temperature at its right
+end (on the board line from 2026-09-28): `board_temp_c()`, whole degrees and
+uncalibrated (hardware-notes.md §8.1), clamped to three characters so the row
+fits, read as the page opens and again every 5 s with the battery while it is
+open. The menu is core 1's, and
 so is the ADC. The southbridge's `VER` is read when the page
 opens. Each ROM slot shows its file, its state and the first eight hex
 digits of its SHA-1. `OK` means the image §11.1 records, `??` a loaded
