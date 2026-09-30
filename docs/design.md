@@ -2498,6 +2498,8 @@ layout cannot name them, so they are the menu's under any layout (§10.5).
 Verified on a Plus 2 W on 2026-09-28: `F1`–`F5`, `F10` and `Alt`+`H` from the
 Atom, each page going back to the Atom as it closes, the Setup page's new name,
 Tapes above Discs, and the About page's temperature.
+`F10` opening About, and the About and Machine pages' new rows, were verified
+on a Pico 2 W and a Plus 2 W on 2026-09-30.
 
 Of that table, as built: Tape (without a position control, since recording
 only appends), Keys, Disc and Snapshot are there; Display has colour or mono,
