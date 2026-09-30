@@ -78,13 +78,17 @@ typedef struct {
  * from Pause (§13). Inside the menu they do nothing. */
 #define MENU_FKEYS 5
 
-/* Alt+H and F10 open a page of these keys, from the same places. */
-#define MENU_PAGE_HELP KM_PAGE_HELP
+/* Alt+H opens a page of these keys, and F10 the About page, from the
+ * same places. */
+#define MENU_PAGE_HELP  KM_PAGE_HELP
+#define MENU_PAGE_ABOUT KM_PAGE_ABOUT
 _Static_assert(MENU_PAGE_HELP > MENU_FKEYS, "the help page is none of the items'");
+_Static_assert(MENU_PAGE_ABOUT > MENU_FKEYS, "F10 opens About directly, not as an item");
 
 /* Run the menu until it is closed. `vram` is a page core 1 owns. `page`
  * is 0 for the main page, 1-MENU_FKEYS to open with that item's page, as
- * F1-F5 ask, or MENU_PAGE_HELP; closing that page closes the menu. `alt`
+ * F1-F5 ask, MENU_PAGE_HELP or MENU_PAGE_ABOUT; closing that page
+ * closes the menu. `alt`
  * is whether Alt was down when it was asked for, so that Alt+M closes it
  * only as a chord. */
 void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram, unsigned page, bool alt);

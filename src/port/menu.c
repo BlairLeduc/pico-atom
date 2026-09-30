@@ -95,7 +95,7 @@ static struct {
     unsigned         backlight;
     int              battery;   /* SB_REG_BAT's byte, -1 if unread */
     char             status[TEXT_COLS + 1];
-    bool             direct;    /* opened at a page by F1-F5 */
+    bool             direct;    /* opened at a page by F1-F5, F10 or Alt+H */
 
     /* The tape page. */
     bool             tapes;
@@ -395,11 +395,11 @@ static void draw_machine(void) {
         textpage_line(s.vram, 2 + i, line, i == s.machine_sel);
     }
     /* The VIA is shown and cannot be changed (§7.3). */
-    textpage_line(s.vram, 3 + M_COUNT, " A RESTART IS A POWER-ON: THE", false);
-    textpage_line(s.vram, 4 + M_COUNT, " PROGRAM IN MEMORY IS LOST.", false);
+    textpage_line(s.vram, 3 + M_COUNT, " - PROGRAM IN MEMORY IS LOST ON", false);
+    textpage_line(s.vram, 4 + M_COUNT, "   RESTART.", false);
     /* §3.2: past the RP2350's rating, and what 4 MHz needs. */
-    textpage_line(s.vram, 5 + M_COUNT, " 300 MHZ IS AN OVERCLOCK, AND", false);
-    textpage_line(s.vram, 6 + M_COUNT, " 4 MHZ NEEDS IT.", false);
+    textpage_line(s.vram, 5 + M_COUNT, " - 4 MHZ REQUIRES OVERCLOCKING", false);
+    textpage_line(s.vram, 6 + M_COUNT, "   THE PICO'S CLOCK TO 300 MHZ.", false);
 }
 
 /* First eight hex digits of a digest. */
@@ -432,13 +432,15 @@ static void draw_about(void) {
     /* The die's temperature, whole degrees and uncalibrated
      * (hardware-notes.md §8.1), at the row's right end. */
     upper(name, sizeof name, b->sdk_board, 21);
-    snprintf(line, sizeof line, " BOARD %-21.21s%3dC", name, s.temp_c);
+    snprintf(line, sizeof line, " BOARD %-21.21s", name);
     textpage_line(s.vram, 3, line, false);
     upper(name, sizeof name, b->sdk_platform, 8);
     char sb[4] = "??";
     if (s.sb_ver >= 0) snprintf(sb, sizeof sb, "%02X", (unsigned)(s.sb_ver & 0xFF));
-    snprintf(line, sizeof line, " %.8s REV %u  %u MHZ  SB %.2s", name, b->chip_version & 0xFu,
-             (unsigned)((b->clk_sys_hz / 1000000u) % 1000u), sb);
+    /* Clamped so the row is at most TEXT_COLS whatever the sensor says. */
+    int t = s.temp_c < -99 ? -99 : s.temp_c > 999 ? 999 : s.temp_c;
+    snprintf(line, sizeof line, " %-6.6s REV %X %3u MHZ SB %2.2s %3dC", name, b->chip_version & 0xFu,
+             (unsigned)((b->clk_sys_hz / 1000000u) % 1000u), sb, t);
     textpage_line(s.vram, 4, line, false);
     snprintf(line, sizeof line, " MACHINE %s %u MHZ%s%s", c->upper_ram ? "32K" : "16K",
              atom_clock_mhz(c), c->atomdos ? " DOS" : "", c->via_fitted ? " VIA" : "");
@@ -473,7 +475,7 @@ static void draw_help(void) {
         { "F3",         "SNAPSHOTS" },
         { "F4",         "SETUP" },
         { "F5",         "MACHINE" },
-        { "F10, ALT+H", "THESE KEYS" },
+        { "F10",        "ABOUT" },
         { "ALT+M",      "MENU" },
         { "ALT+P",      "PAUSE" },
         { "ALT+K",      "BREAK" },
@@ -1133,6 +1135,9 @@ void menu_run(atom_t *m, menu_settings_t *set, uint8_t *vram, unsigned page, boo
     if (page == MENU_PAGE_HELP) {
         s.direct = true;
         s.help = true;
+    } else if (page == MENU_PAGE_ABOUT) {
+        s.direct = true;
+        open_about();
     } else if (page >= 1u && page <= MENU_FKEYS) {
         s.direct = true;
         char said[sizeof s.status];

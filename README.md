@@ -117,7 +117,8 @@ The emulator boots straight to the Atom's `>` prompt.
 | `BREAK` | `Alt`+`K` |
 | the emulator's menu | `Alt`+`M` |
 | one menu page, then back to the Atom | `F1` Tapes, `F2` Discs, `F3` Snapshots, `F4` Setup, `F5` Machine |
-| these keys, on the panel | `F10` or `Alt`+`H` |
+| these keys, on the panel | `Alt`+`H` |
+| the About page | `F10` |
 | pause | `Alt`+`P` |
 
 `|`, `{`, `}`, `` ` `` and `~` are the Atom's shifted `\`, `[`, `]`, `@` and

@@ -2487,9 +2487,10 @@ Tapes, Discs, Snapshots, Setup and Machine, the main page's first five
 items in order. A function key opens the menu at its page from the running
 Atom and from Pause, as `Alt`+`M` opens it at the main page, and leaving that
 page, by `Esc` or by a choice that closes it, goes back to the Atom, not to the
-main page. `F10` (the MCU's Shift+`F5`, `0x90`) and `Alt`+`H` open a page of
-the keys the emulator takes for itself, the same way; it is not on the main
-page. Inside the menu the function keys do nothing: the arrows and `Enter`
+main page. `Alt`+`H` opens a page of the keys the emulator takes for itself,
+the same way; it is not on the main page. `F10` (the MCU's Shift+`F5`,
+`0x90`) opens the About page the same way; on 2026-09-29 it moved there from
+the keys, and the page of keys lists it in the row it had. Inside the menu the function keys do nothing: the arrows and `Enter`
 get about it. The keyboard
 MCU sends `F1`–`F5` as `0x81`–`0x85`; they are `KM_MENU` entries in the
 standard map whose row is the page. The Atom has no function keys, and a
