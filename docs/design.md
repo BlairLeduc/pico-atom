@@ -2487,9 +2487,10 @@ Tapes, Discs, Snapshots, Setup and Machine, the main page's first five
 items in order. A function key opens the menu at its page from the running
 Atom and from Pause, as `Alt`+`M` opens it at the main page, and leaving that
 page, by `Esc` or by a choice that closes it, goes back to the Atom, not to the
-main page. `F10` (the MCU's Shift+`F5`, `0x90`) and `Alt`+`H` open a page of
-the keys the emulator takes for itself, the same way; it is not on the main
-page. Inside the menu the function keys do nothing: the arrows and `Enter`
+main page. `Alt`+`H` opens a page of the keys the emulator takes for itself,
+the same way; it is not on the main page. `F10` (the MCU's Shift+`F5`,
+`0x90`) opens the About page the same way; on 2026-09-29 it moved there from
+the keys, and the page of keys lists it in the row it had. Inside the menu the function keys do nothing: the arrows and `Enter`
 get about it. The keyboard
 MCU sends `F1`–`F5` as `0x81`–`0x85`; they are `KM_MENU` entries in the
 standard map whose row is the page. The Atom has no function keys, and a
@@ -2497,6 +2498,8 @@ layout cannot name them, so they are the menu's under any layout (§10.5).
 Verified on a Plus 2 W on 2026-09-28: `F1`–`F5`, `F10` and `Alt`+`H` from the
 Atom, each page going back to the Atom as it closes, the Setup page's new name,
 Tapes above Discs, and the About page's temperature.
+`F10` opening About, and the About and Machine pages' new rows, were verified
+on a Pico 2 W and a Plus 2 W on 2026-09-30.
 
 Of that table, as built: Tape (without a position control, since recording
 only appends), Keys, Disc and Snapshot are there; Display has colour or mono,
@@ -2620,8 +2623,8 @@ starts the counters it keeps against the guest's clock again.
 
 ```
  PICO-ATOM <GIT DESCRIBE>
- BOARD PIMORONI_PICO_PLUS2_W 23C
- RP2350 <REV>  150 MHZ  SB <VER>
+ BOARD PIMORONI_PICO_PLUS2_W
+ RP2350 REV <REV> 150 MHZ SB <VER>  23C
  MACHINE 32K 1 MHZ DOS VIA
 
  #F000 AKERNEL.ROM  OK  2621F27D
@@ -2638,10 +2641,13 @@ The version is `git describe --always --dirty`, generated into
 runs on every build and which rewrites the header only when the text
 changes. It is not taken at configure time, because a configure-time value
 goes stale on the next commit. The startup banner prints it too. The board
-line is `board_info_t`'s SDK board name, cut to 21 characters, and since
-2026-09-28 the die's temperature at its right end: `board_temp_c()`, whole
-degrees and uncalibrated (hardware-notes.md §8.1), read as the page opens and
-again every 5 s with the battery while it is open. The menu is core 1's, and
+line is `board_info_t`'s SDK board name, cut to 21 characters. The chip
+line is the SDK platform, the chip's revision, `clk_sys` and the
+southbridge's `VER`, and since 2026-09-29 the die's temperature at its right
+end (on the board line from 2026-09-28): `board_temp_c()`, whole degrees and
+uncalibrated (hardware-notes.md §8.1), clamped to three characters so the row
+fits, read as the page opens and again every 5 s with the battery while it is
+open. The menu is core 1's, and
 so is the ADC. The southbridge's `VER` is read when the page
 opens. Each ROM slot shows its file, its state and the first eight hex
 digits of its SHA-1. `OK` means the image §11.1 records, `??` a loaded

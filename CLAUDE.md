@@ -240,10 +240,11 @@ GP2 grounded read as PB0 low.
 
 **Menu keys** (design.md §13): `F1`–`F5` open Tapes, Discs, Snapshots,
 Setup (was Input/Output) and Machine straight from the Atom or Pause, and
-closing the page goes back to the Atom; `F10` and `Alt`+`H` open a page of
-the keys. They are `KM_MENU` entries whose row is the page (`KM_PAGE_HELP`
-for the keys). Inside the menu they do nothing. The About page shows the
-die's temperature on the board line. Verified on a Plus 2 W on 2026-09-28.
+closing the page goes back to the Atom; `Alt`+`H` opens a page of the keys
+and `F10` the About page. They are `KM_MENU` entries whose row is the page
+(`KM_PAGE_HELP` for the keys, `KM_PAGE_ABOUT` for About). Inside the menu they do nothing. The About page shows the
+die's temperature on the chip line. Verified on a Plus 2 W on 2026-09-28;
+`F10` to About on a Pico 2 W and a Plus 2 W on 2026-09-30.
 
 ## The two documents
 

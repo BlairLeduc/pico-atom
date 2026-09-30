@@ -351,12 +351,12 @@ int main(void) {
         keymatrix_field(&k, &m);
         CHECK(!k.menu_request, "F6 requests nothing");
 
-        /* F10, Shift+F5, and Alt+H ask for the page of keys. */
+        /* F10, Shift+F5, asks for About; Alt+H for the page of keys. */
         fresh();
         keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_SHIFT_L);
         keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_F10);
         keymatrix_field(&k, &m);
-        CHECK(k.menu_request && k.menu_page == KM_PAGE_HELP, "F10 requests the keys");
+        CHECK(k.menu_request && k.menu_page == KM_PAGE_ABOUT, "F10 requests About");
         fresh();
         keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_ALT);
         keymatrix_event(&k, KEY_EV_PRESSED, 'H');

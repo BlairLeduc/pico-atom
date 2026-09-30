@@ -31,15 +31,17 @@
 #define KM_PAUSE  0x80u   /* no cell: pause the guest (§13.1)           */
 #define KM_NOCELL (KM_REPT | KM_BREAK | KM_MENU | KM_LINE | KM_PAUSE)
 
-/* The menu's page of keys, after the main page's first five items. */
-#define KM_PAGE_HELP 6u
+/* The menu's page of keys and its About page, after the main page's
+ * first five items. */
+#define KM_PAGE_HELP  6u
+#define KM_PAGE_ABOUT 7u
 
 typedef struct {
     uint8_t code;         /* host key code, as translated by the MCU */
     uint8_t row, col;     /* Atom matrix cell; ignored under KM_NOCELL,
                            * except that KM_MENU's row is the menu page
                            * it opens: 0 the main page, n the nth item,
-                           * or KM_PAGE_HELP */
+                           * KM_PAGE_HELP or KM_PAGE_ABOUT */
     uint8_t flags;
 } keymap_t;
 

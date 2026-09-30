@@ -193,7 +193,7 @@ const keymap_t keymap_picocalc[] = {
     { PICOCALC_KEY_F1 + 2, 3, 0, KM_MENU },
     { PICOCALC_KEY_F1 + 3, 4, 0, KM_MENU },
     { PICOCALC_KEY_F1 + 4, 5, 0, KM_MENU },
-    { PICOCALC_KEY_F10, KM_PAGE_HELP, 0, KM_MENU },
+    { PICOCALC_KEY_F10, KM_PAGE_ABOUT, 0, KM_MENU },
 };
 
 const size_t keymap_picocalc_len = sizeof keymap_picocalc / sizeof keymap_picocalc[0];
