@@ -80,6 +80,15 @@ So a PicoCalc application has roughly **eleven free GPIOs** (0–5, 8–9, 20–
 PicoCalc schematic before you route a signal to one, because the carrier may
 still connect it.
 
+GP4 and GP5 are only free in a build that leaves UART1 alone, and UART1 is
+how the Debug Probe gets your log (§2.7). Either keep a development build
+with the UART and a release build without it, or hand the pins back and forth
+at run time and say which is lost. The pads are 3.3 V at default drive
+strength; a circuit built for a 5 V port may need a level shifter or a
+buffer. For inputs, use the internal pull-up and active-low wiring (§2.2's
+E9 erratum). Verified on a Plus 2 W on 2026-09-28: an LED driven push-pull
+from a free pin, and GP2 grounded reading low against its pull-up.
+
 ### 1.2 Four things the hardware does not give you
 
 Design around these from the start; each one has cost a project time.
@@ -274,6 +283,25 @@ avoids an adapter reverting to its defaults between a separate `stty` command
 and the reader. A startup banner plus consecutive heartbeat messages is more
 useful boot evidence than a single line.
 
+Three more things about the UART, each found the hard way:
+
+- **A blocking `printf` costs real time.** At 115200 baud a few-hundred-byte
+  status line takes ~30 ms, longer than an audio queue's slack (§5.8). On a
+  core with a deadline, format into a ring and let the other core move bytes
+  into the UART FIFO as it has room; count dropped lines.
+- **Let one process read the port.** Two readers split the byte stream and
+  both logs come out scrambled. Make a capture script refuse a port that
+  something else already has open, and start the capture before flashing so
+  the banner is in it.
+- **The logs may have CR line endings** and UTF-8 in them. Some `grep`
+  replacements (ugrep) print nothing on such a file; read it with Python if a
+  search comes back empty.
+
+The UART also works the other way: firmware that turns received bytes into
+key events can be driven with no one at the keyboard, which is how scripted
+performance runs and soaks are done. Pace the characters to what the
+application can absorb.
+
 ---
 
 ## 3. Clocks, voltage and overclocking
@@ -381,7 +409,10 @@ left alone. The divider is a register you can move. Double both fields
 before raising the PLL and the flash sees at 300 MHz exactly what it saw at
 150. The RX delay counts half `clk_sys` cycles, so it must scale too. Do it
 from SRAM with interrupts off, since nothing may fetch from flash while the
-timing changes. The emulator does this at power-on (design.md §3.2).
+timing changes. Do it once, at power-on, before stdio or any peripheral is
+up, so each driver derives its rate from the clock it finds. To change the
+clock later, save the choice and restart with the watchdog rather than retune
+running peripherals.
 
 **The core rail survives a reset.** A 150 MHz build flashed over SWD after a
 300 MHz run, or restarted by the watchdog, comes back with the rail still at
@@ -442,8 +473,7 @@ Use the panel-specific gamma and power settings from the
 and the matching controller specification. A known-working RGB565 setup uses
 `MADCTL=0x48`, `COLMOD=0x55` and entry mode `0x06`. Confirmed again 2026-09-22 on a Plus 2 W:
 with ClockworkPi's gamma/power block and those three values, a corner-coded
-test pattern showed correct orientation and R/B order at 75 MHz (pico-atom
-M3, `src/port/lcd.c`). Some examples use 18-bit
+test pattern showed correct orientation and R/B order at 75 MHz. Some examples use 18-bit
 pixels; their pixel format and transfer width must be adapted together.
 The initialization includes gamma, power/VCOM, interface and frame-rate
 controls, inversion, display-function controls and manufacturer commands.
@@ -648,7 +678,10 @@ save wire time. Restrict the transmitted window to gain that benefit.
 The LCD backlight is **not** a PWM pin on the processor — it is register `0x05`
 on the southbridge (§6). Levels are stepped to multiples of 16 and clamped to
 16–240 by the keyboard MCU, so a smooth fade is 15 steps, not 256. Dimming on
-pause is a cheap piece of polish and costs one I²C transaction.
+pause is a cheap piece of polish and costs one I²C transaction. Read register
+`0x05` before dimming and write that level back on resume: the level may be
+one the user set with the MCU's own Alt chords (§6.3), not one your software
+chose. Use the value only from a read that succeeded.
 
 ---
 
@@ -929,6 +962,10 @@ state and require release before rearming; do not rely on state 1 alone.
 
 Backspace is `0x08` and Enter is `0x0a`. Alt `0xa1`, both Shift keys
 `0xa2`/`0xa3`, and Ctrl `0xa5` were observed; Symbol `0xa4` was not.
+`F1`–`F5` arrive as `0x81`–`0x85`, and `F10` as `0x90`, the MCU's Shift+`F5`
+(verified on a Plus 2 W, and `F10` also on a Pico 2 W, September 2026). A function key
+pressed with Alt still held arrives as itself, so match it whatever the Alt
+state.
 
 ### 6.3 The keymap decides which chords exist
 
@@ -936,7 +973,12 @@ Backspace is `0x08` and Enter is `0x0a`. Alt `0xa1`, both Shift keys
 entirely.** Each key has a character and an *alternate*; a shifted non-letter is
 replaced by its alternate, and if the alternate is zero **nothing is sent at
 all**. Shift + Left, Shift + Right, Shift + Space and Shift + Backspace are
-therefore unreachable by any host code. Ctrl and Alt are different — they pass
+therefore unreachable by any host code. The swallowing covers **release too**:
+hold Left, press Shift, let go of Left, and no release event ever arrives, so
+a held-key set built from events (§6.2) keeps Left down. Never design a
+binding that needs Shift held together with an arrow, such as fire on Shift
+while moving. (This follows from the keymap source; a design was changed for
+it in September 2026 rather than tested to failure.) Ctrl and Alt are different — they pass
 the key through unchanged alongside a modifier event, so Ctrl chords are yours
 to define.
 
@@ -976,7 +1018,22 @@ qualify card compatibility or power-loss recovery. The 400 kHz/25 MHz settings h
 measured physical-card reliability result.
 Use a temporary file and an explicit publish/recovery policy to preserve prior
 valid data where possible; filesystem rename alone is not proof of power-loss
-atomicity.
+atomicity. A pattern that works: write `name.new` and close it, unlink the
+old file, rename the new one into place, and on load, fall back to a whole
+`name.new` when `name` is missing or fails its check, which is what an
+interrupted publish leaves. FAT's read-only attribute is a convenient
+user-visible write-protect flag.
+
+**Measured** on a Plus 2 W, 2026-09-23, FatFs over polled SPI at 25 MHz
+requested: reading a 2.5 KiB disc-image track (ten 256-byte sectors) took
+17–19 ms and writing one 25–27 ms. Both are longer
+than a 16.7 ms video frame, which is why card work belongs at a boundary
+where the application can stop and feed audio silence.
+
+**Prefer the card to internal flash for anything the application writes**,
+such as settings. A text file on the card is one source of truth the user can
+read and edit on any computer, it survives reflashing, and writing it opens no
+interrupt hole (§7.2).
 
 ### 7.2 Internal flash, XIP, and the interrupt hole
 
@@ -1040,11 +1097,11 @@ channel returns a floating GPIO, which reads as a plausible number.
 The ADC block can be initialised lazily and the bias left on; `adc_init()`
 touches no GPIO function, so the audio PWM on GP26/27 is unaffected.
 
-**Unless the build's board is not the board.** The emulator builds for
-`pico2`, an RP2350A, and runs on a Plus 2 W, an RP2350B. There
-`ADC_TEMPERATURE_CHANNEL_NUM` is 4, which on the QFN-80 part is a GPIO. So
-`board_temp_init()` reads the package off `SYSINFO_PACKAGE_SEL` (1 = QFN-60)
-and chooses 4 or 8 itself, and writes `AINSEL` directly, since
+**Unless the build's board is not the board.** One `pico2` image (RP2350A)
+is a convenient way to run on all three RP2350 boards, but on a Plus 2 W, an
+RP2350B, `ADC_TEMPERATURE_CHANNEL_NUM` is then 4, which on the QFN-80 part is
+a GPIO. So read the package off `SYSINFO_PACKAGE_SEL` (1 = QFN-60), choose
+input 4 or 8 yourself, and write `AINSEL` directly, since
 `adc_select_input()`'s check uses the header's channel count. On a Plus 2 W
 on 2026-09-27 the banner said QFN-80, input 8, and the reading passed the
 load test: 23 °C idle at 150 MHz, 25 °C at 300 MHz and a 4 MHz guest on
@@ -1210,7 +1267,7 @@ for 20 µs between iterations (§9.5's pattern) therefore takes an interrupt
 **on core 0** every iteration, tens of thousands a second, in the middle of
 whatever core 0 is doing.
 
-In the Atom emulator, on a Plus 2 W, switching core 1's wait to
+In a 6502 emulator, on a Plus 2 W, switching core 1's wait to
 `busy_wait_us_32(20)`, which polls the timer and sets no alarm, cut core 0's
 cost per emulated instruction by 1.11×. Run-to-run spread fell from ±4 to
 ±0.1 cycles per instruction. It is still a hardware-timer wait rather than
@@ -1222,7 +1279,7 @@ wanders while core 1 has nothing to do, look for sleeps on core 1. Use
 
 ### 9.8 SRAM placement, measured on an interpreter
 
-§9.2's tiers, applied to a 6502 interpreter (the Atom emulator's M7), gave
+§9.2's tiers, applied to a 6502 interpreter, gave
 **1.12–1.19× for 25 KB**, not 1.7×. The same method, on a different kind
 of code, gave a third of the gain:
 
@@ -1278,6 +1335,12 @@ Checks to retain in each new driver/application:
 - [ ] Verify PSRAM with a real round trip before handing it to an allocator.
 - [ ] Re-apply the SPI baud rate, the PSRAM QMI timing, the CYW43 divider and
       the audio carrier after **any** change to `clk_sys` (§3).
+- [ ] A firmware that ever raises the core rail sets it explicitly at 150 MHz
+      too; the regulator survives a reset (§3).
+- [ ] No `sleep_us`/`sleep_ms` in core 1's loop; `busy_wait_us_32` (§9.7).
+- [ ] No blocking `printf` on a core with a deadline (§2.7).
+- [ ] Each SRAM-placement tier built in its own build directory, and its
+      symbols checked with `nm` (§9.8).
 - [ ] Remap y through the vertical-scroll offset in *every* blit path, or do not
       use hardware scroll at all.
 - [ ] Over-mark dirty regions; snapshot and clear before sending.

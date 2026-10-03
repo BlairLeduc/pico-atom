@@ -252,6 +252,10 @@ die's temperature on the chip line. Verified on a Plus 2 W on 2026-09-28;
 |---|---|
 | `docs/hardware-notes.md` | The **host** — PicoCalc wiring, peripheral protocols, timing, measured costs, observed quirks |
 | `docs/design.md` | The **guest** and the shape of the code — Atom hardware model, architecture, memory budget, milestones |
+| `docs/emulator-lessons.md` | What this project taught about writing **any** emulator on the PicoCalc; standalone, carried to other projects with `hardware-notes.md` |
+
+`hardware-notes.md` and `emulator-lessons.md` are portable: they may cite
+each other (`HW §N` in the lessons) but never `design.md` or a source file.
 
 `docs/design.md` uses `§N` to reference `hardware-notes.md` unless it says
 otherwise. Preserve that convention when editing; cross-references between the
