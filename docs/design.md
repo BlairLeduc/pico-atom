@@ -1384,6 +1384,15 @@ PicoCalc event  →  normalise  →  held-key bitmap  →  ASCII→(row,col,shif
   transition, so releasing Shift first yields press `A` / release `a`, or press
   `!` / release `1`. Canonicalise letters and shifted punctuation for held-state
   identity while keeping the translated code for anything that wants text.
+  Decide the key when the event arrives, not when it is applied: Insert is
+  Shift+`Enter` or `Alt`+`I` (§6.3), and with `Alt` down it is `I`. Taken
+  for `Enter`, an `Alt`+`I` whose `Alt` went up first let go as `i`, left
+  `Enter` open, and the next `Enter` was absorbed as a repeat.
+- **Hold Shift and Ctrl for the minimum too.** A press and release in one
+  poll would otherwise both be applied before the matrix is driven, and a
+  game that fires on SHIFT alone never sees the tap. Their releases wait
+  `ATOM_KEY_MIN_FIELDS`, as a key's does; `Alt` does not, as the guest
+  never sees it.
 - **Drain the whole FIFO each poll**, up to its 31 entries, not one event.
 - **Guard the bus with an atomic flag** so a battery read and a key poll cannot
   interleave.

@@ -103,6 +103,7 @@ bool keymap_atom_target_named(const char *name, keymap_t *out);
 #define PICOCALC_KEY_SHIFT_L  0xA2u
 #define PICOCALC_KEY_SHIFT_R  0xA3u
 #define PICOCALC_KEY_CTRL     0xA5u
+#define PICOCALC_KEY_INSERT   0xD1u   /* Shift+Enter, or Alt+I */
 
 /* F1-F5 unshifted; Shift makes them F6-F10, 0x86-0x90 (keyboard.h). */
 #define PICOCALC_KEY_F1       0x81u
@@ -126,7 +127,9 @@ typedef struct {
     bool unshift;
 } keymatrix_held_t;
 
-typedef struct { uint8_t state, code; } keymatrix_event_t;
+/* canon is decided as the event arrives, Alt and all: Insert is Enter's
+ * or I's by whether Alt was down then (keymatrix_event). */
+typedef struct { uint8_t state, code, canon; } keymatrix_event_t;
 
 typedef struct {
     /* Events wait here and are replayed at field rate, in order. */
@@ -141,11 +144,15 @@ typedef struct {
      * key down for ever. */
     uint8_t open[ATOM_KEY_EVENT_QUEUE];
     uint8_t n_open;
+    bool ev_alt;          /* Alt as the events arrive, not as applied */
 
     keymatrix_held_t held[ATOM_KEY_HELD_MAX];
     uint8_t n;
     bool alt, ctrl;
     uint8_t shift;        /* the host's Shifts that are down: bit 0 left, 1 right */
+    /* Fields each has been down for, as held[].fields: left Shift,
+     * right Shift, Ctrl. Their releases wait as a key's does. */
+    uint8_t mod_fields[3];
 
     /* The game keymap over the standard map, or NULL (§10.5). */
     const keylayout_t *layout;
@@ -176,7 +183,10 @@ void keymatrix_event(keymatrix_t *k, uint8_t state, uint8_t code);
  * can arrive in the same 30 Hz poll (§10.2), and OSRDCH (#FE94) waits
  * for every key to be up before it accepts the next one, so a release
  * waits until its key has been down ATOM_KEY_MIN_FIELDS, and a press
- * waits ATOM_KEY_GAP_FIELDS after a release. Keys that overlapped at
+ * waits ATOM_KEY_GAP_FIELDS after a release. Shift and Ctrl wait the
+ * same before their release, so a tap reaches the guest, which games
+ * that fire on SHIFT alone need; Alt does not, as the guest never sees
+ * it. Keys that overlapped at
  * the keyboard still overlap here, and lose characters as they would
  * on an Atom; keys that did not, do not. */
 void keymatrix_field(keymatrix_t *k, atom_t *m);

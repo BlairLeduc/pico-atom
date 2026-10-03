@@ -202,6 +202,53 @@ int main(void) {
         CHECK(k.n == 0, "nothing should be held");
     }
 
+    /* ---- Insert is Shift+Enter or Alt+I (hardware-notes.md §6.3) ------ */
+    {
+        /* Alt let go before I: I's release comes back as 'i'. The press
+         * was Alt+I's, not Enter's, so the next Enter is a fresh key. */
+        fresh();
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_ALT);
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_INSERT);
+        keymatrix_event(&k, KEY_EV_RELEASED, PICOCALC_KEY_ALT);
+        keymatrix_event(&k, KEY_EV_RELEASED, 'i');
+        for (int f = 0; f < 10; f++) keymatrix_field(&k, &m);
+        CHECK(k.n_open == 0 && k.n == 0, "Alt+I left %u keys open", k.n_open);
+        keymatrix_event(&k, KEY_EV_PRESSED, 0x0Au);
+        keymatrix_field(&k, &m);
+        CHECK(cell_down(1, 6), "Enter after Alt+I should reach RETURN");
+        keymatrix_event(&k, KEY_EV_RELEASED, 0x0Au);
+        for (int f = 0; f < 10; f++) keymatrix_field(&k, &m);
+
+        /* Shift+Enter is still RETURN, and lets go as Enter. */
+        fresh();
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_SHIFT_L);
+        keymatrix_event(&k, KEY_EV_PRESSED, PICOCALC_KEY_INSERT);
+        keymatrix_event(&k, KEY_EV_RELEASED, PICOCALC_KEY_SHIFT_L);
+        keymatrix_event(&k, KEY_EV_RELEASED, 0x0Au);
+        for (int f = 0; f < 10; f++) keymatrix_field(&k, &m);
+        CHECK(k.n_open == 0 && k.n == 0, "Shift+Enter left %u keys open", k.n_open);
+    }
+
+    /* ---- a tapped modifier reaches the guest (§10.2) ------------------ */
+    {
+        /* Press and release of Shift in one poll: SHIFT is down for
+         * ATOM_KEY_MIN_FIELDS fields, as a key would be. */
+        static const uint8_t mods[] = { PICOCALC_KEY_SHIFT_L, PICOCALC_KEY_SHIFT_R,
+                                        PICOCALC_KEY_CTRL };
+        for (unsigned i = 0; i < sizeof mods; i++) {
+            fresh();
+            keymatrix_event(&k, KEY_EV_PRESSED, mods[i]);
+            keymatrix_event(&k, KEY_EV_RELEASED, mods[i]);
+            unsigned down = 0;
+            for (int f = 0; f < 20; f++) {
+                keymatrix_field(&k, &m);
+                if (i < 2 ? m.key_shift : m.key_ctrl) down++;
+            }
+            CHECK(down == ATOM_KEY_MIN_FIELDS, "modifier 0x%02X held %u fields, want %u",
+                  mods[i], down, (unsigned)ATOM_KEY_MIN_FIELDS);
+        }
+    }
+
     /* ---- the shifted-release quirk (hardware-notes.md §6.2) ---------- */
     {
         fresh();
@@ -235,6 +282,8 @@ int main(void) {
         CHECK(m.key_shift && (m.ppi.in_b & 0x80u) == 0,
               "Shift alone pulls port B bit 7 low");
         keymatrix_event(&k, KEY_EV_RELEASED, PICOCALC_KEY_SHIFT_L);
+        for (unsigned f = 1; f < ATOM_KEY_MIN_FIELDS; f++) keymatrix_field(&k, &m);
+        CHECK(m.key_shift, "Shift let go before its minimum hold");
         keymatrix_field(&k, &m);
         CHECK(!m.key_shift && (m.ppi.in_b & 0x80u) != 0, "and lets it go");
 
@@ -274,7 +323,7 @@ int main(void) {
         CHECK(m.key_ctrl && cell_down(3, 0), "CTRL-G");
         CHECK((m.ppi.in_b & 0x40u) == 0, "CTRL pulls port B bit 6 low");
         keymatrix_event(&k, KEY_EV_RELEASED, PICOCALC_KEY_CTRL);
-        keymatrix_field(&k, &m);
+        for (unsigned f = 1; f <= ATOM_KEY_MIN_FIELDS; f++) keymatrix_field(&k, &m);
         CHECK(!m.key_ctrl, "CTRL released");
 
         /* Alt+C is COPY, not a shifted C. */
