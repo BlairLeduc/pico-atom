@@ -298,6 +298,13 @@ static int test_timing(void) {
     cassette_play(&c, t, true);
     CHECK(c.playing && cassette_percent(&c) < 100, "rewound, it plays");
 
+    /* A tape rewound while it plays stops at its start. */
+    cassette_input(&c, t + 50000u);
+    cassette_rewind(&c, t + 50000u);
+    CHECK(!c.playing && !c.ended && cassette_percent(&c) == 0,
+          "rewound while playing, it stops");
+    cassette_play(&c, t, true);
+
     /* A restored snapshot moves the clock back; the tape carries on from
      * where it is, on the new clock, rather than waiting for the old one
      * to come round again. */
