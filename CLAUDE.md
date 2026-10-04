@@ -246,6 +246,14 @@ and `F10` the About page. They are `KM_MENU` entries whose row is the page
 die's temperature on the chip line. Verified on a Plus 2 W on 2026-09-28;
 `F10` to About on a Pico 2 W and a Plus 2 W on 2026-09-30.
 
+**Two key fixes and a tape fix** (design.md §10.2): Insert is `Enter` or
+`I` by whether Alt was down when it arrived, so an `Alt`+`I` let go Alt
+first no longer eats the next `Enter`; Shift and Ctrl releases wait
+`ATOM_KEY_MIN_FIELDS`, so a tap reaches the guest; and a rewind leaves the
+tape stopped. Verified in the release build on a Pico 2 W on 2026-10-04:
+`Alt`+`I` then `Enter`, and a rewind while playing. The Shift tap is
+checked on the host only.
+
 ## The two documents
 
 | File | Authority on |

@@ -94,14 +94,13 @@ void cassette_play(cassette_t *c, uint64_t now, bool on) {
 
 void cassette_rewind(cassette_t *c, uint64_t now) {
     if (!c->loaded || c->rec.on) return;
-    bool was = c->playing;
+    (void)now;
     uef_rewind(&c->uef);
     c->playing = false;
     c->ended = false;
     c->edge_toggles = false;
     c->paused_left = 0;
     c->acc = 0;
-    if (was) cassette_play(c, now, true);
 }
 
 static void rec_advance(cassette_t *c, uint64_t to);

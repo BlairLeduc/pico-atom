@@ -12,9 +12,9 @@ void keymatrix_set_layout(keymatrix_t *k, const keylayout_t *l) {
     k->layout = l;
 }
 
-static void enqueue(keymatrix_t *k, uint8_t state, uint8_t code) {
+static void enqueue(keymatrix_t *k, uint8_t state, uint8_t code, uint8_t canon) {
     unsigned tail = (k->q_head + k->q_len) % ATOM_KEY_EVENT_QUEUE;
-    k->queue[tail] = (keymatrix_event_t){ state, code };
+    k->queue[tail] = (keymatrix_event_t){ state, code, canon };
     k->q_len++;
 }
 
@@ -27,7 +27,14 @@ static int find_open(const keymatrix_t *k, uint8_t canon) {
 }
 
 void keymatrix_event(keymatrix_t *k, uint8_t state, uint8_t code) {
-    uint8_t canon = keymap_picocalc_canonical(code);
+    if (code == PICOCALC_KEY_ALT) k->ev_alt = state != KEY_EV_RELEASED;
+
+    /* Insert is Shift+Enter or Alt+I (hardware-notes.md §6.3), and each
+     * lets go as its own key if the modifier goes first: Enter, or 'i'.
+     * Which key it is must be settled now, while Alt is as it was;
+     * taken for Enter, an Alt+I left Enter open and ate the next one. */
+    uint8_t canon = (code == PICOCALC_KEY_INSERT && k->ev_alt)
+                  ? (uint8_t)'i' : keymap_picocalc_canonical(code);
     int o = find_open(k, canon);
 
     if (state == KEY_EV_RELEASED) {
@@ -35,7 +42,7 @@ void keymatrix_event(keymatrix_t *k, uint8_t state, uint8_t code) {
          * keymatrix_init, has nothing to undo. */
         if (o < 0) return;
         k->open[o] = k->open[--k->n_open];
-        enqueue(k, state, code);   /* its slot was kept (below) */
+        enqueue(k, state, code, canon);   /* its slot was kept (below) */
         return;
     }
     if (state != KEY_EV_PRESSED && state != KEY_EV_HELD) return;
@@ -48,7 +55,7 @@ void keymatrix_event(keymatrix_t *k, uint8_t state, uint8_t code) {
         return;
     }
     k->open[k->n_open++] = canon;
-    enqueue(k, state, code);
+    enqueue(k, state, code, canon);
 }
 
 static int find_held(const keymatrix_t *k, uint8_t canon) {
@@ -95,17 +102,25 @@ static bool apply_head(keymatrix_t *k) {
     if (is_modifier(ev.code)) {
         /* Modifiers report held events while down (hardware-notes.md
          * §6.2). The host's Shift is the Atom's SHIFT line, which games
-         * read on its own (§10.3); a character decides for itself. */
-        if (ev.code == PICOCALC_KEY_ALT)  k->alt  = down;
-        if (ev.code == PICOCALC_KEY_CTRL) k->ctrl = down;
-        if (ev.code == PICOCALC_KEY_SHIFT_L || ev.code == PICOCALC_KEY_SHIFT_R) {
-            uint8_t bit = ev.code == PICOCALC_KEY_SHIFT_L ? 1u : 2u;
+         * read on its own (§10.3); a character decides for itself.
+         * A Shift or Ctrl release waits out the minimum hold, or a tap
+         * inside one poll would come and go before the matrix is
+         * driven. */
+        if (ev.code == PICOCALC_KEY_ALT) { k->alt = down; return true; }
+        unsigned i = ev.code == PICOCALC_KEY_SHIFT_L ? 0u
+                   : ev.code == PICOCALC_KEY_SHIFT_R ? 1u : 2u;
+        if (!down && k->mod_fields[i] < ATOM_KEY_MIN_FIELDS) return false;
+        if (down) k->mod_fields[i] = 0;
+        if (i == 2) {
+            k->ctrl = down;
+        } else {
+            uint8_t bit = (uint8_t)(1u << i);
             k->shift = down ? (uint8_t)(k->shift | bit) : (uint8_t)(k->shift & ~bit);
         }
         return true;
     }
 
-    uint8_t canon = keymap_picocalc_canonical(ev.code);
+    uint8_t canon = ev.canon;
     int h = find_held(k, canon);
 
     if (ev.state == KEY_EV_RELEASED) {
@@ -163,6 +178,10 @@ void keymatrix_field(keymatrix_t *k, atom_t *m) {
     }
     if (k->shift && !unshift) shift = true;
     if (k->gap > 0) k->gap--;
+    for (unsigned i = 0; i < 3; i++) {
+        bool mdown = i == 2 ? k->ctrl : (k->shift & (1u << i)) != 0;
+        if (mdown && k->mod_fields[i] < UINT8_MAX) k->mod_fields[i]++;
+    }
 
     /* BREAK is the 6502's reset line (§6.4): while it is held the machine
      * is reset every field, and the MOS starts once it is let go. */

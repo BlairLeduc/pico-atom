@@ -121,7 +121,9 @@ void cassette_eject(cassette_t *c);
  * which may grow to `cap` bytes. */
 bool cassette_insert_rw(cassette_t *c, uint8_t *img, size_t len, size_t cap);
 
-/* Both do nothing while recording: the recorder has the tape. */
+/* Both do nothing while recording: the recorder has the tape. A rewind
+ * leaves the tape stopped at its start, as a deck's does, whether or not
+ * it was playing. */
 void cassette_play(cassette_t *c, uint64_t now, bool on);
 void cassette_rewind(cassette_t *c, uint64_t now);
 
