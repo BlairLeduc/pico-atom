@@ -10,10 +10,9 @@
 
 static uint32_t from_gmtime(int64_t s) {
     time_t t = (time_t)s;
-    struct tm tm;
-    gmtime_r(&t, &tm);
-    return FATTIME_PACK(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-                        tm.tm_min, tm.tm_sec);
+    const struct tm *tm = gmtime(&t);   /* C11's: gmtime_r is POSIX */
+    return FATTIME_PACK(tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour,
+                        tm->tm_min, tm->tm_sec);
 }
 
 int main(void) {
