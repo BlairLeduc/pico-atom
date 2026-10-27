@@ -17,6 +17,7 @@ set(PICO_ATOM_HOST_TESTS
     test_audio
     test_uef
     test_i8271
+    test_fattime
 )
 
 foreach(t ${PICO_ATOM_HOST_TESTS})

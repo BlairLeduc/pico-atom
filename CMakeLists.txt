@@ -16,6 +16,7 @@ set(PICO_ATOM_CORE_SOURCES
     src/core/beeper.c
     src/core/bus.c
     src/core/cassette.c
+    src/core/fattime.c
     src/core/i8255.c
     src/core/i8271.c
     src/core/inflate.c
@@ -127,6 +128,8 @@ else()
         ${PICO_ATOM_CORE_SOURCES}
     )
     target_include_directories(pico-atom PRIVATE src/core src/port)
+    # picocalc_shell.h, the shell's return call (design.md §13).
+    target_include_directories(pico-atom SYSTEM PRIVATE third_party/picocalc-shell)
     target_compile_options(pico-atom PRIVATE ${PICO_ATOM_WARNINGS})
 
     # The firmware's version, git describe --always --dirty, for the
@@ -241,6 +244,7 @@ else()
         hardware_clocks
         hardware_dma
         hardware_i2c
+        hardware_powman
         hardware_pwm
         hardware_spi
         hardware_sync
