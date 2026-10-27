@@ -2509,7 +2509,8 @@ lost, as by Reset. The menu's card work has closed its files by then; the menu
 unmounts the card and goes. A firmware copied on in BOOTSEL, or a slot with no
 card in it, leaves the machine running and the status row says which.
 Verified on a Plus 2 on 2026-10-27: settings saved, then *Exit to shell*
-reached the shell. The refusals were not tried. On 2026-09-27 the
+reached the shell; with the card out, it refused and said so. A copy
+installed from BOOTSEL was not tried. On 2026-09-27 the
 Display page became Input/Output and took Volume and Keys from the main
 page, and Resume went: `Esc` does the same. On 2026-09-28 Input/Output
 became Setup: how the emulator behaves, beside Machine, what the Atom is. Pause is a key,
