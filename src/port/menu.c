@@ -11,6 +11,8 @@
 #include "hardware/watchdog.h"
 #include "pico/stdlib.h"
 
+#include "picocalc_shell.h"
+
 #include "discio.h"
 #include "display.h"
 #include "pico_atom_version.h"
@@ -49,14 +51,14 @@
 #define BKL_MAX   240u
 
 enum {
-    I_TAPES, I_DISCS, I_SNAPS, I_IO, I_MACHINE, I_RESET, I_SAVE, I_ABOUT, I_COUNT
+    I_TAPES, I_DISCS, I_SNAPS, I_IO, I_MACHINE, I_RESET, I_SAVE, I_SHELL, I_ABOUT, I_COUNT
 };
 
 _Static_assert(I_MACHINE + 1 == MENU_FKEYS, "F1-F5 are the first five items");
 
-/* Eight items fill rows 2-9, a blank row under the title, then after
- * another blank row the deck on row 11 and the drives on row 12, above
- * the status row (§13.1). */
+/* Nine items fill rows 2-10, a blank row under the title, then after
+ * another blank row the deck on row 12 and the drives on row 13, above
+ * the status row on row 14 (§13.1). */
 #define MAIN_TOP 2
 
 /* The snapshot page: left and right choose the slot on any row (§11.5). */
@@ -166,6 +168,7 @@ static void draw_main(void) {
         case I_IO:     snprintf(line, sizeof line, " SETUP..."); break;
         case I_MACHINE: snprintf(line, sizeof line, " MACHINE..."); break;
         case I_SAVE:   snprintf(line, sizeof line, " SAVE SETTINGS"); break;
+        case I_SHELL:  snprintf(line, sizeof line, " EXIT TO SHELL"); break;
         case I_ABOUT:  snprintf(line, sizeof line, " ABOUT..."); break;
         }
         textpage_line(s.vram, MAIN_TOP + i, line, i == s.item);
@@ -785,6 +788,24 @@ static void key_machine(uint8_t c) {
     }
 }
 
+/* Back to the PicoCalc shell (§13): UF2 Loader's stage3 loads it from
+ * the card, and the running program is lost, as by Reset. Every card
+ * write has closed its file by now, since the menu does its card work
+ * synchronously. Returns only if it cannot go, saying why. */
+static void exit_to_shell(void) {
+    if (!picocalc_shell_loader_present()) { say(" NOT STARTED BY UF2 LOADER", ""); return; }
+    if (!picocalc_shell_card_present()) { say(" NO CARD TO LOAD THE SHELL", ""); return; }
+    printf("  menu         : exit to the shell\n");
+    say(" EXITING TO THE SHELL...", "");
+    draw();
+    if (s.card) storage_unmount();
+    busy_wait_ms(100);   /* the UART's last line */
+    picocalc_shell_exit();
+    /* Only if the card went between the check and the call. */
+    s.card = storage_mount() == 0;
+    say(" CANNOT RETURN TO THE SHELL", "");
+}
+
 static void key_about(uint8_t c) {
     if (c == PC_ESC || c == PC_ENTER) s.about = false;
 }
@@ -806,6 +827,7 @@ static void open_item(void) {
     case I_ABOUT:  open_about(); break;
     case I_RESET:  s.m->cpu.reset_pending = true; s.done = true; break;
     case I_SAVE:   save_settings(); break;
+    case I_SHELL:  exit_to_shell(); break;
     }
 }
 

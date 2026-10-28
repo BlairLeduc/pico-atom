@@ -254,6 +254,14 @@ tape stopped. Verified in the release build on a Pico 2 W on 2026-10-04:
 `Alt`+`I` then `Enter`, and a rewind while playing. The Shift tap is
 checked on the host only.
 
+**The PicoCalc shell** (`third_party/picocalc-shell/picocalc_shell.h`):
+the menu's *Exit to shell* reboots into it through UF2 Loader's stage3
+(design.md §13), and files on the card are stamped with the time it keeps
+in the always-on timer, at its local offset (`get_fattime()`, §11.1). With
+no clock set the stamp is 2026-01-01 00:00. The emulator never sets the
+clock. Verified on a Plus 2 on 2026-10-27: settings saved, *Exit to shell*,
+and the file's time correct in the shell.
+
 ## The two documents
 
 | File | Authority on |
@@ -403,7 +411,8 @@ read them with Python if a `grep` comes back empty.
 | `src/port/southbridge.*` | i2c1 register layer; refuses to read `RST` (`0x08`), which resets the MCU |
 | `src/port/lcd.*` | panel init, windows, fills, polled-DMA ping-pong blit |
 | `src/port/display.*` | the §8.4 presenter; owns the renderer, its LUT, the shadow and line buffers; §8.7's mono palette and border, which it fills only when its colour changes; §8.2's status line, drawn only when its text changes |
-| `src/port/sd.*`, `diskio.c` | spi0 SD driver and FatFs's disk layer; FatFs itself is copied from the SDK at configure time |
+| `src/port/sd.*`, `diskio.c` | spi0 SD driver and FatFs's disk layer; FatFs itself is copied from the SDK at configure time; `get_fattime()`, the PicoCalc shell's time (design.md §11.1) |
+| `src/core/fattime.*` | local seconds since 1970 packed as a FAT timestamp, clamped to 1980–2107 |
 | `src/port/roms.*` | loads `/atom/roms/` into the machine, the utility socket from the settings, keeping each slot's SHA-1; `roms_check`, a restart's first pass; the utility ROM list; the no-ROMs page |
 | `src/port/kbd.*` | core 1 drains the southbridge FIFO into an SPSC ring for core 0 |
 | `src/port/audio.*` | PWM slice, chained ping-pong DMA, PCM queue; the throttle (§9.4, §12.2) |
@@ -415,7 +424,8 @@ read them with Python if a `grep` comes back empty.
 | `src/port/settingsio.*` | reads `/atom/pico-atom.cfg` at boot; the first problem for the menu's status row; *Save settings*, through `/atom/pico-atom.new` |
 | `src/port/keymapio.*` | the layouts the menu offers: built-in, then `/atom/keymaps/`; the first parse error for the status row |
 | `src/port/portb.*` | VIA port B, the user port, on the free GPIOs (design.md §7.4): push-pull outputs and pulled-up inputs, as the 6522's, the `atom_t.port_b` hook on core 0, and GP4/GP5 taken from UART1 and handed back |
-| `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer; the Machine and About pages (§13.1) |
+| `src/port/menu.*`, `textpage.*` | the Alt+M menu (§13), drawn as a text page through the renderer; the Machine and About pages (§13.1); *Exit to shell* |
+| `third_party/picocalc-shell/` | `picocalc_shell.h`, verbatim from picocalc-shell (`THIRD-PARTY.md`): the reboot into the PicoCalc shell under UF2 Loader, and the time it keeps |
 | `src/port/main.c` | core 0's field loop, turbo while a tape plays, core 1's bring-up and live present; `machine_power_on()`, for boot and the Machine page's restart; Pause; the perf line's counters; the park/handoff that gives core 1 the machine for tape calls, the menu and Pause; M3 measurement behind `PICO_ATOM_MEASURE_PRESENT`; `PICO_ATOM_AUDIO=0` for timer pacing |
 | `test/host/` | CTest binaries, one per area, plus `test_util.h`; `test_boot`, `test_tape` and `test_snapshot` run the real MOS when `roms/` holds the images |
 | `test/host/test_uef.c`, `test_cassette.c` | inflate against the system's `gzip`; the waveform to the cycle; the ROM's own SAVE recorded off port C, decoded, and loaded back by its own LOAD; the same SAVE through the core's recorder, compared with the test's decoder. `test_cassette` writes `m8-two-part.uef`, the hardware check's tape |

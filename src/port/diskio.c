@@ -1,13 +1,18 @@
 /* diskio.c — FatFs's disk layer, over sd.c (design.md §11.1).
  *
- * One drive, the SD card, used from core 1 only.
+ * One drive, the SD card, used from core 1 only. The time a file is
+ * stamped with is the PicoCalc shell's.
  */
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "ff.h"
 #include "diskio.h"
 
+#include "picocalc_shell.h"
+
+#include "fattime.h"
 #include "sd.h"
 
 static DSTATUS s_status = STA_NOINIT;
@@ -50,4 +55,13 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
     /* Single-block writes complete before sd_write returns, so there is
      * nothing to flush; mkfs and trim, which want the rest, are off. */
     return cmd == CTRL_SYNC ? RES_OK : RES_PARERR;
+}
+
+/* The shell's clock in local time, as its TZ stood when it started us,
+ * or FatFs's old fixed date when it has not set one (§11.1). */
+DWORD get_fattime(void) {
+    int64_t utc_ms;
+    int offset_min;
+    if (!picocalc_shell_time(&utc_ms, &offset_min)) return FATTIME_UNSET;
+    return fattime_pack(utc_ms / 1000 + (int64_t)offset_min * 60);
 }

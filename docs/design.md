@@ -1659,6 +1659,19 @@ each with core 0 parked at a field boundary and feeding the audio queue
 silence — because write latency can exceed both the field and the audio
 deadline.
 
+A file is stamped with the **PicoCalc shell's time** (`get_fattime()` in
+`diskio.c`, `fattime.c`). The shell keeps UTC in the RP2350's always-on timer,
+which survives its reboot into this program, and its local offset in POWMAN's
+scratch registers; `picocalc_shell_time()` reads both. The stamp is local time
+at the offset the shell had when it started the program, so a change of
+daylight-saving time during a session is not seen. With no clock set, as after
+a power-on that started the emulator without the shell or a copy in BOOTSEL,
+the stamp is 2026-01-01 00:00, the date `FF_FS_NORTC` gave before
+2026-10-27. The emulator only reads the clock and never sets it. Checked on
+the host (`test_fattime`, against the system's `gmtime`), and on a Plus 2 on
+2026-10-27: settings saved from the menu after a start from the shell, and
+back in the shell the file's time was correct.
+
 ### 11.2 Tape, phase 1: OS-level trapping
 
 Fast and simple: stop the CPU when it enters the MOS's load or save routine,
@@ -2487,7 +2500,17 @@ settings file (§11.7), and the menu's status row names the file's first problem
 | Setup | colour or mono, border, background, status line, perf line (§13.1), backlight, volume, the game keymap in force: standard, a built-in layout, or one from the card (§10.5), and *VIA port B...*, a page that turns port B on the GPIOs on and off and gives each bit its pin (§7.4) |
 | About | firmware, board, ROM identification by SHA-1, the settings file's state (§13.1) |
 
-Reset and *Save settings* are on the main page. On 2026-09-27 the
+Reset and *Save settings* are on the main page, and on 2026-10-27 *Exit to
+shell* joined them, between *Save settings* and *About*. Under UF2 Loader with
+the PicoCalc shell installed as `/BOOT2350.UF2`, it reboots into the shell
+through the loader's stage3 (`picocalc_shell_exit()`, from
+`third_party/picocalc-shell/picocalc_shell.h`), and the running program is
+lost, as by Reset. The menu's card work has closed its files by then; the menu
+unmounts the card and goes. A firmware copied on in BOOTSEL, or a slot with no
+card in it, leaves the machine running and the status row says which.
+Verified on a Plus 2 on 2026-10-27: settings saved, then *Exit to shell*
+reached the shell; with the card out, it refused and said so. A copy
+installed from BOOTSEL was not tried. On 2026-09-27 the
 Display page became Input/Output and took Volume and Keys from the main
 page, and Resume went: `Esc` does the same. On 2026-09-28 Input/Output
 became Setup: how the emulator behaves, beside Machine, what the Atom is. Pause is a key,
